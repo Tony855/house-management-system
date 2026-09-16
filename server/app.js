@@ -267,6 +267,7 @@ const OP_ROUTES = [
   [/^\/netLines\/\d+\/(stop|start)$/, 'netline_status', 'POST'],
   [/^\/netChanges$/, 'netline_bandwidth', 'POST'],
   [/^\/netChanges\/\d+$/, 'netline_bandwidth', 'DELETE'],
+  [/^\/netRequests$/, 'netline_bandwidth', 'POST'],
   [/^\/bills$/, 'bill_add', 'POST'],
   [/^\/bills\/generate$/, 'bill_generate', 'POST'],
   [/^\/bills\/\d+$/, 'bill_delete', 'DELETE'],
@@ -283,8 +284,12 @@ const authPerm = (req, res, next) => authMode(req, res, () => {
   if (req.level === 'super') return res.status(403).json({ error: '超级管理员不参与业务操作' });
   if (req.method !== 'GET') {
     if (req.level === 'company_admin') {
-      /* 企业管理员：本企业数据只读；仅放行「宽带报装/加兆/减兆上报」业务写操作 */
-      const allowedWrite = (req.method === 'POST' && req.path === '/netRequests');
+      /* 企业管理员：本企业数据只读；写操作按角色 ops 白名单放行（宽带上报 / 网络报修），其余一律拒绝 */
+      const ops = req.ops || [];
+      const need = OP_ROUTES.find(r => (!r[2] || r[2] === req.method) && r[0].test(req.path));
+      const allowedWrite = need
+        && ['netline_bandwidth', 'repair_add'].includes(need[1])
+        && ops.includes(need[1]);
       if (!allowedWrite) return res.status(403).json({ error: '企业管理员无此操作权限' });
     } else if (req.level === 'staff') {
       /* 员工：写操作按角色操作权限（ops）放行 */
@@ -1969,6 +1974,13 @@ router.get('/repairs', auth, h(async (req, res) => {
 router.post('/repairs', auth, h(async (req, res) => {
   const B = req.body || {};
   if (!B.title) return res.status(400).json({ error: '报修标题不能为空' });
+  if (!B.room_id) return res.status(400).json({ error: '请选择报修房间' });
+  if (req.level === 'company_admin') {
+    const [[rm]] = await pool.query(
+      'SELECT id FROM rooms WHERE id = ? AND org_id = ? AND owner_id = ?',
+      [Number(B.room_id), req.orgId, req.companyId]);
+    if (!rm) return res.status(403).json({ error: '仅可报修本企业房产' });
+  }
   const [r] = await pool.query(
     "INSERT INTO repairs (org_id, room_id, title, content, status, handler, handle_note, created_at) VALUES (?, ?, ?, ?, 'pending', '', '', ?)",
     [req.orgId, Number(B.room_id), B.title, B.content || '', nowStr()]);

@@ -425,6 +425,22 @@ const addDays = (n) => { const d = new Date(); d.setDate(d.getDate() + n); retur
     r = await login(caUser2, 'ca654321', 'property');
     check('企业C管理员登录', r.status === 200 && r.body.level === 'company_admin' && r.body.company_id === compC, JSON.stringify(r.body).slice(0, 120));
     const CA2 = r.body.token;
+    /* 权限管理：企业管理员上报类写操作按角色 ops 控制（netline_bandwidth / repair_add 白名单） */
+    r = await call(CA2, 'POST', '/netRequests', { type: 'install', room_id: roomC, bandwidth: 10, reason: '办公报装' });
+    check('未分配角色：企业管理员宽带上报被拒 403', r.status === 403, JSON.stringify(r.body));
+    r = await call(CA2, 'POST', '/repairs', { room_id: roomC, title: '网络报修：断网', content: '测试' });
+    check('未分配角色：企业管理员报修被拒 403', r.status === 403, JSON.stringify(r.body));
+    /* 主管理员建角色（宽带上报 + 网络报修）并分配给企业管理员 */
+    r = await call(PROP, 'POST', '/roles', { code: 'ca' + ts, name: '企业上报', ops: ['netline_bandwidth', 'repair_add'] });
+    check('建企业管理员上报角色', r.status === 200 && r.body.ops.includes('netline_bandwidth'), JSON.stringify(r.body.ops));
+    const caRole = r.body;
+    r = await call(PROP, 'GET', '/users');
+    const ca2User = r.body.find(x => x.username === caUser2);
+    check('员工管理可找到企业管理员账号', !!ca2User, '');
+    r = await call(PROP, 'PUT', '/users/' + ca2User.id, { role: caRole.code });
+    check('给企业管理员分配上报角色', r.status === 200 && r.body.role === caRole.code, JSON.stringify(r.body));
+    r = await login(caUser2, 'ca654321', 'property');
+    check('企业C管理员登录带角色操作权限', r.status === 200 && r.body.ops.includes('netline_bandwidth') && r.body.ops.includes('repair_add'), JSON.stringify(r.body.ops));
     /* 提交申请：本企业 → 200；他企业 → 403 */
     r = await call(CA2, 'POST', '/netRequests', { type: 'install', room_id: roomC, bandwidth: 10, reason: '办公报装' });
     check('企业管理员提交报装申请', r.status === 200 && r.body.status === 'pending' && r.body.type === 'install', JSON.stringify(r.body));
@@ -465,6 +481,16 @@ const addDays = (n) => { const d = new Date(); d.setDate(d.getDate() + n); retur
     check('审批驳回', r.status === 200 && r.body.status === 'rejected', JSON.stringify(r.body));
     r = await call(PROP, 'GET', '/netLines?room_id=' + roomC);
     check('驳回后带宽不变=15', r.status === 200 && Number(r.body[0].bandwidth) === 15, JSON.stringify(r.body));
+    /* 网络报修：有 repair_add 的企业管理员可提交，且仅限本企业房产 */
+    r = await call(CA2, 'POST', '/repairs', { room_id: roomC, title: '网络报修：断网', content: '持续掉线' });
+    check('有报修权限的企业管理员提交报修', r.status === 200 && r.body.id && String(r.body.title).startsWith('网络报修'), JSON.stringify(r.body));
+    const repC = r.body.id;
+    r = await call(CA2, 'POST', '/repairs', { room_id: roomD, title: '网络报修：慢' });
+    check('他企业房产报修被拒 403', r.status === 403, JSON.stringify(r.body));
+    r = await call(PROP, 'GET', '/repairs');
+    check('主管理员可见企业管理员报修单', r.status === 200 && r.body.some(x => x.id === repC), '');
+    r = await call(PROP, 'DELETE', '/repairs/' + repC);
+    check('清理企业C报修', r.status === 200 && r.body.ok, '');
     /* 清理 */
     r = await call(PROP, 'DELETE', '/rooms/' + roomC);
     check('清理企业C房产', r.status === 200 && r.body.ok, '');
@@ -473,6 +499,8 @@ const addDays = (n) => { const d = new Date(); d.setDate(d.getDate() + n); retur
     r = await call(PROP, 'DELETE', '/tenants/' + compD);
     r = await call(PROP, 'DELETE', '/buildings/' + bld2);
     check('清理上报测试数据', r.status === 200 && r.body.ok, '');
+    r = await call(PROP, 'DELETE', '/roles/' + caRole.id);
+    check('清理企业上报角色(账号已级联删除)', r.status === 200 && r.body.ok, JSON.stringify(r.body));
 
     console.log('== 7. 员工页面权限 ==');
     /* 新模型：员工页面权限全部来自角色；建临时角色+员工验证 */

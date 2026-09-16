@@ -520,7 +520,7 @@ function pageAllowed(p){
   if (ME.level === 'super' || ME.level === 'admin' || ME.level === 'company_admin') return true;
   return (ME.pages || []).includes(p);
 }
-/* 操作权限：主管理员全有；员工按角色 ops 判定（企业管理员无操作权限，上报类单独放行） */
+/* 操作权限：主管理员全有；员工/企业管理员按角色 ops 判定 */
 const canOp = (op) => ME.level === 'admin' || (ME.ops || []).includes(op);
 
 /* 操作权限功能点清单（动作级，按功能模块分组；租房/酒店/物业各自独立） */
@@ -2155,11 +2155,21 @@ async function renderNetwork(){
     <div class="card-header bg-white fw-bold d-flex align-items-center">
       <i class="bi bi-wifi text-primary me-1"></i> 宽带申请（上报）
       <span class="small text-muted ms-2">企业管理员提交报装 / 加兆 / 减兆申请，主管理员审批后自动执行</span>
-      ${ME.level === 'company_admin'
+      ${ME.level === 'company_admin' && canOp('netline_bandwidth')
         ? '<button class="btn btn-sm btn-primary ms-auto" onclick="addNetRequest()">+ 上报申请</button>' : ''}
     </div>
     <div class="card-body py-2" id="netReqBox"><div class="text-muted">加载中…</div></div>
   </div>
+
+  ${ME.level === 'company_admin' && canOp('repair_add') ? `
+  <div class="card mb-3">
+    <div class="card-header bg-white fw-bold d-flex align-items-center">
+      <i class="bi bi-tools text-primary me-1"></i> 网络报修（上报）
+      <span class="small text-muted ms-2">企业管理员提交网络故障报修，主管理员在报修管理处理</span>
+      <button class="btn btn-sm btn-primary ms-auto" onclick="addNetRepair()">+ 报修上报</button>
+    </div>
+    <div class="card-body py-2" id="netRepairBox"><div class="text-muted">加载中…</div></div>
+  </div>` : ''}
 
   <div class="card mb-3"><div class="card-header bg-white fw-bold">
     <i class="bi bi-ethernet text-primary"></i> 各房间网费明细（${esc(data.month)}）</div>
@@ -2272,6 +2282,8 @@ async function renderNetwork(){
 
   /* 宽带申请（上报）列表 */
   renderNetRequests();
+  /* 企业管理员网络报修列表 */
+  if (ME.level === 'company_admin' && canOp('repair_add')) renderNetRepairs();
 }
 
 const NET_REQ_TYPE = {
@@ -2383,6 +2395,52 @@ async function handleNetRequest(id, action){
     alert(action === 'approve' ? '已通过并执行' : '已驳回');
     renderNetwork();
   } catch(e){ alert(e.message); }
+}
+
+/* 企业管理员：网络报修上报 */
+async function addNetRepair(){
+  const rooms = await api('/api/rooms');
+  if (!rooms.length){ alert('暂无本企业房产，请先由物业主管理员绑定'); return; }
+  const roomOpts = rooms.map(r => ({ value: r.id,
+    label: `${r.building_name || ''} ${r.room_no}｜${r.owner_name || ''}` }));
+  openForm('上报网络报修', [
+    { name:'room_id', label:'房产', type:'select', required:true, options: roomOpts },
+    { name:'fault', label:'故障类型', type:'select', required:true, options:[
+      { value:'断网', label:'断网' }, { value:'网速慢', label:'网速慢' },
+      { value:'设备故障', label:'设备故障' }, { value:'其他', label:'其他' }] },
+    { name:'content', label:'故障描述', type:'textarea', required:true, placeholder:'如：办公室持续掉线，重启路由器无效' }
+  ], { fault:'断网' }, async (d, modal) => {
+    await api('/api/repairs', 'POST', {
+      room_id: Number(d.room_id),
+      title: '网络报修：' + d.fault,
+      content: d.content || ''
+    });
+    modal.hide(); renderNetwork();
+  });
+}
+
+/* 企业管理员：查看本企业网络报修列表（处理结果在报修管理） */
+async function renderNetRepairs(){
+  const box = document.getElementById('netRepairBox');
+  if (!box) return;
+  let list = [];
+  try { list = await api('/api/repairs'); } catch(e){ box.innerHTML = '<div class="text-muted">' + esc(e.message) + '</div>'; return; }
+  const mine = list.filter(r => String(r.title).startsWith('网络报修')).slice(0, 20);
+  box.innerHTML = `<div class="table-responsive" style="max-height:240px"><table class="table table-sm table-hover mb-0">
+    <thead class="table-light"><tr>
+      <th>ID</th><th>提交时间</th><th>楼栋/房号</th><th>报修内容</th><th>状态</th><th>处理说明</th>
+    </tr></thead>
+    <tbody>${mine.map(r => `<tr>
+      <td>${r.id}</td>
+      <td><small>${esc((r.created_at || '').slice(0, 16))}</small></td>
+      <td>${esc(r.building_name || '')} ${esc(r.room_no || '')}</td>
+      <td><small>${esc(r.title)}${r.content ? '：' + esc(r.content) : ''}</small></td>
+      <td>${r.status === 'done' ? '<span class="badge bg-success">已完成</span>'
+          : r.status === 'processing' ? '<span class="badge bg-info">处理中</span>'
+          : '<span class="badge bg-warning text-dark">待处理</span>'}</td>
+      <td><small>${esc(r.handle_note || '-')}</small></td>
+    </tr>`).join('') || '<tr><td colspan="6" class="text-center text-muted py-3">暂无报修记录</td></tr>'}
+    </tbody></table></div>`;
 }
 
 /* 手动新增一条网费账单（租房按履行中合同、物业按企业绑定） */
