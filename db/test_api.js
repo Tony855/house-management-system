@@ -235,15 +235,17 @@ const addDays = (n) => { const d = new Date(); d.setDate(d.getDate() + n); retur
     check('员工接口忽略个人追加权限(不再生效)', r.status === 200, '');
     opLogin = await login('op' + 'emp' + ts, 'test123456', 'rental');
     check('员工实际权限=仅角色权限(meters,rooms)', opLogin.status === 200 && opLogin.body.pages.sort().join() === 'meters,rooms', JSON.stringify(opLogin.body.pages));
-    /* 操作权限细分：员工写操作按角色 ops 放行/拦截 */
-    r = await call(A, 'PUT', '/roles/' + roleA.id, { code: roleCode, name: '运营', pages: ['rooms', 'bills'], ops: ['room_write'] });
-    check('角色配置操作权限 room_write', r.status === 200 && Array.isArray(r.body.ops) && r.body.ops.includes('room_write'), JSON.stringify(r.body.ops));
+    /* 操作权限细分（动作级）：员工写操作按角色 ops 精确到新增/编辑/删除 */
+    r = await call(A, 'PUT', '/roles/' + roleA.id, { code: roleCode, name: '运营', pages: ['rooms', 'bills'], ops: ['room_add'] });
+    check('角色配置操作权限 room_add', r.status === 200 && Array.isArray(r.body.ops) && r.body.ops.includes('room_add'), JSON.stringify(r.body.ops));
     opLogin = await login('op' + 'emp' + ts, 'test123456', 'rental');
-    check('员工登录返回操作权限', opLogin.status === 200 && opLogin.body.ops.includes('room_write'), JSON.stringify(opLogin.body.ops));
+    check('员工登录返回操作权限', opLogin.status === 200 && opLogin.body.ops.includes('room_add'), JSON.stringify(opLogin.body.ops));
     r = await call(opLogin.body.token, 'POST', '/rooms', {});
-    check('有 room_write 的员工写房源放行(缺参数报 400)', r.status === 400, JSON.stringify(r.body));
+    check('有 room_add 的员工写房源放行(缺参数报 400)', r.status === 400, JSON.stringify(r.body));
+    r = await call(opLogin.body.token, 'PUT', '/rooms/' + roomA, { room_no: '101' });
+    check('无 room_edit 的员工编辑房源被拦截 403', r.status === 403, JSON.stringify(r.body));
     r = await call(opLogin.body.token, 'POST', '/meters', {});
-    check('无 meter_write 的员工写抄表被拦截 403', r.status === 403, JSON.stringify(r.body));
+    check('无 meter_add 的员工写抄表被拦截 403', r.status === 403, JSON.stringify(r.body));
     r = await call(A, 'PUT', '/roles/' + roleA.id, { code: roleCode, name: '运营', pages: ['rooms', 'bills'], ops: [] });
     opLogin = await login('op' + 'emp' + ts, 'test123456', 'rental');
     r = await call(opLogin.body.token, 'POST', '/rooms', {});
