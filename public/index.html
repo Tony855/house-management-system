@@ -3019,7 +3019,7 @@ async function editRole(id){
       fields.push({ name:'pages', label:'角色权限', type:'checklist', options: rolePageOpts,
         hint:'勾选后可访问对应页面；分配该角色的员工自动获得' });
     }
-    const roleOpOpts = OP_DEFS[curMode()] || [];
+    const roleOpOpts = (OP_DEFS[curMode()] || []).map(([value, label]) => ({ value, label }));
     if (roleOpOpts.length){
       fields.push({ name:'ops', label:'操作权限', type:'checklist', options: roleOpOpts,
         hint:'勾选后拥有对应页面的操作按钮（如新增、编辑、删除、收款）' });
