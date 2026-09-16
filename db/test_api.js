@@ -94,6 +94,8 @@ const addDays = (n) => { const d = new Date(); d.setDate(d.getDate() + n); retur
     check('公开读取到已保存配置', r.status === 200 && r.body.login_selector === 'hide' && r.body.login_default === 'hotel', JSON.stringify(r.body));
     r = await call(SUPER, 'PUT', '/app-config', { login_selector: 'show' });
     check('超管恢复显示入口', r.status === 200 && r.body.login_selector === 'show', JSON.stringify(r.body));
+    r = await call(SUPER, 'PUT', '/app-config', { login_default: 'rental' });
+    check('恢复默认入口为租房(清理测试痕迹)', r.status === 200 && r.body.login_default === 'rental', JSON.stringify(r.body));
 
     console.log('== 3. 开通两个租房主体 ==');
     const ts = Date.now().toString().slice(-7);

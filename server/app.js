@@ -713,8 +713,10 @@ router.get('/monitor', authMode, superOnly, h(async (req, res) => {
     const agg = await modeAggregate(p, o.mode);
     const [[staff]] = await shared.query(
       "SELECT COUNT(*) AS c FROM users WHERE org_id = ? AND role <> 'admin'", [o.id]);
+    const [[admin]] = await shared.query(
+      "SELECT username, real_name FROM users WHERE org_id = ? AND role = 'admin' ORDER BY id LIMIT 1", [o.id]);
     orgsByMode[o.mode].push({
-      id: o.id, name: o.name, admin_user_id: o.admin_user_id,
+      id: o.id, name: o.name, admin_user_id: o.admin_user_id, admin: admin || null,
       staff_count: Number(staff.c), ...agg
     });
   }

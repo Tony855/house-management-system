@@ -10,7 +10,7 @@ const { shared, getPool } = require('./db');
 const { hashPassword, today, nowStr, addDays, addMonths } = require('./util');
 
 const MODES = ['rental', 'hotel', 'property'];
-const ORG_NAMES = { rental: '经营主体', hotel: '经营主体', property: '经营主体' };
+const ORG_NAMES = { rental: '租房', hotel: '酒店', property: '物业' };
 const ADMIN = { rental: ['admin_r', 'admin_r123', '租房管理员'], hotel: ['admin_h', 'admin_h123', '酒店管理员'],
   property: ['admin_p', 'admin_p123', '物业管理员'] };
 
