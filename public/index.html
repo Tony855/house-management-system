@@ -517,7 +517,7 @@ function roomPerson(r){ return curMode() === 'property' ? (r.owner_name || '') :
 function roomPersonPhone(r){ return r.owner_phone || ''; }
 
 function pageAllowed(p){
-  if (ME.level === 'super' || ME.level === 'admin' || ME.level === 'company_admin') return true;
+  if (ME.level === 'super' || ME.level === 'admin') return true;
   return (ME.pages || []).includes(p);
 }
 /* 操作权限：主管理员全有；员工/企业管理员按角色 ops 判定 */
@@ -577,7 +577,7 @@ function curNav(){
   if (ME.level === 'staff') return [['home','house','工作台'],
     ...NAV[curMode()].filter(n => pageAllowed(n[0]) && n[3] === undefined)];
   if (ME.level === 'company_admin') return NAV.property.filter(n =>
-    ['dashboard','properties','owners','meters','network','bills','complaints','repairs'].includes(n[0]));
+    pageAllowed(n[0]) && n[3] === undefined);
   return NAV[curMode()].filter(n => pageAllowed(n[0]) && (n[3] === undefined || n[3] === 'admin'));
 }
 function firstAllowedPage(mode){
@@ -713,6 +713,17 @@ async function renderSettings(){
 async function go(page){
   const mode = curMode();
   const nav = curNav();
+  /* 企业管理员未配置任何页面权限：提示联系主管理员 */
+  if (ME.level === 'company_admin' && !nav.length){
+    history.replaceState(null, '', '#');
+    $('#pageTitle').textContent = '权限未配置';
+    $('#page').innerHTML = `<div class="card"><div class="card-body text-center py-5">
+      <i class="bi bi-shield-lock" style="font-size:3rem;color:#adb5bd"></i>
+      <p class="mt-3 mb-1 fw-bold">企业管理员权限未配置</p>
+      <p class="text-muted small mb-0">请联系物业主管理员：在「角色管理」配置页面权限并为你分配角色后重新登录。</p>
+    </div></div>`;
+    return;
+  }
   /* 企业员工：管理页内 Tab（物业，参与权限配置；员工无权限时会被 pageAllowed 拦在导航外） */
   if (page === 'orgemp'){ ORG_TAB = 'orgemp'; page = 'owners'; }
   else if (page === 'owners'){ ORG_TAB = 'owners'; }

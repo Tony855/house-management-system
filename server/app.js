@@ -224,7 +224,7 @@ const ROUTE_FEATURE = [
   [/^\/complaints/, 'complaint']
 ];
 function checkPagePerm(req) {
-  if (req.level === 'super' || req.level === 'admin' || req.level === 'company_admin') return true;
+  if (req.level === 'super' || req.level === 'admin') return true;
   for (const [re, pages] of ROUTE_PAGES) {
     if (re.test(req.path)) return (req.pages || []).some(p => pages.includes(p));
   }
