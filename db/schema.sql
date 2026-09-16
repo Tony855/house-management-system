@@ -82,6 +82,14 @@ CREATE TABLE app_config (
   updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB;
 
+-- ---------- 角色页面权限（主管理员为自建角色配置；员工实际权限 = 角色权限 ∪ 个人权限） ----------
+CREATE TABLE role_permissions (
+  id      INT AUTO_INCREMENT PRIMARY KEY,
+  role_id INT NOT NULL,
+  page    VARCHAR(30) NOT NULL,
+  UNIQUE KEY uk_role_page (role_id, page)
+) ENGINE=InnoDB;
+
 -- ==================================================================
 -- 租房系统 house_sys_rental
 --   楼栋 / 房间(月租·押金·水电单价·带宽) / 租客 / 合同 / 水电抄表 / 带宽变更 / 账单 / 报修

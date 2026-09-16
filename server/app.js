@@ -255,6 +255,29 @@ const orgAdminOnly = (req, res, next) => {
 
 const router = express.Router();
 
+/* 员工实际可访问页面 = 角色权限 ∪ 个人权限（按主体隔离；动态生效，改角色权限即时反映） */
+async function userPages(userId) {
+  const [[u]] = await shared.query('SELECT role, org_id FROM users WHERE id = ?', [userId]);
+  const [personal] = await shared.query('SELECT page FROM user_permissions WHERE user_id = ?', [userId]);
+  let rolePages = [];
+  if (u && u.role) {
+    const [rps] = await shared.query(
+      `SELECT rp.page FROM role_permissions rp JOIN roles r ON r.id = rp.role_id
+        WHERE r.code = ? AND r.org_id = ?`, [u.role, u.org_id]);
+    rolePages = rps.map(p => p.page);
+  }
+  return [...new Set([...personal.map(p => p.page), ...rolePages])];
+}
+/* 覆盖写角色权限（主管理员自建角色；内置/全局角色不设权限） */
+async function setRolePages(roleId, pages) {
+  await shared.query('DELETE FROM role_permissions WHERE role_id = ?', [roleId]);
+  if (Array.isArray(pages)) {
+    for (const p of [...new Set(pages)]) {
+      await shared.query('INSERT IGNORE INTO role_permissions (role_id, page) VALUES (?, ?)', [roleId, p]);
+    }
+  }
+}
+
 /* ==================================================================
  * 登录 / 会话
  * ================================================================== */
@@ -283,22 +306,22 @@ router.post('/login', h(async (req, res) => {
   const token = crypto.randomBytes(32).toString('hex');
   await shared.query('INSERT INTO sessions (token, user_id, mode, org_id) VALUES (?, ?, ?, ?)',
     [token, u.id, mode, u.org_id || null]);
-  const [pages] = await shared.query('SELECT page FROM user_permissions WHERE user_id = ?', [u.id]);
+  const pages = await userPages(u.id);
   res.json({
     id: u.id, username: u.username, name: u.real_name,
     role: u.role, role_name: u.role_name, level: u.level || 'staff',
     mode, org_id: u.org_id || null, org_name: u.org_name || null,
-    pages: pages.map(p => p.page), token
+    pages, token
   });
 }));
 
 router.get('/me', authMode, h(async (req, res) => {
-  const [pages] = await shared.query('SELECT page FROM user_permissions WHERE user_id = ?', [req.user.id]);
+  const pages = await userPages(req.user.id);
   res.json({
     id: req.user.id, username: req.user.username, name: req.user.real_name,
     role: req.user.role, role_name: req.user.role_name,
     level: req.level, mode: req.mode, org_id: req.orgId, org_name: req.orgName,
-    pages: pages.map(p => p.page)
+    pages
   });
 }));
 
@@ -1624,14 +1647,22 @@ router.delete('/complaints/:id', auth, h(async (req, res) => {
 router.get('/roles', authMode, adminLevel, h(async (req, res) => {
   if (req.level === 'super') {
     const [rows] = await shared.query('SELECT * FROM roles WHERE org_id IS NULL ORDER BY id');
-    return res.json(rows.map(r => ({ ...r, is_system: Number(r.is_system), user_count: 0 })));
+    return res.json(rows.map(r => ({ ...r, is_system: Number(r.is_system), user_count: 0, pages: [] })));
   }
   /* 主管理员：内置 staff 角色 + 本主体自建角色 */
   const [rows] = await shared.query(
     `SELECT r.*, (SELECT COUNT(*) FROM users u WHERE u.role = r.code AND u.org_id = r.org_id) AS user_count
        FROM roles r WHERE r.org_id = ? OR (r.org_id IS NULL AND r.level = 'staff')
       ORDER BY r.is_system DESC, r.id`, [req.orgId]);
-  res.json(rows.map(r => ({ ...r, is_system: Number(r.is_system), user_count: Number(r.user_count) })));
+  const [perms] = await shared.query(
+    `SELECT rp.page, r.id AS role_id FROM role_permissions rp JOIN roles r ON r.id = rp.role_id
+      WHERE r.org_id = ?`, [req.orgId]);
+  const byRole = {};
+  for (const p of perms) (byRole[p.role_id] = byRole[p.role_id] || []).push(p.page);
+  res.json(rows.map(r => ({
+    ...r, is_system: Number(r.is_system), user_count: Number(r.user_count),
+    pages: byRole[r.id] || []
+  })));
 }));
 router.post('/roles', authMode, h(async (req, res) => {
   const B = req.body || {};
@@ -1649,7 +1680,7 @@ router.post('/roles', authMode, h(async (req, res) => {
       'INSERT INTO roles (org_id, code, name, description, level) VALUES (NULL, ?, ?, ?, ?)',
       [code, name, String(B.description || ''), level]);
     const [rows] = await shared.query('SELECT * FROM roles WHERE id = ?', [r.insertId]);
-    return res.json(rows[0]);
+    return res.json({ ...rows[0], pages: [] });
   }
   /* 主管理员只能在本主体建 staff 角色 */
   const orgId = req.orgId;
@@ -1658,8 +1689,9 @@ router.post('/roles', authMode, h(async (req, res) => {
   const [r] = await shared.query(
     'INSERT INTO roles (org_id, code, name, description, level) VALUES (?, ?, ?, ?, "staff")',
     [orgId, code, name, String(B.description || '')]);
+  await setRolePages(r.insertId, B.pages);
   const [rows] = await shared.query('SELECT * FROM roles WHERE id = ?', [r.insertId]);
-  res.json(rows[0]);
+  res.json({ ...rows[0], pages: Array.isArray(B.pages) ? [...new Set(B.pages)] : [] });
 }));
 router.put('/roles/:id', authMode, h(async (req, res) => {
   const B = req.body || {};
@@ -1687,9 +1719,14 @@ router.put('/roles/:id', authMode, h(async (req, res) => {
     if (Number(dup.c) > 0) return res.status(400).json({ error: '角色编码已存在' });
     await shared.query('UPDATE roles SET code = ?, name = ?, description = ? WHERE id = ?',
       [code, name, String(B.description || ''), req.params.id]);
+    /* 自建角色可配置页面权限（内置/全局角色不设） */
+    if (role.org_id !== null) await setRolePages(req.params.id, B.pages);
   }
   const [rows] = await shared.query('SELECT * FROM roles WHERE id = ?', [req.params.id]);
-  res.json(rows[0]);
+  const pages = role.org_id !== null && !Number(role.is_system)
+    ? (await shared.query('SELECT page FROM role_permissions WHERE role_id = ?', [req.params.id]))[0].map(p => p.page)
+    : [];
+  res.json({ ...rows[0], pages });
 }));
 router.delete('/roles/:id', authMode, h(async (req, res) => {
   const [rs] = await shared.query('SELECT * FROM roles WHERE id = ?', [req.params.id]);
@@ -1704,6 +1741,7 @@ router.delete('/roles/:id', authMode, h(async (req, res) => {
   const [[used]] = await shared.query(
     'SELECT COUNT(*) AS c FROM users WHERE role = ? AND org_id = ?', [role.code, role.org_id]);
   if (Number(used.c) > 0) return res.status(400).json({ error: '该角色已分配给员工，无法删除' });
+  await shared.query('DELETE FROM role_permissions WHERE role_id = ?', [req.params.id]);
   await shared.query('DELETE FROM roles WHERE id = ?', [req.params.id]);
   res.json({ ok: true });
 }));
@@ -1722,7 +1760,14 @@ router.get('/users', authMode, orgAdminOnly, h(async (req, res) => {
   const [perms] = await shared.query('SELECT user_id, page FROM user_permissions');
   const byUser = {};
   for (const p of perms) (byUser[p.user_id] = byUser[p.user_id] || []).push(p.page);
-  res.json(rows.map(u => ({ ...u, pages: byUser[u.id] || [] })));
+  const [rolePerms] = await shared.query(
+    `SELECT r.code, rp.page FROM role_permissions rp JOIN roles r ON r.id = rp.role_id
+      WHERE r.org_id = ?`, [req.orgId]);
+  const byRole = {};
+  for (const p of rolePerms) (byRole[p.code] = byRole[p.code] || []).push(p.page);
+  res.json(rows.map(u => ({
+    ...u, pages: byUser[u.id] || [], role_pages: byRole[u.role] || []
+  })));
 }));
 router.post('/users', authMode, orgAdminOnly, h(async (req, res) => {
   const B = req.body || {};

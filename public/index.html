@@ -2492,11 +2492,18 @@ async function renderUsers(){
   const list = await api('/api/users');
   /* 主管理员仅管理本经营主体的员工 */
   const rows = list.filter(u => u.level === 'staff');
+  const permCell = u => {
+    const rp = u.role_pages || [], pp = u.pages || [];
+    const parts = [];
+    if (rp.length) parts.push(`<span class="badge bg-info text-dark">角色</span> ${rp.map(p => pageName(p)).join('、')}`);
+    if (pp.length) parts.push(`<span class="badge bg-secondary">个人</span> ${pp.map(p => pageName(p)).join('、')}`);
+    return parts.length ? `<small>${parts.join('<br>')}</small>` : '<span class="text-muted">无</span>';
+  };
   $('#page').innerHTML = `
   <div class="mb-3 d-flex gap-2">
     <button class="btn btn-sm btn-primary" onclick="editUser()">+ 新增员工</button>
     <div class="text-muted small align-self-center">
-      管理本系统（${esc(ME.org_name || '')}）员工账号，并为其分配可访问的页面
+      管理本系统（${esc(ME.org_name || '')}）员工账号，并为其分配角色与页面权限
     </div>
   </div>
   <div class="card"><div class="table-responsive"><table class="table table-hover mb-0">
@@ -2507,7 +2514,7 @@ async function renderUsers(){
     <tbody>${rows.map(u => `<tr>
       <td>${u.id}</td><td><b>${esc(u.username)}</b></td><td>${esc(u.real_name || '-')}</td>
       <td><span class="badge bg-secondary">${esc(u.role_name || u.role)}</span></td>
-      <td><small>${(u.pages || []).map(p => pageName(p)).join('、') || '<span class="text-muted">无</span>'}</small></td>
+      <td>${permCell(u)}</td>
       <td><small>${esc(u.created_at || '-')}</small></td>
       <td>
         <button class="btn btn-sm btn-outline-primary" onclick="editUser(${u.id})">编辑</button>
@@ -2524,7 +2531,7 @@ function pageName(p){
 }
 
 async function editUser(id){
-  let data = { role:'staff' };
+  let data = { role:'staff', pages: [] };
   if (id){ const list = await api('/api/users'); data = list.find(x => x.id === id) || data; }
   const roles = await api('/api/roles');
   /* 主管理员只能分配员工级角色（内置 staff + 本主体自建角色） */
@@ -2540,12 +2547,29 @@ async function editUser(id){
   ];
   const modePages = (NAV[curMode()] || []).filter(n => !n[3]).map(n => ({ value:n[0], label:n[2] }));
   if (modePages.length){
-    fields.push({ name:'pages', label:'员工页面权限', type:'checklist', options: modePages });
+    fields.push({ name:'pages', label:'员工个人追加权限', type:'checklist', options: modePages,
+      hint:'员工实际权限 = 所选角色已配置的权限 + 下方个人追加（勾选）' });
   }
   openForm(id ? '编辑员工' : '新增员工', fields, data, async (d, modal) => {
     d.mode = undefined;
     await api(id ? '/api/users/' + id : '/api/users', id ? 'PUT' : 'POST', d);
     modal.hide(); renderUsers();
+  }, (el) => {
+    /* 角色切换时动态显示该角色已配置的页面权限 */
+    const sel = el.querySelector('select[name=role]');
+    if (!sel) return;
+    const box = sel.closest('.mb-3');
+    const hint = document.createElement('div');
+    hint.className = 'form-text';
+    box.appendChild(hint);
+    const render = () => {
+      const r = roleOpts.find(x => x.code === sel.value);
+      hint.textContent = r && r.pages && r.pages.length
+        ? '该角色【' + r.name + '】已自动授予：' + r.pages.map(p => pageName(p)).join('、')
+        : '该角色未配置页面权限';
+    };
+    sel.addEventListener('change', render);
+    render();
   });
 }
 
@@ -2560,24 +2584,27 @@ async function renderRoles(){
   const roles = await api('/api/roles');
   const lvlBadge = l => l === 'admin' ? '<span class="badge bg-warning text-dark">主管理员</span>'
     : '<span class="badge bg-secondary">员工</span>';
+  const permTxt = r => (r.pages && r.pages.length)
+    ? `<small>${r.pages.map(p => pageName(p)).join('、')}</small>`
+    : (r.is_system ? '<span class="text-muted small">—</span>' : '<span class="text-muted small">未配置（员工按个人权限访问）</span>');
   $('#page').innerHTML = `
   <div class="mb-3 d-flex gap-2">
     <button class="btn btn-sm btn-primary" onclick="editRole()">+ 新增员工角色</button>
     <div class="text-muted small align-self-center">
-      为本系统（${esc(ME.org_name || '')}）自定义员工角色，再到「员工管理」分配
+      为本系统（${esc(ME.org_name || '')}）自定义员工角色并配置页面权限，再到「员工管理」分配
     </div>
   </div>
   <div class="card"><div class="table-responsive"><table class="table table-hover mb-0">
     <thead class="table-light"><tr>
-      <th>ID</th><th>角色名称</th><th>编码</th><th>层级</th><th>说明</th>
-      <th>使用人数</th><th>类型</th><th width="150">操作</th>
+      <th>ID</th><th>角色名称</th><th>编码</th><th>层级</th>
+      <th>页面权限</th><th>使用人数</th><th>类型</th><th width="150">操作</th>
     </tr></thead>
     <tbody>${roles.map(r => `<tr>
       <td>${r.id}</td>
       <td><b>${esc(r.name)}</b></td>
       <td><code>${esc(r.code)}</code></td>
       <td>${lvlBadge(r.level)}</td>
-      <td><small>${esc(r.description || '-')}</small></td>
+      <td>${permTxt(r)}</td>
       <td>${r.user_count !== undefined ? r.user_count : 0}</td>
       <td>${r.is_system
         ? '<span class="badge bg-info text-dark">系统内置</span>'
@@ -2589,13 +2616,13 @@ async function renderRoles(){
       </td></tr>`).join('')}
     </tbody></table></div></div>
     <div class="text-muted small mt-2">
-      <i class="bi bi-info-circle"></i> 内置「员工」角色不可删除；自定义角色均为员工层级，按「员工管理」中勾选的页面权限访问。
-      已分配给员工的自定义角色需先调整员工角色后才能删除。
+      <i class="bi bi-info-circle"></i> 自定义角色可配置页面权限，分配该角色的员工自动获得其权限（还可按员工单独追加）。
+      内置「员工」角色不可配置；已分配给员工的自定义角色需先调整员工角色后才能删除。
     </div>`;
 }
 
 async function editRole(id){
-  let data = { code:'', name:'', description:'', level:'staff' };
+  let data = { code:'', name:'', description:'', level:'staff', pages: [] };
   if (id){
     const roles = await api('/api/roles');
     data = roles.find(x => x.id === id) || data;
@@ -2606,14 +2633,18 @@ async function editRole(id){
     { name:'code', label:'角色编码', required:true, placeholder:'如：finance',
       hint: isSys ? '系统内置角色编码不可修改' : '仅字母/数字/下划线，以字母开头' }
   ];
+  fields.push({ name:'description', label:'说明', type:'textarea', placeholder:'该角色的职责说明（可选）' });
   if (!isSys){
-    fields.push({ name:'description', label:'说明', type:'textarea', placeholder:'该角色的职责说明（可选）' });
-  } else {
-    fields.push({ name:'description', label:'说明', type:'textarea' });
+    const modePages = (NAV[curMode()] || []).filter(n => !n[3]).map(n => ({ value:n[0], label:n[2] }));
+    if (modePages.length){
+      fields.push({ name:'pages', label:'角色页面权限', type:'checklist', options: modePages,
+        hint:'分配该角色的员工自动获得这些页面的访问权限（可在员工管理中按个人追加）' });
+    }
   }
   openForm(id ? '编辑角色' : '新增员工角色', fields, data, async (d, modal) => {
     d.level = 'staff';
     if (isSys) delete d.code;
+    if (isSys) delete d.pages;
     await api(id ? '/api/roles/' + id : '/api/roles', id ? 'PUT' : 'POST', d);
     modal.hide(); renderRoles();
   });
@@ -2629,13 +2660,15 @@ async function delRole(id){
  * 21. 员工工作台（员工独立页面）
  * ================================================================== */
 async function renderStaffHome(){
-  const s = await api('/api/stats');
+  /* 工作台为员工基础首页：无仪表盘权限时显示占位（不阻断页面） */
+  let s = {};
+  try { s = await api('/api/stats'); } catch(e){}
   const mode = curMode();
   const cards = [
-    ['总房间', s.total_rooms, 'door-open', 'primary'],
-    [mode === 'rental' ? '已出租' : '已入住', mode === 'rental' ? s.rented : (s.checked_in || s.rented), 'check-circle', 'success'],
-    ['待处理报修', s.pending_repairs, 'tools', 'danger'],
-    ['本月应收', money(s.month_receivable), 'wallet2', 'warning']
+    ['总房间', s.total_rooms || 0, 'door-open', 'primary'],
+    [mode === 'rental' ? '已出租' : '已入住', mode === 'rental' ? (s.rented || 0) : ((s.checked_in || s.rented) || 0), 'check-circle', 'success'],
+    ['待处理报修', s.pending_repairs || 0, 'tools', 'danger'],
+    ['本月应收', money(s.month_receivable || 0), 'wallet2', 'warning']
   ];
   let repairs = [];
   try { repairs = await api('/api/repairs'); } catch(e){}

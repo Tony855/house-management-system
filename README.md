@@ -15,6 +15,9 @@
 
 - 系统内置角色 `super / admin / staff`（`org_id = NULL`，不可删）；主管理员自建的
   角色固定为**员工层级**，仅在本主体内可见、可用。
+- **角色页面权限**：主管理员可在「角色管理」为自建角色配置页面权限；分配该角色的
+  员工自动获得其权限（**员工实际权限 = 角色权限 ∪ 员工个人追加权限**，改角色权限
+  即时生效）；内置 `staff` 角色不可配置权限。三个系统的角色、员工与权限完全隔离。
 - 密码 scrypt 加盐哈希；登录基于服务端 token 会话表。
 
 ## 四个独立登录入口（三系统独立运营，账号与入口强绑定）
@@ -161,7 +164,8 @@ node db/check_frontend.js # 前端 JS 语法校验
 | `settings` | **每个主体一行**（`org_id` 主键）：`currency / rate / net_price_per_mb / water_price / elec_price`，内部以人民币存储 |
 | `app_config` | 全局配置（超管级）：`login_selector(show/hide)` / `login_default(rental/hotel/property/super)` |
 | `sessions` | 登录会话：`token / user_id / mode / org_id` |
-| `user_permissions` | 员工页面权限：`(user_id, page)` 唯一 |
+| `user_permissions` | 员工**个人**页面权限：`(user_id, page)` 唯一 |
+| `role_permissions` | **角色**页面权限：`(role_id, page)` 唯一；**员工实际权限 = 角色权限 ∪ 个人权限**（按主体隔离，改角色权限即时生效） |
 
 **系统库（业务表均带 `org_id` 行级归属）**
 
