@@ -374,16 +374,37 @@ CREATE TABLE rooms (
   INDEX idx_org (org_id), INDEX idx_rooms_building (building_id)
 ) ENGINE=InnoDB;
 
+-- 物业库：tenants = 企业（企业业主，仅企业模式，无个人业主）
 CREATE TABLE tenants (
   id         INT AUTO_INCREMENT PRIMARY KEY,
   org_id     INT NOT NULL,
-  name       VARCHAR(50) NOT NULL,
-  gender     ENUM('男','女') NOT NULL DEFAULT '男',
-  phone      VARCHAR(20) NOT NULL DEFAULT '',
-  id_card    VARCHAR(30) NOT NULL DEFAULT '',
+  name       VARCHAR(100) NOT NULL,          -- 企业名称
+  contact    VARCHAR(50) NOT NULL DEFAULT '',-- 联系人
+  phone      VARCHAR(20) NOT NULL DEFAULT '',-- 联系电话（非必填）
+  license_no VARCHAR(50) NOT NULL DEFAULT '',-- 营业执照/统一信用代码
   remark     VARCHAR(200) NOT NULL DEFAULT '',
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   INDEX idx_org (org_id)
+) ENGINE=InnoDB;
+
+-- 物业库：企业员工（企业业主名下的员工档案；不参与登录）
+CREATE TABLE org_employees (
+  id           INT AUTO_INCREMENT PRIMARY KEY,
+  org_id       INT NOT NULL,
+  company      VARCHAR(100) NOT NULL,         -- 所属企业（文本，自动匹配/创建企业记录）
+  owner_id     INT NULL,                      -- 绑定企业（tenants.id）
+  room_id      INT NULL,                      -- 绑定房号（该企业名下房产）
+  name         VARCHAR(50) NOT NULL,          -- 姓名
+  id_number    VARCHAR(50) NOT NULL DEFAULT '',-- 身份证/护照
+  phone        VARCHAR(20) NOT NULL DEFAULT '',
+  department   VARCHAR(50) NOT NULL DEFAULT '',
+  position     VARCHAR(50) NOT NULL DEFAULT '',
+  card_no      VARCHAR(50) NOT NULL DEFAULT '',-- 门禁卡号（选填）
+  photo_url    VARCHAR(255) NOT NULL DEFAULT '', -- 本人照片
+  id_photo_url VARCHAR(255) NOT NULL DEFAULT '', -- 身份证/护照照片
+  remark       VARCHAR(200) NOT NULL DEFAULT '',
+  created_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_org (org_id), INDEX idx_emp_owner (owner_id), INDEX idx_emp_room (room_id)
 ) ENGINE=InnoDB;
 
 CREATE TABLE meters (

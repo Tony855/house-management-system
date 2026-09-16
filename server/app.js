@@ -8,6 +8,7 @@
 const express = require('express');
 const crypto = require('crypto');
 const path = require('path');
+const fs = require('fs');
 const pool = require('./db');
 const { shared, getPool, withMode, currentOrgId, currentMode, MODES } = require('./db');
 const {
@@ -18,6 +19,8 @@ const {
 const app = express();
 app.use(express.json());
 app.use(express.static(path.join(__dirname, '..', 'public')));
+/* 上传图片静态访问（uploads/org-<主体ID>/，按主体隔离） */
+app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads')));
 
 /* ---------- 辅助 ---------- */
 const h = fn => (req, res) => fn(req, res).catch(e => {
@@ -523,7 +526,7 @@ router.get('/stats', auth, h(async (req, res) => {
     month_receivable: 0, month_received: 0, arrears: 0, pending_repairs: 0,
     today_checkin: 0, today_checkout: 0, today_revenue: 0, staying_deposit: 0,
     expiring: [], recent_bills: [], recent_orders: [], dirty_rooms: [],
-    owner_count: 0, property_receivable: 0, property_received: 0, property_arrears: 0, pay_rate: 0,
+    owner_count: 0, emp_count: 0, property_receivable: 0, property_received: 0, property_arrears: 0, pay_rate: 0,
     pending_complaints: 0, month_repairs: 0,
     meter_water_fee: 0, meter_elec_fee: 0, meter_water_usage: 0, meter_elec_usage: 0,
     net_receivable: 0, net_received: 0, net_arrears: 0,
@@ -605,7 +608,7 @@ router.get('/stats', auth, h(async (req, res) => {
     R.dirty_rooms = dirty;
   }
 
-  /* 物业：业主 */
+  /* 物业：企业 */
   if (f.owner) {
     const [ownedRooms] = await pool.query(
       `SELECT r.*, b.name AS building_name, t.name AS owner_name, t.phone AS owner_phone
@@ -613,6 +616,8 @@ router.get('/stats', auth, h(async (req, res) => {
          LEFT JOIN tenants t ON t.id = r.owner_id
         WHERE r.org_id = ? AND r.owner_id IS NOT NULL`, [oid]);
     R.owner_count = new Set(ownedRooms.map(r => r.owner_id)).size;
+    const [[ec]] = await pool.query('SELECT COUNT(*) AS c FROM org_employees WHERE org_id = ?', [oid]);
+    R.emp_count = Number(ec.c);
     const [[bwRow]] = await pool.query(
       `SELECT COALESCE(SUM(l.bandwidth),0) AS s FROM room_net_lines l JOIN rooms r ON r.id = l.room_id
         WHERE l.org_id = ? AND l.status = 'active' AND r.owner_id IS NOT NULL`, [oid]);
@@ -878,7 +883,7 @@ router.delete('/rooms/:id', auth, h(async (req, res) => {
 }));
 
 /* ==================================================================
- * 租客 / 房客 / 业主
+ * 租客 / 房客 / 企业（物业：tenants = 企业，无个人业主）
  * ================================================================== */
 router.get('/tenants', auth, h(async (req, res) => {
   const { keyword } = req.query;
@@ -896,16 +901,28 @@ router.get('/tenants', auth, h(async (req, res) => {
        FROM contracts c JOIN rooms r ON r.id = c.room_id JOIN buildings b ON b.id = r.building_id
       WHERE c.tenant_id = t.id AND c.status = 'active' AND c.org_id = t.org_id) AS rooms`;
   }
-  let sql = `SELECT t.*, ${roomExpr} FROM tenants t WHERE t.org_id = ?`;
+  const empExpr = req.mode === 'property'
+    ? `(SELECT COUNT(*) FROM org_employees e WHERE e.owner_id = t.id AND e.org_id = t.org_id) AS emp_count`
+    : `0 AS emp_count`;
+  let sql = `SELECT t.*, ${roomExpr}, ${empExpr} FROM tenants t WHERE t.org_id = ?`;
   const params = [req.orgId];
   if (keyword) { sql += ' AND (t.name LIKE ? OR t.phone LIKE ?)'; params.push('%' + keyword + '%', '%' + keyword + '%'); }
   sql += ' ORDER BY t.id';
   const [rows] = await pool.query(sql, params);
-  res.json(rows);
+  res.json(rows.map(r => ({ ...r, emp_count: Number(r.emp_count) })));
 }));
 router.post('/tenants', auth, h(async (req, res) => {
   const B = req.body || {};
-  if (!B.name || !B.phone) return res.status(400).json({ error: '姓名与联系电话不能为空' });
+  if (!B.name) return res.status(400).json({ error: '名称不能为空' });
+  if (req.mode === 'property') {
+    /* 物业：企业（电话非必填） */
+    const [r] = await pool.query(
+      'INSERT INTO tenants (org_id, name, contact, phone, license_no, remark) VALUES (?, ?, ?, ?, ?, ?)',
+      [req.orgId, B.name, B.contact || '', B.phone || '', B.license_no || '', B.remark || '']);
+    const [rows] = await pool.query('SELECT * FROM tenants WHERE id = ? AND org_id = ?', [r.insertId, req.orgId]);
+    return res.json({ ...rows[0], rooms: '', emp_count: 0 });
+  }
+  if (!B.phone) return res.status(400).json({ error: '姓名与联系电话不能为空' });
   const [r] = await pool.query(
     'INSERT INTO tenants (org_id, name, gender, phone, id_card, remark) VALUES (?, ?, ?, ?, ?, ?)',
     [req.orgId, B.name, B.gender === '女' ? '女' : '男', B.phone, B.id_card || '', B.remark || '']);
@@ -914,6 +931,14 @@ router.post('/tenants', auth, h(async (req, res) => {
 }));
 router.put('/tenants/:id', auth, h(async (req, res) => {
   const B = req.body || {};
+  if (req.mode === 'property') {
+    const [r] = await pool.query(
+      'UPDATE tenants SET name = ?, contact = ?, phone = ?, license_no = ?, remark = ? WHERE id = ? AND org_id = ?',
+      [B.name, B.contact || '', B.phone || '', B.license_no || '', B.remark || '', req.params.id, req.orgId]);
+    if (!r.affectedRows) return res.status(400).json({ error: '记录不存在' });
+    const [rows] = await pool.query('SELECT * FROM tenants WHERE id = ? AND org_id = ?', [req.params.id, req.orgId]);
+    return res.json(rows[0]);
+  }
   const [r] = await pool.query(
     'UPDATE tenants SET name = ?, gender = ?, phone = ?, id_card = ?, remark = ? WHERE id = ? AND org_id = ?',
     [B.name, B.gender === '女' ? '女' : '男', B.phone, B.id_card || '', B.remark || '', req.params.id, req.orgId]);
@@ -936,10 +961,102 @@ router.delete('/tenants/:id', auth, h(async (req, res) => {
   if (FEATURES[req.mode].owner) {
     const [[{ c }]] = await pool.query(
       'SELECT COUNT(*) AS c FROM rooms WHERE owner_id = ? AND org_id = ?', [id, oid]);
-    if (Number(c) > 0) return res.status(400).json({ error: '该业主名下仍有房产，请先解除绑定' });
+    if (Number(c) > 0) return res.status(400).json({ error: '该企业名下仍有房产，请先解除绑定' });
+    const [[{ c: ec }]] = await pool.query(
+      'SELECT COUNT(*) AS c FROM org_employees WHERE owner_id = ? AND org_id = ?', [id, oid]);
+    if (Number(ec) > 0) return res.status(400).json({ error: '该企业名下仍有企业员工，请先移除或改绑' });
   }
   await pool.query('DELETE FROM tenants WHERE id = ? AND org_id = ?', [id, oid]);
   res.json({ ok: true });
+}));
+
+/* ==================================================================
+ * 企业员工（仅物业：企业业主名下的员工档案；读需 org-emp 权限或主管理员，写仅主管理员）
+ * ================================================================== */
+router.get('/org-employees', authMode, h(async (req, res) => {
+  if (req.mode !== 'property') return res.status(404).json({ error: '仅物业系统支持企业员工' });
+  if (req.level !== 'admin' && !(await userPages(req.user.id)).includes('orgemp')) {
+    return res.status(403).json({ error: '无权限访问企业员工' });
+  }
+  const [rows] = await pool.query(
+    `SELECT e.*, r.room_no, b.name AS building_name, t.name AS owner_name
+       FROM org_employees e
+       LEFT JOIN rooms r ON r.id = e.room_id
+       LEFT JOIN buildings b ON b.id = r.building_id
+       LEFT JOIN tenants t ON t.id = e.owner_id
+      WHERE e.org_id = ? ORDER BY e.id`, [req.orgId]);
+  res.json(rows);
+}));
+router.post('/org-employees', authMode, orgAdminOnly, h(async (req, res) => {
+  if (req.mode !== 'property') return res.status(404).json({ error: '仅物业系统支持企业员工' });
+  const B = req.body || {};
+  if (!B.company || !B.name) return res.status(400).json({ error: '所属企业与姓名不能为空' });
+  /* 自动匹配/创建企业（企业业主）记录，实现与业主绑定 */
+  let ownerId = B.owner_id ? Number(B.owner_id) : null;
+  if (!ownerId) {
+    const [match] = await pool.query(
+      'SELECT * FROM tenants WHERE org_id = ? AND name = ? LIMIT 1', [req.orgId, B.company]);
+    ownerId = match.length ? match[0].id : (await pool.query(
+      'INSERT INTO tenants (org_id, name) VALUES (?, ?)', [req.orgId, B.company]))[0].insertId;
+  }
+  const [r] = await pool.query(
+    `INSERT INTO org_employees (org_id, company, owner_id, room_id, name, id_number, phone,
+       department, position, card_no, photo_url, id_photo_url, remark)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [req.orgId, B.company, ownerId, B.room_id ? Number(B.room_id) : null, B.name,
+     B.id_number || '', B.phone || '', B.department || '', B.position || '', B.card_no || '',
+     B.photo_url || '', B.id_photo_url || '', B.remark || '']);
+  const [rows] = await pool.query(
+    `SELECT e.*, r.room_no, b.name AS building_name, t.name AS owner_name
+       FROM org_employees e
+       LEFT JOIN rooms r ON r.id = e.room_id LEFT JOIN buildings b ON b.id = r.building_id
+       LEFT JOIN tenants t ON t.id = e.owner_id
+      WHERE e.id = ?`, [r.insertId]);
+  res.json(rows[0]);
+}));
+router.put('/org-employees/:id', authMode, orgAdminOnly, h(async (req, res) => {
+  if (req.mode !== 'property') return res.status(404).json({ error: '仅物业系统支持企业员工' });
+  const B = req.body || {};
+  if (!B.company || !B.name) return res.status(400).json({ error: '所属企业与姓名不能为空' });
+  const [exist] = await pool.query('SELECT * FROM org_employees WHERE id = ? AND org_id = ?', [req.params.id, req.orgId]);
+  if (!exist.length) return res.status(400).json({ error: '记录不存在' });
+  const [r] = await pool.query(
+    `UPDATE org_employees SET company = ?, owner_id = ?, room_id = ?, name = ?, id_number = ?, phone = ?,
+       department = ?, position = ?, card_no = ?, photo_url = ?, id_photo_url = ?, remark = ?
+     WHERE id = ? AND org_id = ?`,
+    [B.company, B.owner_id ? Number(B.owner_id) : null, B.room_id ? Number(B.room_id) : null, B.name,
+     B.id_number || '', B.phone || '', B.department || '', B.position || '', B.card_no || '',
+     B.photo_url || '', B.id_photo_url || '', B.remark || '', req.params.id, req.orgId]);
+  if (!r.affectedRows) return res.status(400).json({ error: '记录不存在' });
+  const [rows] = await pool.query(
+    `SELECT e.*, r.room_no, b.name AS building_name, t.name AS owner_name
+       FROM org_employees e
+       LEFT JOIN rooms r ON r.id = e.room_id LEFT JOIN buildings b ON b.id = r.building_id
+       LEFT JOIN tenants t ON t.id = e.owner_id
+      WHERE e.id = ?`, [req.params.id]);
+  res.json(rows[0]);
+}));
+router.delete('/org-employees/:id', authMode, orgAdminOnly, h(async (req, res) => {
+  if (req.mode !== 'property') return res.status(404).json({ error: '仅物业系统支持企业员工' });
+  const [r] = await pool.query('DELETE FROM org_employees WHERE id = ? AND org_id = ?', [req.params.id, req.orgId]);
+  if (!r.affectedRows) return res.status(400).json({ error: '记录不存在' });
+  res.json({ ok: true });
+}));
+
+/* 图片上传（仅主管理员）：base64 → uploads/org-<主体ID>/，jpg/png/webp ≤2MB */
+router.post('/upload', authMode, orgAdminOnly, h(async (req, res) => {
+  const data = (req.body || {}).data;
+  if (!data || typeof data !== 'string') return res.status(400).json({ error: '缺少图片数据' });
+  const m = /^data:image\/(jpeg|png|webp);base64,(.+)$/.exec(data);
+  if (!m) return res.status(400).json({ error: '仅支持 jpg / png / webp 图片' });
+  const buf = Buffer.from(m[2], 'base64');
+  if (buf.length > 2 * 1024 * 1024) return res.status(400).json({ error: '图片不能超过 2MB' });
+  const dir = path.join(__dirname, '..', 'uploads', 'org-' + req.orgId);
+  fs.mkdirSync(dir, { recursive: true });
+  const extMap = { jpeg: 'jpg', png: 'png', webp: 'webp' };
+  const file = Date.now() + '-' + Math.random().toString(36).slice(2, 8) + '.' + extMap[m[1]];
+  fs.writeFileSync(path.join(dir, file), buf);
+  res.json({ url: '/uploads/org-' + req.orgId + '/' + file });
 }));
 
 /* ==================================================================

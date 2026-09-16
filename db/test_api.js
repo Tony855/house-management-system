@@ -52,6 +52,7 @@ const addDays = (n) => { const d = new Date(); d.setDate(d.getDate() + n); retur
     check('租房员工从物业窗口登录被拒(不泄露归属)', r.status === 400 && /用户名或密码错误/.test(r.body.error) && !/租房|物业/.test(r.body.error), JSON.stringify(r.body));
     r = await login('wy', 'wy123', 'property');
     check('物业员工从物业窗口登录成功', r.status === 200 && r.body.level === 'staff' && r.body.mode === 'property', JSON.stringify(r.body));
+    const WY = r.body.token;
     r = await login('wy', 'wy123', 'rental');
     check('物业员工从租房窗口登录被拒(不泄露归属)', r.status === 400 && /用户名或密码错误/.test(r.body.error), JSON.stringify(r.body));
     r = await login('admin_r', 'admin_r123', 'property');
@@ -240,6 +241,60 @@ const addDays = (n) => { const d = new Date(); d.setDate(d.getDate() + n); retur
     check('清理运营角色(级联权限)', r.status === 200 && r.body.ok, '');
     r = await call(A, 'GET', '/roles');
     check('删除角色后权限表无残留', !r.body.some(x => x.code === roleCode), '');
+
+    console.log('== 6d. 物业企业 / 企业员工（企业管理 Tab，照片上传，权限隔离）==');
+    const compName = '测试' + '科技' + ts;
+    r = await call(PROP, 'POST', '/tenants', { name: compName, contact: '王经理', license_no: '91330000TEST' });
+    check('物业建企业(电话非必填)', r.status === 200 && r.body.id && r.body.emp_count === 0, JSON.stringify(r.body));
+    const compId = r.body.id;
+    r = await call(PROP, 'GET', '/tenants');
+    const compInList = r.body.find(x => x.id === compId);
+    check('企业列表含联系人/证件/员工数', compInList && compInList.contact === '王经理' && compInList.license_no === '91330000TEST' && Number(compInList.emp_count) === 0, JSON.stringify(compInList));
+    /* 上传接口：1x1 红色 png base64 */
+    const pngB64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+    r = await call(PROP, 'POST', '/upload', { data: 'data:image/png;base64,' + pngB64 });
+    check('上传照片返回URL', r.status === 200 && /^\/uploads\/org-\d+\//.test(r.body.url), JSON.stringify(r.body));
+    const photoUrl = r.body.url;
+    r = await call(PROP, 'POST', '/upload', { data: 'data:text/plain;base64,' + Buffer.from('x').toString('base64') });
+    check('非图片上传被拒', r.status === 400, JSON.stringify(r.body));
+    /* 企业员工：company 自动匹配已有企业 */
+    r = await call(PROP, 'POST', '/org-employees', {
+      company: compName, name: '李四', id_number: 'H1001', phone: '855123', department: '财务部',
+      position: '会计', card_no: 'CARD-01', photo_url: photoUrl, remark: '测试'
+    });
+    check('建企业员工(自动绑定企业)', r.status === 200 && r.body.owner_id === compId && r.body.photo_url === photoUrl, JSON.stringify(r.body));
+    const empId = r.body.id;
+    r = await call(PROP, 'GET', '/tenants');
+    check('企业员工数统计=1', Number(r.body.find(x => x.id === compId).emp_count) === 1, JSON.stringify(r.body.find(x => x.id === compId)));
+    r = await call(PROP, 'GET', '/org-employees');
+    check('主管理员可见企业员工列表', r.status === 200 && r.body.some(e => e.id === empId && e.owner_name === compName), JSON.stringify(r.body));
+    /* 未授权物业员工：不可见 */
+    r = await call(WY, 'GET', '/org-employees');
+    check('未授权员工访问企业员工被拒', r.status === 403, JSON.stringify(r.body));
+    /* 物业主管理员给员工角色授权 orgemp（角色权限） */
+    r = await call(PROP, 'POST', '/roles', { code: 'empview' + ts, name: '企业查看', pages: ['orgemp'] });
+    check('建企业查看角色(带orgemp权限)', r.status === 200 && r.body.pages.includes('orgemp'), JSON.stringify(r.body));
+    const viewRoleId = r.body.id;
+    r = await call(PROP, 'POST', '/users', { username: 'emp' + 'staff' + ts, password: 'test123456', role: 'empview' + ts, pages: [] });
+    check('建授权员工(挂企业查看角色)', r.status === 200 && r.body.id, JSON.stringify(r.body));
+    const empStaffId = r.body.id;
+    const empStaffLogin = await login('emp' + 'staff' + ts, 'test123456', 'property');
+    check('授权员工登录含orgemp权限', empStaffLogin.status === 200 && empStaffLogin.body.pages.includes('orgemp'), JSON.stringify(empStaffLogin.body.pages));
+    r = await call(empStaffLogin.body.token, 'GET', '/org-employees');
+    check('授权员工可读企业员工列表', r.status === 200 && r.body.some(e => e.id === empId), '');
+    r = await call(empStaffLogin.body.token, 'POST', '/org-employees', { company: compName, name: '越权' });
+    check('授权员工不可写(仅主管理员可增删改)', r.status === 403, JSON.stringify(r.body));
+    /* 清理：删除员工/角色/企业员工；企业有员工时删除被拒 */
+    r = await call(PROP, 'DELETE', '/tenants/' + compId);
+    check('企业有员工时删除被拒', r.status === 400 && /企业员工/.test(r.body.error), JSON.stringify(r.body));
+    r = await call(PROP, 'DELETE', '/org-employees/' + empId);
+    check('删除企业员工', r.status === 200 && r.body.ok, '');
+    r = await call(PROP, 'DELETE', '/tenants/' + compId);
+    check('删除企业(员工已清)', r.status === 200 && r.body.ok, '');
+    r = await call(PROP, 'DELETE', '/users/' + empStaffId);
+    check('清理授权员工', r.status === 200 && r.body.ok, '');
+    r = await call(PROP, 'DELETE', '/roles/' + viewRoleId);
+    check('清理企业查看角色', r.status === 200 && r.body.ok, '');
 
     console.log('== 7. 员工页面权限 ==');
     r = await call(STAFF, 'GET', '/rooms');

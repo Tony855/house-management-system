@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
@@ -223,6 +223,13 @@ function openForm(title, fields, values, onSubmit, onMount){
           <span class="form-check-label">${esc(o.label)}</span></label>`;
       });
       html += `</div>`;
+    } else if (f.type === 'file'){
+      /* 图片上传：选文件后转 base64 上传，URL 存入 hidden 随表单提交 */
+      html += `<input class="form-control" type="file" accept="image/jpeg,image/png,image/webp"
+                onchange="uploadPhoto(this, document.getElementById('${mid}_${f.name}'), document.getElementById('${mid}_${f.name}_img'))">`;
+      html += `<input type="hidden" name="${f.name}" id="${mid}_${f.name}" value="${esc(v)}">`;
+      html += `<img id="${mid}_${f.name}_img" src="${esc(v)}" class="mt-1 rounded border"
+                style="max-height:90px;max-width:140px;object-fit:cover;${v ? '' : 'display:none'}">`;
     } else {
       html += `<input class="form-control" type="${f.type || 'text'}" name="${f.name}"
         value="${esc(v)}" ${f.required ? 'required' : ''}
@@ -265,6 +272,24 @@ function openForm(title, fields, values, onSubmit, onMount){
   el.addEventListener('hidden.bs.modal', () => el.remove());
   modal.show();
   if (onMount) onMount(el);
+}
+
+/* 图片上传：转 base64 → /api/upload（jpg/png/webp ≤2MB）→ 回填 hidden 并预览 */
+async function uploadPhoto(input, hidden, preview){
+  const f = input.files && input.files[0];
+  if (!f) return;
+  if (!/^image\/(jpeg|png|webp)$/.test(f.type)){ alert('仅支持 jpg / png / webp 图片'); input.value = ''; return; }
+  if (f.size > 2 * 1024 * 1024){ alert('图片不能超过 2MB'); input.value = ''; return; }
+  const reader = new FileReader();
+  reader.onload = async () => {
+    try {
+      const r = await api('/api/upload', 'POST', { data: reader.result });
+      hidden.value = r.url;
+      preview.src = r.url;
+      preview.style.display = '';
+    } catch(e){ alert(e.message); input.value = ''; }
+  };
+  reader.readAsDataURL(f);
 }
 
 function openActions(title, items){
@@ -354,7 +379,7 @@ function renderLoginHome(){
       <div class="row g-3">
         ${entry('rental', '租房', 'house-door', '租房系统：房源 · 租客 · 合同 · 账单')}
         ${entry('hotel', '酒店', 'building', '酒店系统：房态 · 订单 · 房客 · 账单')}
-        ${entry('property', '物业', 'hdd-network', '物业系统：房产 · 业主 · 水电抄表 · 网费')}
+        ${entry('property', '物业', 'hdd-network', '物业系统：房产 · 企业 · 水电抄表 · 网费')}
       </div>
     </div>
   </div>`;
@@ -450,7 +475,8 @@ const NAV = {
   property: [
     ['dashboard','speedometer2','仪表盘'],
     ['properties','houses','房产管理'],
-    ['owners','person-vcard','业主管理'],
+    ['owners','building','企业管理'],
+    ['orgemp','person-vcard','企业员工'],
     ['meters','lightning-charge','水电抄表'],
     ['network','ethernet','网络管理'],
     ['bills','cash-coin','账单收费'],
@@ -466,15 +492,15 @@ const NAV = {
 /* 当前数据系统：会话系统（管理员/员工固定为所属系统） */
 const curMode = () => (ME && ME.mode) || (DB.data.settings ? DB.data.settings.mode : 'rental');
 
-/* 计费房间：物业=已绑定业主；租房=已出租；酒店=全部（无水电网，不使用） */
+/* 计费房间：物业=已绑定企业；租房=已出租；酒店=全部（无水电网，不使用） */
 function billableRooms(rooms){
   const mode = curMode();
   if (mode === 'property') return rooms.filter(r => r.owner_id);
   if (mode === 'rental') return rooms.filter(r => r.status === 'rented');
   return rooms;
 }
-/* 计费对象称谓：物业=业主，租房=租客 */
-function personLabel(){ return curMode() === 'property' ? '业主' : '租客'; }
+/* 计费对象称谓：物业=企业，租房=租客 */
+function personLabel(){ return curMode() === 'property' ? '企业' : '租客'; }
 function roomPerson(r){ return curMode() === 'property' ? (r.owner_name || '') : (r.tenant_name || r.owner_name || ''); }
 function roomPersonPhone(r){ return r.owner_phone || ''; }
 
@@ -626,6 +652,9 @@ async function renderSettings(){
 async function go(page){
   const mode = curMode();
   const nav = curNav();
+  /* 企业员工：管理页内 Tab（物业，参与权限配置；员工无权限时会被 pageAllowed 拦在导航外） */
+  if (page === 'orgemp'){ ORG_TAB = 'orgemp'; page = 'owners'; }
+  else if (page === 'owners'){ ORG_TAB = 'owners'; }
   let item = nav.find(n => n[0] === page);
   if (!item){
     page = firstAllowedPage(mode) || DEFAULT_PAGE[mode];
@@ -766,7 +795,8 @@ async function renderDashboard(){
   else {
     cards = [
       ['总户数', s.total_rooms, 'houses', 'primary'],
-      ['业主数', s.owner_count, 'person-vcard', 'info'],
+      ['企业数', s.owner_count, 'building', 'info'],
+      ['企业员工数', s.emp_count, 'person-vcard', 'success'],
       ['本月应收物业费', money(s.property_receivable), 'wallet2', 'warning'],
       ['本月已收', money(s.property_received), 'cash-coin', 'success'],
       ['当月收缴率', s.pay_rate + '%', 'graph-up-arrow', 'success'],
@@ -816,7 +846,7 @@ async function renderDashboard(){
           <div class="table-responsive" style="max-height:220px">
             <table class="table table-hover mb-0">
               <thead class="table-light"><tr>
-                <th>房间</th><th>业主</th><th>电话</th>
+                <th>房间</th><th>企业</th><th>电话</th>
                 <th>物业欠费</th><th>网费欠费</th><th>合计</th></tr></thead>
               <tbody>
                 ${s.arrears_rooms.map(r => `<tr>
@@ -839,7 +869,7 @@ async function renderDashboard(){
       <div class="table-responsive" style="max-height:300px">
         <table class="table table-hover mb-0">
           <thead class="table-light"><tr>
-            <th>房间</th><th>业主</th><th>类型</th><th>标题</th><th>状态</th></tr></thead>
+            <th>房间</th><th>企业</th><th>类型</th><th>标题</th><th>状态</th></tr></thead>
           <tbody>
             ${s.recent_complaints.map(c => `<tr>
               <td>${esc(c.building_name || '')} ${esc(c.room_no || '-')}</td>
@@ -933,7 +963,7 @@ async function renderRooms(){
   else {
     statusOpts = [['vacant','空置'], ['rented','已入住'], ['maintenance','维修中']];
     addLabel = '新增房产';
-    head = '<th>楼栋</th><th>房号</th><th>面积</th><th>业主</th><th>电话</th><th>物业费/月</th><th>水价</th><th>电价</th><th>欠费</th><th width="170">操作</th>';
+    head = '<th>楼栋</th><th>房号</th><th>面积</th><th>企业</th><th>电话</th><th>物业费/月</th><th>水价</th><th>电价</th><th>欠费</th><th width="170">操作</th>';
     const allBills = await api('/api/bills');
     const oweMap = {};
     allBills.forEach(b => {
@@ -1038,7 +1068,7 @@ async function editRoom(id){
       { value:'booked', label:'已预订' }, { value:'cleaning', label:'待清洁' },
       { value:'maintenance', label:'维修中' }] });
   } else {
-    fields.push({ name:'owner_id', label:'绑定业主', type:'select',
+    fields.push({ name:'owner_id', label:'绑定企业', type:'select',
       options: tenants.map(t => ({ value:t.id, label:`${t.name} ${t.phone || ''}` })) });
     fields.push({ name:'property_fee', label:'物业费(元/月)', type:'number', required:true, money:true });
     fields.push({ name:'water_price', label:'水费单价(元/吨)', type:'number', step:'0.01', money:true });
@@ -1159,19 +1189,19 @@ async function roomMenu(roomId){
 }
 
 /* ==================================================================
- * 11. 租客 / 房客 / 业主
+ * 11. 租客 / 房客 / 企业（物业：企业管理 = 企业 Tab + 企业员工 Tab）
  * ================================================================== */
 let tenantKeyword = '';
+let ORG_TAB = 'owners';   /* 物业企业管理页 Tab：owners=企业列表，orgemp=企业员工 */
 
 async function renderTenants(){
   const mode = curMode();
+  if (mode === 'property') return renderPropertyCompanies();
   const qs = tenantKeyword ? '?keyword=' + encodeURIComponent(tenantKeyword) : '';
   const list = await api('/api/tenants' + qs);
 
-  const isProperty = mode === 'property';
-  const label = mode === 'hotel' ? '房客' : (isProperty ? '业主' : '租客');
-  const roomCol = isProperty ? '名下房产'
-                : (mode === 'hotel' ? '在住房间' : '在租房间');
+  const label = mode === 'hotel' ? '房客' : '租客';
+  const roomCol = mode === 'hotel' ? '在住房间' : '在租房间';
 
   $('#page').innerHTML = `
   <div class="card mb-3"><div class="card-body py-2">
@@ -1200,7 +1230,155 @@ async function renderTenants(){
     </tbody></table></div></div>`;
 }
 
+/* ---------- 物业：企业管理（企业 Tab + 企业员工 Tab，数据按主体隔离） ---------- */
+async function renderPropertyCompanies(){
+  const qs = tenantKeyword ? '?keyword=' + encodeURIComponent(tenantKeyword) : '';
+  const canEmp = pageAllowed('orgemp');   /* 主管理员恒 true；员工需被授权 */
+  const companies = await api('/api/tenants' + qs);
+  const empList = (canEmp && ORG_TAB === 'orgemp') ? await api('/api/org-employees') : [];
+  const tab = (id, name, icon) => `
+    <button class="btn btn-sm ${ORG_TAB === id ? 'btn-primary' : 'btn-outline-secondary'}"
+            onclick="ORG_TAB='${id}';renderTenants()">
+      <i class="bi bi-${icon}"></i> ${name}</button>`;
+  if (ORG_TAB === 'orgemp'){
+    /* ---------- 企业员工 Tab ---------- */
+    const roomsByOwner = {};
+    const roomOpts = companies;
+    $('#page').innerHTML = `
+    <div class="card mb-3"><div class="card-body py-2">
+      <div class="row g-2 align-items-center">
+        <div class="col-auto"><div class="btn-group">${tab('owners','企业','building')}${canEmp ? tab('orgemp','企业员工','person-vcard') : ''}</div></div>
+        <div class="col-auto"><button class="btn btn-sm btn-primary" onclick="editOrgEmp()">+ 新增企业员工</button></div>
+        <div class="col-auto text-muted small">共 ${empList.length} 名企业员工</div>
+      </div>
+    </div></div>
+    <div class="card"><div class="table-responsive"><table class="table table-hover mb-0">
+      <thead class="table-light"><tr>
+        <th>ID</th><th>照片</th><th>所属企业</th><th>姓名</th><th>身份证/护照</th><th>电话</th>
+        <th>部门</th><th>职位</th><th>门禁卡</th><th>绑定房号</th><th width="160">操作</th></tr></thead>
+      <tbody>${empList.map(e => `<tr>
+        <td>${e.id}</td>
+        <td>${e.photo_url ? `<img src="${esc(e.photo_url)}" class="rounded" style="width:36px;height:36px;object-fit:cover">`
+                           : '<span class="text-muted">-</span>'}</td>
+        <td><b>${esc(e.company)}</b></td>
+        <td>${esc(e.name)}</td>
+        <td>${esc(e.id_number || '-')}</td>
+        <td>${esc(e.phone || '-')}</td>
+        <td>${esc(e.department || '-')}</td>
+        <td>${esc(e.position || '-')}</td>
+        <td>${esc(e.card_no || '-')}</td>
+        <td>${e.room_no ? esc((e.building_name || '') + ' ' + e.room_no) : (e.owner_name ? `<span class="text-muted">（${esc(e.owner_name)}）</span>` : '-')}</td>
+        <td>
+          <button class="btn btn-sm btn-outline-primary" onclick="editOrgEmp(${e.id})">编辑</button>
+          <button class="btn btn-sm btn-outline-danger" onclick="delOrgEmp(${e.id})">删除</button>
+        </td></tr>`).join('') || '<tr><td colspan="11" class="text-center text-muted py-4">暂无企业员工</td></tr>'}
+      </tbody></table></div></div>`;
+    return;
+  }
+  /* ---------- 企业 Tab（物业业主 = 企业客户） ---------- */
+  $('#page').innerHTML = `
+  <div class="card mb-3"><div class="card-body py-2">
+    <div class="row g-2 align-items-center">
+      <div class="col-auto"><div class="btn-group">${tab('owners','企业','building')}${canEmp ? tab('orgemp','企业员工','person-vcard') : ''}</div></div>
+      <div class="col-auto">
+        <input class="form-control form-control-sm" placeholder="企业名称 / 电话，回车搜索" value="${esc(tenantKeyword)}"
+               onkeydown="if(event.key==='Enter'){tenantKeyword=this.value;renderTenants()}">
+      </div>
+      <div class="col-auto"><button class="btn btn-sm btn-primary" onclick="editTenant()">+ 新增企业</button></div>
+      <div class="col-auto text-muted small">共 ${companies.length} 家企业</div>
+    </div>
+  </div></div>
+  <div class="card"><div class="table-responsive"><table class="table table-hover mb-0">
+    <thead class="table-light"><tr>
+      <th>ID</th><th>企业名称</th><th>联系人</th><th>电话</th><th>营业执照/信用代码</th>
+      <th>名下房产</th><th>企业员工</th><th>备注</th><th width="160">操作</th></tr></thead>
+    <tbody>${companies.map(t => `<tr>
+      <td>${t.id}</td><td><b>${esc(t.name)}</b></td>
+      <td>${esc(t.contact || '-')}</td>
+      <td>${esc(t.phone || '-')}</td>
+      <td>${esc(t.license_no || '-')}</td>
+      <td>${t.rooms ? esc(t.rooms) : '<span class="text-muted">-</span>'}</td>
+      <td>${t.emp_count !== undefined ? t.emp_count : 0}</td>
+      <td>${esc(t.remark || '-')}</td>
+      <td>
+        <button class="btn btn-sm btn-outline-primary" onclick="editTenant(${t.id})">编辑</button>
+        <button class="btn btn-sm btn-outline-danger" onclick="delTenant(${t.id})">删除</button>
+      </td></tr>`).join('') || '<tr><td colspan="9" class="text-center text-muted py-4">暂无企业</td></tr>'}
+    </tbody></table></div></div>`;
+}
+
+/* ---------- 企业员工表单（照片上传 + 绑定企业房号联动） ---------- */
+async function editOrgEmp(id){
+  const [companies, allRooms] = await Promise.all([api('/api/tenants'), api('/api/rooms')]);
+  const empList = id ? await api('/api/org-employees') : [];
+  let data = { company:'', owner_id:'', room_id:'', name:'', id_number:'', phone:'',
+               department:'', position:'', card_no:'', photo_url:'', id_photo_url:'', remark:'' };
+  if (id) data = empList.find(x => x.id === id) || data;
+  /* 绑定房号：仅列所选企业名下房产（rooms.owner_id 关联企业） */
+  const byOwner = {};
+  allRooms.forEach(r => {
+    if (r.owner_id) (byOwner[r.owner_id] = byOwner[r.owner_id] || [])
+      .push({ value:String(r.id), label:(r.building_name || '') + ' ' + r.room_no });
+  });
+  const roomSelect = { name:'room_id', label:'绑定房号', type:'select',
+    options: [{ value:'', label:'-- 不绑定 --' }] };
+  const fields = [
+    { name:'company', label:'所属企业', required:true, placeholder:'企业名称，不存在将自动创建该企业',
+      hint:'企业将自动记录到「企业」列表，并在企业名下房产绑定房号' },
+    { name:'name', label:'姓名', required:true },
+    { name:'id_number', label:'身份证 / 护照' },
+    { name:'phone', label:'电话' },
+    { name:'department', label:'部门' },
+    { name:'position', label:'职位' },
+    { name:'card_no', label:'门禁卡号' },
+    { name:'photo_url', label:'本人照片', type:'file' },
+    { name:'id_photo_url', label:'身份证/护照照片', type:'file' },
+    roomSelect,
+    { name:'remark', label:'备注', type:'textarea' }
+  ];
+  openForm(id ? '编辑企业员工' : '新增企业员工', fields, data, async (d, modal) => {
+    await api(id ? '/api/org-employees/' + id : '/api/org-employees', id ? 'PUT' : 'POST', d);
+    modal.hide(); renderTenants();
+  }, (el) => {
+    /* 企业名变化 → 匹配企业 → 刷新房号下拉（仅该企业名下房产） */
+    const companyIn = el.querySelector('input[name=company]');
+    const roomSel = el.querySelector('select[name=room_id]');
+    if (!companyIn || !roomSel) return;
+    const fillRooms = (company) => {
+      const c = companies.find(x => x.name === company);
+      const opts = [{ value:'', label:'-- 不绑定 --' }];
+      if (c && byOwner[c.id]) opts.push(...byOwner[c.id]);
+      const cur = roomSel.value;
+      roomSel.innerHTML = opts.map(o => `<option value="${esc(o.value)}" ${o.value === cur ? 'selected' : ''}>${esc(o.label)}</option>`).join('');
+    };
+    companyIn.addEventListener('input', () => fillRooms(companyIn.value.trim()));
+    fillRooms(data.company);
+  });
+}
+
+async function delOrgEmp(id){
+  if (!confirm('确定删除该企业员工？')) return;
+  try { await api('/api/org-employees/' + id, 'DELETE'); renderTenants(); }
+  catch(e){ alert(e.message); }
+}
+
 async function editTenant(id){
+  const mode = curMode();
+  if (mode === 'property'){
+    let data = { name:'', contact:'', phone:'', license_no:'', remark:'' };
+    if (id){ const list = await api('/api/tenants'); data = list.find(x => x.id === id) || data; }
+    openForm(id ? '编辑企业' : '新增企业', [
+      { name:'name', label:'企业名称', required:true },
+      { name:'contact', label:'联系人' },
+      { name:'phone', label:'联系电话' },
+      { name:'license_no', label:'营业执照 / 统一信用代码' },
+      { name:'remark', label:'备注', type:'textarea' }
+    ], data, async (d, modal) => {
+      await api(id ? '/api/tenants/' + id : '/api/tenants', id ? 'PUT' : 'POST', d);
+      modal.hide(); renderTenants();
+    });
+    return;
+  }
   let data = { gender:'男' };
   if (id){ const list = await api('/api/tenants'); data = list.find(x => x.id === id) || data; }
   openForm(id ? '编辑资料' : '新增资料', [
@@ -1451,7 +1629,7 @@ async function renderBills(){
   const unpaid = list.filter(b => b.status !== 'paid')
                      .reduce((s, b) => s + (b.amount - (b.paid_amount || 0)), 0);
 
-  const personCol = mode === 'hotel' ? '房客' : (mode === 'property' ? '业主' : '租客');
+  const personCol = mode === 'hotel' ? '房客' : (mode === 'property' ? '企业' : '租客');
 
   let genBtns = '';
   if (mode === 'rental'){
@@ -1548,7 +1726,7 @@ async function generateBills(kind){
     rental:'为所有履行中的合同生成下一期租金账单？',
     utility:'为所有已出租房产生成当月水电费账单（按本月抄表读数）？',
     hotel:'补生成已退房但未结算的账单？',
-    property:'为所有已绑定业主的房产生成当月物业账单（物业费 + 水费 + 电费，不含网费）？',
+    property:'为所有已绑定企业的房产生成当月物业账单（物业费 + 水费 + 电费，不含网费）？',
     network:'为所有计费房产生成当月网费账单？\n（按兆数 × 每兆月租 × 天数分段计算）',
     all: curMode() === 'rental'
       ? '生成所有符合条件的账单？（租金 + 水电 + 网费）'
@@ -1612,7 +1790,7 @@ async function editBill(){
   /* 物业模式：让用户选择来源 */
   const rooms = await api('/api/rooms');
   const owned = rooms.filter(r => r.owner_id);
-  if (!owned.length){ alert('请先在房产管理中为房屋绑定业主'); return; }
+  if (!owned.length){ alert('请先在房产管理中为房屋绑定企业'); return; }
 
   openForm('手动添加账单', [
     { name:'source', label:'账单来源', type:'select', required:true, options:[
@@ -1769,7 +1947,7 @@ async function renderMeters(){
 async function editMeter(id){
   const rooms = await api('/api/rooms');
   const scoped = billableRooms(rooms);
-  if (!scoped.length){ alert(curMode() === 'property' ? '请先在房产管理中为房屋绑定业主' : '请先在合同管理中为房间办理出租'); return; }
+  if (!scoped.length){ alert(curMode() === 'property' ? '请先在房产管理中为房屋绑定企业' : '请先在合同管理中为房间办理出租'); return; }
 
   const t = today();
   let data = { month: t.slice(0, 7), water_prev:0, water_curr:0, elec_prev:0, elec_curr:0 };
@@ -1960,7 +2138,7 @@ async function renderNetwork(){
           ${billBtns}
         </td>
       </tr>${lineRows}`;
-    }).join('') || `<tr><td colspan="10" class="text-center text-muted py-4">暂无数据（${curMode() === 'property' ? '请先在房产管理为房屋绑定业主' : '请先在合同管理为房间办理出租'}）</td></tr>`}
+    }).join('') || `<tr><td colspan="10" class="text-center text-muted py-4">暂无数据（${curMode() === 'property' ? '请先在房产管理为房屋绑定企业' : '请先在合同管理为房间办理出租'}）</td></tr>`}
     </tbody></table></div>
   </div>
 
@@ -2003,7 +2181,7 @@ async function renderNetwork(){
   }
 }
 
-/* 手动新增一条网费账单（租房按履行中合同、物业按业主绑定） */
+/* 手动新增一条网费账单（租房按履行中合同、物业按企业绑定） */
 async function editNetBill(){
   const mode = curMode();
   const ym = netFilter.month || today().slice(0, 7);
@@ -2024,7 +2202,7 @@ async function editNetBill(){
   let options, resolveTenant, firstBw;
   if (mode === 'property'){
     const owned = roomsAll.filter(r => r.owner_id);
-    if (!owned.length){ alert('请先在房产管理为房屋绑定业主'); return; }
+    if (!owned.length){ alert('请先在房产管理为房屋绑定企业'); return; }
     options = owned.map(r => ({ value:r.id,
       label:`${r.building_name || ''} ${r.room_no}｜${r.owner_name || ''}` }));
     resolveTenant = roomId => (roomById[roomId] || {}).owner_id;
@@ -2374,7 +2552,7 @@ async function renderComplaints(){
   </div></div>
   <div class="card"><div class="table-responsive"><table class="table table-hover mb-0">
     <thead class="table-light"><tr>
-      <th>ID</th><th>楼栋/房号</th><th>业主</th><th>电话</th><th>类型</th>
+      <th>ID</th><th>楼栋/房号</th><th>企业</th><th>电话</th><th>类型</th>
       <th>标题</th><th>内容</th><th>状态</th><th>处理人</th><th>处理说明</th><th>时间</th><th width="150">操作</th>
     </tr></thead>
     <tbody>${list.map(c => `<tr>
@@ -2400,7 +2578,7 @@ async function renderComplaints(){
 async function editComplaint(){
   const rooms = await api('/api/rooms');
   const owned = rooms.filter(r => r.owner_id);
-  if (!owned.length){ alert('请先在房产管理中为房屋绑定业主'); return; }
+  if (!owned.length){ alert('请先在房产管理中为房屋绑定企业'); return; }
 
   const opts = owned.map(r => ({
     value: r.id,

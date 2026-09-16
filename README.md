@@ -174,9 +174,10 @@ node db/check_frontend.js # 前端 JS 语法校验
   （带宽/网费单价/开通日已迁至线路表）；bills.source ∈ `rental / utility / network`。
 - `house_sys_hotel`（6 表）：buildings, rooms, tenants, **orders**, bills, repairs；
   rooms 仅日价/押金，无网络/水电/合同字段；bills.source = `hotel`；设置仅币种/汇率。
-- `house_sys_property`（9 表）：buildings, rooms, tenants, meters, room_net_lines,
-  net_changes, bills, repairs, **complaints**；rooms 含业主/物业费/水电单价；
-  bills.source ∈ `property / network`。
+- `house_sys_property`（10 表）：buildings, rooms, tenants, meters, room_net_lines,
+  net_changes, bills, repairs, complaints, **org_employees**；rooms 含企业/物业费/水电单价；
+  **tenants = 企业客户（企业化模式，无个人业主）**，`org_employees` 为企业名下员工档案
+  （本人照片/证件照可上传至 `uploads/org-<主体ID>/`）；bills.source ∈ `property / network`。
 
 ## 多租户隔离机制
 
@@ -206,7 +207,9 @@ node db/check_frontend.js # 前端 JS 语法校验
 | GET | /stats | 本主体仪表盘统计（按系统能力分支） |
 | GET/POST · PUT/DELETE | /buildings · /buildings/:id | 楼栋 |
 | GET/POST · PUT/DELETE | /rooms · /rooms/:id | 房间/房产 |
-| GET/POST · PUT/DELETE | /tenants · /tenants/:id | 租客/房客/业主 |
+| GET/POST · PUT/DELETE | /tenants · /tenants/:id | 租客/房客/**企业**（物业=企业客户，删除前校验名下房产/企业员工） |
+| GET/POST · PUT/DELETE | /org-employees · /org-employees/:id | **仅物业**：企业员工档案（读需 orgemp 权限或主管理员，写仅主管理员；company 自动匹配/创建企业） |
+| POST | /upload | **仅物业主管理员**：base64 图片上传（jpeg/png/webp ≤2MB），返回 `/uploads/...` URL |
 | GET/POST · PUT · /terminate | /contracts | 租房合同（仅 rental） |
 | GET/POST · PUT/DELETE · /checkin · /checkout · /cancel | /orders | 酒店订单（仅 hotel） |
 | GET/POST · /generate · /:id/pay · DELETE | /bills | 账单；generate 的 kind=all/rental/hotel/property/utility/network |
