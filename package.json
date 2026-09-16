@@ -1,0 +1,15 @@
+{
+  "name": "house-sys",
+  "version": "1.0.0",
+  "private": true,
+  "description": "房屋管理系统（租房/酒店/物业模式），Node.js + Express + MariaDB",
+  "main": "server/app.js",
+  "scripts": {
+    "start": "node server/app.js",
+    "seed": "node server/seed.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "mysql2": "^3.11.0"
+  }
+}
