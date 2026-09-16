@@ -208,6 +208,7 @@ const ROUTE_PAGES = [
   [/^\/meters/, ['meters']],
   [/^\/netChanges/, ['network']],
   [/^\/netfee/, ['network']],
+  [/^\/netRequests/, ['network']],
   [/^\/repairs/, ['repairs']],
   [/^\/complaints/, ['complaints']]
 ];
@@ -218,6 +219,7 @@ const ROUTE_FEATURE = [
   [/^\/meters/, 'meter'],
   [/^\/netChanges/, 'network'],
   [/^\/netfee/, 'network'],
+  [/^\/netRequests/, 'network'],
   [/^\/complaints/, 'complaint']
 ];
 function checkPagePerm(req) {
@@ -237,9 +239,10 @@ function checkFeature(req) {
 const authPerm = (req, res, next) => authMode(req, res, () => {
   /* 超级管理员只负责开通主体与系统监控，不参与任何业务数据读写 */
   if (req.level === 'super') return res.status(403).json({ error: '超级管理员不参与业务操作' });
-  /* 企业管理员：物业系统内只读本企业数据，一切写操作拒绝 */
+  /* 企业管理员：本企业数据只读；仅放行「宽带报装/加兆/减兆上报」业务写操作 */
   if (req.level === 'company_admin' && req.method !== 'GET') {
-    return res.status(403).json({ error: '企业管理员为只读权限' });
+    const allowedWrite = (req.method === 'POST' && req.path === '/netRequests');
+    if (!allowedWrite) return res.status(403).json({ error: '企业管理员无此操作权限' });
   }
   if (!checkFeature(req)) return res.status(404).json({ error: '当前系统不提供该功能' });
   if (!checkPagePerm(req)) return res.status(403).json({ error: '无权访问该功能' });
@@ -1700,6 +1703,118 @@ router.delete('/netChanges/:id', auth, h(async (req, res) => {
   await pool.query('DELETE FROM net_changes WHERE id = ? AND org_id = ?', [req.params.id, req.orgId]);
   res.json({ ok: true,
     warn: '已删除变更记录。如该记录为最后一条，线路当前带宽未自动回滚，请到网络管理手动调整。' });
+}));
+
+/* ==================================================================
+ * 宽带报装 / 加兆 / 减兆 上报申请（企业管理员提交；主管理员审批并执行）
+ * ================================================================== */
+router.get('/netRequests', auth, h(async (req, res) => {
+  let sql = `SELECT q.*, r.room_no, b.name AS building_name, t.name AS company_name, l.line_name
+               FROM net_requests q
+               JOIN rooms r ON r.id = q.room_id
+               JOIN buildings b ON b.id = r.building_id
+               LEFT JOIN tenants t ON t.id = q.company_id
+               LEFT JOIN room_net_lines l ON l.id = q.line_id
+              WHERE q.org_id = ?`;
+  const params = [req.orgId];
+  if (req.level === 'company_admin') { sql += ' AND q.company_id = ?'; params.push(req.companyId); }
+  sql += ' ORDER BY q.id DESC';
+  const [rows] = await pool.query(sql, params);
+  res.json(rows);
+}));
+router.post('/netRequests', auth, h(async (req, res) => {
+  if (req.level !== 'admin' && req.level !== 'company_admin') {
+    return res.status(403).json({ error: '仅主管理员或企业管理员可提交申请' });
+  }
+  const B = req.body || {};
+  const type = ['install', 'add', 'reduce'].includes(B.type) ? B.type : null;
+  if (!type) return res.status(400).json({ error: '申请类型不正确' });
+  const roomId = Number(B.room_id);
+  if (!Number.isFinite(roomId)) return res.status(400).json({ error: '请选择房间' });
+  /* 企业管理员只能为本企业房产提交申请 */
+  const roomSql = req.level === 'company_admin'
+    ? 'SELECT id FROM rooms WHERE id = ? AND org_id = ? AND owner_id = ?'
+    : 'SELECT id FROM rooms WHERE id = ? AND org_id = ?';
+  const roomParams = req.level === 'company_admin' ? [roomId, req.orgId, req.companyId] : [roomId, req.orgId];
+  const [[room]] = await pool.query(roomSql, roomParams);
+  if (!room) return res.status(403).json({ error: '只能为本企业房产提交宽带申请' });
+  let bandwidth = null, delta = null, lineId = null;
+  if (type === 'install') {
+    bandwidth = Number(B.bandwidth);
+    if (!Number.isFinite(bandwidth) || bandwidth <= 0) return res.status(400).json({ error: '请填写有效的报装带宽（兆）' });
+  } else {
+    lineId = Number(B.line_id);
+    if (!Number.isFinite(lineId)) return res.status(400).json({ error: '请选择宽带线路' });
+    const [lines] = await pool.query(
+      'SELECT * FROM room_net_lines WHERE id = ? AND org_id = ? AND room_id = ?', [lineId, req.orgId, roomId]);
+    const line = lines[0];
+    if (!line) return res.status(400).json({ error: '宽带线路不存在' });
+    if (line.status !== 'active') return res.status(400).json({ error: '该线路已停用，不能申请变更' });
+    delta = Number(B.delta);
+    if (!Number.isFinite(delta) || delta <= 0) return res.status(400).json({ error: '请填写有效的增减兆数' });
+    if (type === 'reduce' && (Number(line.bandwidth) || 0) - delta < 0) {
+      return res.status(400).json({ error: '减兆后带宽不能为负' });
+    }
+  }
+  const [r] = await pool.query(
+    `INSERT INTO net_requests (org_id, company_id, room_id, type, bandwidth, delta, line_id, reason, status, created_by, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+    [req.orgId, req.level === 'company_admin' ? req.companyId : null, roomId, type,
+     bandwidth, delta, lineId, B.reason || '', req.user.real_name || req.user.username, nowStr()]);
+  const [rows] = await pool.query('SELECT * FROM net_requests WHERE id = ? AND org_id = ?', [r.insertId, req.orgId]);
+  res.json(rows[0]);
+}));
+/* 审批：通过并执行（报装=建线路；加/减兆=写带宽变更）或驳回；仅主管理员 */
+router.put('/netRequests/:id', auth, h(async (req, res) => {
+  if (req.level !== 'admin') return res.status(403).json({ error: '仅主管理员可审批申请' });
+  const B = req.body || {};
+  const [qs] = await pool.query('SELECT * FROM net_requests WHERE id = ? AND org_id = ?', [req.params.id, req.orgId]);
+  const q = qs[0];
+  if (!q) return res.status(400).json({ error: '申请单不存在' });
+  if (q.status !== 'pending') return res.status(400).json({ error: '该申请已处理' });
+  const action = B.action;
+  if (action === 'reject') {
+    await pool.query(
+      `UPDATE net_requests SET status = 'rejected', handled_by = ?, handle_note = ?, handled_at = ? WHERE id = ?`,
+      [req.user.real_name || req.user.username, B.handle_note || '', nowStr(), req.params.id]);
+    return res.json({ ok: true, status: 'rejected' });
+  }
+  if (action !== 'approve') return res.status(400).json({ error: '审批动作不正确' });
+  const [[room]] = await pool.query('SELECT * FROM rooms WHERE id = ? AND org_id = ?', [q.room_id, req.orgId]);
+  if (!room) return res.status(400).json({ error: '房间不存在' });
+  const note = B.handle_note || '';
+  if (q.type === 'install') {
+    /* 报装：创建启用线路 */
+    const [r] = await pool.query(
+      `INSERT INTO room_net_lines (org_id, room_id, line_name, bandwidth, start_date, status, stop_date, remark, created_at)
+       VALUES (?, ?, '默认线路', ?, ?, 'active', NULL, ?, ?)`,
+      [req.orgId, q.room_id, q.bandwidth, today(), '报装审批通过：' + note, nowStr()]);
+    await pool.query(
+      `UPDATE net_requests SET status = 'done', handled_by = ?, handle_note = ?, handled_at = ? WHERE id = ?`,
+      [req.user.real_name || req.user.username, note, nowStr(), req.params.id]);
+    return res.json({ ok: true, status: 'done', line_id: r.insertId });
+  }
+  /* 加兆 / 减兆：写带宽变更并更新线路带宽 */
+  const [lines] = await pool.query(
+    'SELECT * FROM room_net_lines WHERE id = ? AND org_id = ? AND room_id = ?', [q.line_id, q.org_id, q.room_id]);
+  const line = lines[0];
+  if (!line) return res.status(400).json({ error: '宽带线路不存在' });
+  if (line.status !== 'active') return res.status(400).json({ error: '该线路已停用，不能变更带宽' });
+  const oldBw = Number(line.bandwidth) || 0;
+  const newBw = q.type === 'add' ? oldBw + Number(q.delta) : oldBw - Number(q.delta);
+  if (newBw < 0) return res.status(400).json({ error: '减兆后带宽不能为负' });
+  if (newBw === oldBw) return res.status(400).json({ error: '带宽未变化' });
+  const change_type = q.type === 'add' ? 'add' : 'reduce';
+  await pool.query(
+    `INSERT INTO net_changes (org_id, room_id, line_id, change_date, change_type, old_bandwidth, new_bandwidth, remark, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [req.orgId, q.room_id, line.id, today(), change_type, oldBw, newBw, '审批通过：' + note, nowStr()]);
+  await pool.query('UPDATE room_net_lines SET bandwidth = ? WHERE id = ? AND org_id = ?',
+    [newBw, line.id, req.orgId]);
+  await pool.query(
+    `UPDATE net_requests SET status = 'done', handled_by = ?, handle_note = ?, handled_at = ? WHERE id = ?`,
+    [req.user.real_name || req.user.username, note, nowStr(), req.params.id]);
+  res.json({ ok: true, status: 'done', new_bandwidth: newBw });
 }));
 
 /* 网费预估（租房/物业）：房间月费 = 各启用线路费用之和，单价取主体设置 */

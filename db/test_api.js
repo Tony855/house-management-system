@@ -382,6 +382,77 @@ const addDays = (n) => { const d = new Date(); d.setDate(d.getDate() + n); retur
     r = await call(PROP, 'DELETE', '/buildings/' + bld);
     check('清理企业B及楼栋', r.status === 200 && r.body.ok, '');
 
+    console.log('== 6f. 宽带报装 / 加兆 / 减兆 上报（企业管理员提交，主管理员审批执行）==');
+    r = await call(PROP, 'POST', '/tenants', { name: '测试' + '三公司' + ts });
+    check('建企业C', r.status === 200 && r.body.id, JSON.stringify(r.body));
+    const compC = r.body.id;
+    r = await call(PROP, 'POST', '/tenants', { name: '测试' + '四公司' + ts });
+    check('建企业D', r.status === 200 && r.body.id, JSON.stringify(r.body));
+    const compD = r.body.id;
+    r = await call(PROP, 'POST', '/buildings', { name: '上报楼', address: '路3' });
+    const bld2 = r.body.id;
+    r = await call(PROP, 'POST', '/rooms', { building_id: bld2, room_no: 'C01', floor: 1, area: 30, room_type: '办公室', status: 'vacant', owner_id: compC, property_fee: 2 });
+    check('企业C名下房产', r.status === 200 && r.body.id, JSON.stringify(r.body));
+    const roomC = r.body.id;
+    r = await call(PROP, 'POST', '/rooms', { building_id: bld2, room_no: 'D01', floor: 1, area: 30, room_type: '办公室', status: 'vacant', owner_id: compD, property_fee: 2 });
+    check('企业D名下房产', r.status === 200 && r.body.id, JSON.stringify(r.body));
+    const roomD = r.body.id;
+    const caUser2 = 'ca2' + String(ts).slice(-6);
+    r = await call(PROP, 'POST', '/tenants/' + compC + '/company-admin',
+      { username: caUser2, real_name: '三号管理员', password: 'ca654321' });
+    check('为企业C设置管理员账号', r.status === 200 && r.body.username === caUser2, JSON.stringify(r.body));
+    r = await login(caUser2, 'ca654321', 'property');
+    check('企业C管理员登录', r.status === 200 && r.body.level === 'company_admin' && r.body.company_id === compC, JSON.stringify(r.body).slice(0, 120));
+    const CA2 = r.body.token;
+    /* 提交申请：本企业 → 200；他企业 → 403 */
+    r = await call(CA2, 'POST', '/netRequests', { type: 'install', room_id: roomC, bandwidth: 10, reason: '办公报装' });
+    check('企业管理员提交报装申请', r.status === 200 && r.body.status === 'pending' && r.body.type === 'install', JSON.stringify(r.body));
+    const reqInstall = r.body.id;
+    r = await call(CA2, 'POST', '/netRequests', { type: 'install', room_id: roomD, bandwidth: 5 });
+    check('他企业房产提交申请被拒', r.status === 403, JSON.stringify(r.body));
+    r = await call(CA2, 'GET', '/netRequests');
+    check('企业管理员仅见本企业申请', r.status === 200 && r.body.length === 1 && r.body[0].id === reqInstall, JSON.stringify(r.body.map(x => x.id)));
+    r = await call(CA2, 'PUT', '/netRequests/' + reqInstall, { action: 'approve' });
+    check('企业管理员不能审批', r.status === 403, JSON.stringify(r.body));
+    r = await call(WY, 'POST', '/netRequests', { type: 'install', room_id: roomC, bandwidth: 5 });
+    check('物业员工不能提交申请', r.status === 403, JSON.stringify(r.body));
+    /* 主管理员审批：报装 → 建线路 */
+    r = await call(PROP, 'GET', '/netRequests');
+    check('主管理员可见全部申请', r.status === 200 && r.body.some(x => x.id === reqInstall), '');
+    r = await call(PROP, 'PUT', '/netRequests/' + reqInstall, { action: 'approve', handle_note: '审批通过' });
+    check('审批报装并执行', r.status === 200 && r.body.status === 'done' && r.body.line_id, JSON.stringify(r.body));
+    const lineC = r.body.line_id;
+    r = await call(PROP, 'GET', '/netLines?room_id=' + roomC);
+    check('报装后线路已创建', r.status === 200 && r.body.length === 1 && Number(r.body[0].bandwidth) === 10, JSON.stringify(r.body));
+    r = await call(PROP, 'PUT', '/netRequests/' + reqInstall, { action: 'approve' });
+    check('重复审批被拒', r.status === 400, JSON.stringify(r.body));
+    /* 加兆申请 → 审批 → 带宽增加 */
+    r = await call(CA2, 'POST', '/netRequests', { type: 'add', room_id: roomC, line_id: lineC, delta: 5, reason: '加兆' });
+    check('企业管理员提交加兆申请', r.status === 200 && r.body.type === 'add', JSON.stringify(r.body));
+    const reqAdd = r.body.id;
+    r = await call(PROP, 'PUT', '/netRequests/' + reqAdd, { action: 'approve' });
+    check('审批加兆并执行', r.status === 200 && r.body.status === 'done' && Number(r.body.new_bandwidth) === 15, JSON.stringify(r.body));
+    r = await call(PROP, 'GET', '/netLines?room_id=' + roomC);
+    check('加兆后带宽=15', r.status === 200 && Number(r.body[0].bandwidth) === 15, JSON.stringify(r.body));
+    /* 减兆：减到负 → 400；正常 → 驳回 */
+    r = await call(CA2, 'POST', '/netRequests', { type: 'reduce', room_id: roomC, line_id: lineC, delta: 20 });
+    check('减兆超过当前带宽被拒', r.status === 400, JSON.stringify(r.body));
+    r = await call(CA2, 'POST', '/netRequests', { type: 'reduce', room_id: roomC, line_id: lineC, delta: 3 });
+    check('企业管理员提交减兆申请', r.status === 200 && r.body.type === 'reduce', JSON.stringify(r.body));
+    const reqReduce = r.body.id;
+    r = await call(PROP, 'PUT', '/netRequests/' + reqReduce, { action: 'reject', handle_note: '暂不调整' });
+    check('审批驳回', r.status === 200 && r.body.status === 'rejected', JSON.stringify(r.body));
+    r = await call(PROP, 'GET', '/netLines?room_id=' + roomC);
+    check('驳回后带宽不变=15', r.status === 200 && Number(r.body[0].bandwidth) === 15, JSON.stringify(r.body));
+    /* 清理 */
+    r = await call(PROP, 'DELETE', '/rooms/' + roomC);
+    check('清理企业C房产', r.status === 200 && r.body.ok, '');
+    r = await call(PROP, 'DELETE', '/rooms/' + roomD);
+    r = await call(PROP, 'DELETE', '/tenants/' + compC);
+    r = await call(PROP, 'DELETE', '/tenants/' + compD);
+    r = await call(PROP, 'DELETE', '/buildings/' + bld2);
+    check('清理上报测试数据', r.status === 200 && r.body.ok, '');
+
     console.log('== 7. 员工页面权限 ==');
     r = await call(STAFF, 'GET', '/rooms');
     check('员工可访问授权页面(房源)', r.status === 200, r.status + '');

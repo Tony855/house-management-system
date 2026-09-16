@@ -205,6 +205,26 @@ CREATE TABLE net_changes (
   INDEX idx_org (org_id), INDEX idx_net_changes_room (room_id)
 ) ENGINE=InnoDB;
 
+/* 宽带报装 / 加兆 / 减兆 上报申请（企业管理员提交，主管理员审批并执行） */
+CREATE TABLE net_requests (
+  id            INT AUTO_INCREMENT PRIMARY KEY,
+  org_id        INT NOT NULL,
+  company_id    INT NULL,                      -- 提交企业（企业管理员）
+  room_id       INT NOT NULL,                  -- 申请房间
+  type          ENUM('install','add','reduce') NOT NULL DEFAULT 'install',  -- 报装/加兆/减兆
+  bandwidth     INT NULL,                      -- 报装：目标带宽（兆）
+  delta         INT NULL,                      -- 加/减兆：增减数值（兆）
+  line_id       INT NULL,                      -- 加/减兆：目标线路（报装为空）
+  reason        VARCHAR(500) NOT NULL DEFAULT '',
+  status        ENUM('pending','done','rejected') NOT NULL DEFAULT 'pending',
+  created_by    VARCHAR(64) NOT NULL DEFAULT '',
+  created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  handled_by    VARCHAR(64) NOT NULL DEFAULT '',
+  handle_note   VARCHAR(500) NOT NULL DEFAULT '',
+  handled_at    DATETIME NULL,
+  INDEX idx_org (org_id), INDEX idx_net_req_company (company_id), INDEX idx_net_req_room (room_id)
+) ENGINE=InnoDB;
+
 CREATE TABLE bills (
   id           INT AUTO_INCREMENT PRIMARY KEY,
   org_id       INT NOT NULL,

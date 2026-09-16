@@ -2101,6 +2101,16 @@ async function renderNetwork(){
     </div>
   </div>
 
+  <div class="card mb-3">
+    <div class="card-header bg-white fw-bold d-flex align-items-center">
+      <i class="bi bi-wifi text-primary me-1"></i> 宽带申请（上报）
+      <span class="small text-muted ms-2">企业管理员提交报装 / 加兆 / 减兆申请，主管理员审批后自动执行</span>
+      ${ME.level === 'company_admin'
+        ? '<button class="btn btn-sm btn-primary ms-auto" onclick="addNetRequest()">+ 上报申请</button>' : ''}
+    </div>
+    <div class="card-body py-2" id="netReqBox"><div class="text-muted">加载中…</div></div>
+  </div>
+
   <div class="card mb-3"><div class="card-header bg-white fw-bold">
     <i class="bi bi-ethernet text-primary"></i> 各房间网费明细（${esc(data.month)}）</div>
     <div class="table-responsive" style="max-height:520px"><table class="table table-hover mb-0">
@@ -2209,6 +2219,120 @@ async function renderNetwork(){
       }).join('') || '<tr><td colspan="7" class="text-center text-muted py-4">暂无变更记录</td></tr>'}
       </tbody></table>`;
   }
+
+  /* 宽带申请（上报）列表 */
+  renderNetRequests();
+}
+
+const NET_REQ_TYPE = {
+  install: '<span class="badge bg-primary">报装</span>',
+  add:     '<span class="badge bg-success">加兆</span>',
+  reduce:  '<span class="badge bg-danger">减兆</span>'
+};
+const NET_REQ_STATUS = {
+  pending:  '<span class="badge bg-warning text-dark">待处理</span>',
+  done:     '<span class="badge bg-success">已执行</span>',
+  rejected: '<span class="badge bg-secondary">已驳回</span>'
+};
+async function renderNetRequests(){
+  const box = document.getElementById('netReqBox');
+  if (!box) return;
+  let list = [];
+  try { list = await api('/api/netRequests'); } catch(e){ box.innerHTML = '<div class="text-muted">' + esc(e.message) + '</div>'; return; }
+  const canAudit = ME.level === 'admin';
+  box.innerHTML = `<div class="table-responsive" style="max-height:260px"><table class="table table-sm table-hover mb-0">
+    <thead class="table-light"><tr>
+      <th>ID</th><th>提交时间</th><th>类型</th><th>楼栋/房号</th><th>企业</th>
+      <th>申请内容</th><th>说明</th><th>状态</th>${canAudit ? '<th width="180">处理</th>' : ''}
+    </tr></thead>
+    <tbody>${list.map(q => {
+      const content = q.type === 'install'
+        ? `<span class="bw-tag">报装 ${q.bandwidth} 兆</span>`
+        : `<span class="bw-tag">${esc(q.line_name || '线路')} ${q.type === 'add' ? '+' : '-'}${q.delta} 兆</span>`;
+      const audit = canAudit && q.status === 'pending'
+        ? `<button class="btn btn-sm btn-outline-success me-1" onclick="handleNetRequest(${q.id}, 'approve')">通过并执行</button>
+           <button class="btn btn-sm btn-outline-secondary" onclick="handleNetRequest(${q.id}, 'reject')">驳回</button>`
+        : (canAudit && q.handled_by ? `<small class="text-muted">${esc(q.handled_by)}<br>${esc(q.handle_note || '')}</small>` : '');
+      return `<tr>
+        <td>${q.id}</td>
+        <td><small>${esc((q.created_at || '').slice(0, 16))}</small></td>
+        <td>${NET_REQ_TYPE[q.type] || q.type}</td>
+        <td>${esc(q.building_name || '')} ${esc(q.room_no || '')}</td>
+        <td>${esc(q.company_name || '-')}</td>
+        <td>${content}</td>
+        <td><small>${esc(q.reason || '-')}</small></td>
+        <td>${NET_REQ_STATUS[q.status] || q.status}</td>
+        ${canAudit ? `<td>${audit}</td>` : ''}
+      </tr>`;
+    }).join('') || '<tr><td colspan="' + (canAudit ? 9 : 8) + '" class="text-center text-muted py-3">暂无申请</td></tr>'}
+    </tbody></table></div>`;
+}
+
+/* 企业管理员：提交宽带申请（上报） */
+async function addNetRequest(){
+  const rooms = await api('/api/rooms');
+  if (!rooms.length){ alert('暂无本企业房产，请先由物业主管理员绑定'); return; }
+  const netLines = await api('/api/netLines');
+  const roomOpts = rooms.map(r => ({ value: r.id,
+    label: `${r.building_name || ''} ${r.room_no}｜${r.owner_name || ''}` }));
+  openForm('上报宽带申请', [
+    { name:'type', label:'申请类型', type:'select', required:true,
+      options: [
+        { value:'install', label:'宽带报装（新开线路）' },
+        { value:'add',     label:'加兆（带宽增加）' },
+        { value:'reduce',  label:'减兆（带宽减少）' }
+      ] },
+    { name:'room_id', label:'房间', type:'select', required:true, options: roomOpts },
+    { name:'line_id', label:'宽带线路', type:'select', options: [] },
+    { name:'bandwidth', label:'报装带宽（兆）', type:'number', step:'1',
+      hint:'报装时填写目标带宽' },
+    { name:'delta', label:'增减兆数', type:'number', step:'1', hint:'加兆/减兆时填写增减数值' },
+    { name:'reason', label:'申请说明', type:'textarea', placeholder:'如：办公扩编需要提速' }
+  ], {}, async (d, modal) => {
+    await api('/api/netRequests', 'POST', {
+      type: d.type, room_id: Number(d.room_id),
+      line_id: d.line_id ? Number(d.line_id) : null,
+      bandwidth: d.bandwidth !== null && d.bandwidth !== undefined ? Number(d.bandwidth) : null,
+      delta: d.delta !== null && d.delta !== undefined ? Number(d.delta) : null,
+      reason: d.reason || ''
+    });
+    modal.hide(); renderNetwork();
+  }, (el) => {
+    const $ = n => el.querySelector(`[name="${n}"]`);
+    const typeSel = $('type'), roomSel = $('room_id'), lineSel = $('line_id'),
+          bwRow = $('bandwidth').closest('.mb-3'), deltaRow = $('delta').closest('.mb-3'),
+          lineRow = lineSel.closest('.mb-3');
+    const lineOpts = roomId => {
+      const ls = netLines.filter(l => l.room_id === Number(roomId) && l.status === 'active');
+      lineSel.innerHTML = '<option value="">-- 请选择线路 --</option>'
+        + ls.map(l => `<option value="${l.id}">${esc(l.line_name)}（${l.bandwidth} 兆）</option>`).join('');
+      lineSel.disabled = !ls.length;
+    };
+    const sync = () => {
+      const t = typeSel.value;
+      bwRow.style.display = t === 'install' ? '' : 'none';
+      deltaRow.style.display = (t === 'add' || t === 'reduce') ? '' : 'none';
+      lineRow.style.display = (t === 'add' || t === 'reduce') ? '' : 'none';
+      if (t !== 'install') lineOpts(roomSel.value);
+    };
+    typeSel.addEventListener('change', sync);
+    roomSel.addEventListener('change', () => { if (typeSel.value !== 'install') lineOpts(roomSel.value); });
+    sync();
+  });
+}
+
+/* 主管理员：审批申请（通过并执行 / 驳回） */
+async function handleNetRequest(id, action){
+  const note = action === 'approve'
+    ? (prompt('处理说明（可选）：') || '')
+    : (prompt('驳回原因（必填）：') || '');
+  if (action === 'reject' && !note){ alert('请填写驳回原因'); return; }
+  if (action === 'approve' && !confirm('确认通过该申请并立即执行线路变更？')) return;
+  try {
+    const r = await api('/api/netRequests/' + id, 'PUT', { action, handle_note: note });
+    alert(action === 'approve' ? '已通过并执行' : '已驳回');
+    renderNetwork();
+  } catch(e){ alert(e.message); }
 }
 
 /* 手动新增一条网费账单（租房按履行中合同、物业按企业绑定） */
