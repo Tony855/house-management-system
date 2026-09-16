@@ -141,7 +141,7 @@ const CONTRACT_STATUS = {
   active:['履行中','success'], expired:['已到期','secondary'], terminated:['已终止','dark']
 };
 const REPAIR_STATUS = {
-  pending:['待处理','danger'], processing:['处理中','warning'], done:['已完成','success']
+  pending:['已受理','danger'], processing:['处理中','warning'], done:['已完成','success']
 };
 const COMPLAINT_STATUS = {
   pending:['待处理','danger'], processing:['处理中','warning'], done:['已办结','success']
@@ -2659,7 +2659,7 @@ async function renderRepairs(){
       <div class="col-auto">
         <select class="form-select form-select-sm" onchange="repairFilter=this.value;renderRepairs()">
           <option value="">全部报修</option>
-          <option value="pending"    ${repairFilter === 'pending' ? 'selected' : ''}>待处理</option>
+          <option value="pending"    ${repairFilter === 'pending' ? 'selected' : ''}>已受理</option>
           <option value="processing" ${repairFilter === 'processing' ? 'selected' : ''}>处理中</option>
           <option value="done"       ${repairFilter === 'done' ? 'selected' : ''}>已完成</option>
         </select>
