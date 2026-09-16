@@ -1631,7 +1631,7 @@ router.post('/bills/generate', auth, h(async (req, res) => {
         const [st0] = await shared.query('SELECT currency, rate FROM settings WHERE org_id = ?', [oid]);
         const isUsd = st0[0] && st0[0].currency === 'USD';
         const rate0 = st0[0] && Number(st0[0].rate) > 0 ? Number(st0[0].rate) : 7.2;
-        const unit = calc.lines[0] ? calc.lines[0].price : 0;
+        const unit = calc.lines[0] ? Number(calc.lines[0].price) || 0 : 0;
         const unitTxt = (isUsd ? '$' : '¥') + (isUsd ? (unit / rate0).toFixed(2) : unit.toFixed(2));
         await conn.query(
           `INSERT INTO bills (org_id, source, room_id, tenant_id, period_start, period_end, due_date,
