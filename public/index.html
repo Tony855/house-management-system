@@ -476,7 +476,6 @@ const NAV = {
     ['dashboard','speedometer2','仪表盘'],
     ['properties','houses','房产管理'],
     ['owners','building','企业管理'],
-    ['orgemp','person-vcard','企业员工'],
     ['meters','lightning-charge','水电抄表'],
     ['network','ethernet','网络管理'],
     ['bills','cash-coin','账单收费'],
@@ -2703,9 +2702,17 @@ async function renderUsers(){
 }
 
 function pageName(p){
+  if (p === 'orgemp') return '企业员工';
   const all = [].concat(NAV.rental, NAV.hotel, NAV.property);
   const hit = all.find(n => n[0] === p);
   return hit ? hit[2] : p;
+}
+
+/* 页面权限清单：系统导航 + 物业「企业员工」（管理页内 Tab，不占独立导航项） */
+function pageOpts(mode){
+  const list = (NAV[mode] || []).filter(n => !n[3]).map(n => ({ value:n[0], label:n[2] }));
+  if (mode === 'property') list.push({ value:'orgemp', label:'企业员工' });
+  return list;
 }
 
 async function editUser(id){
@@ -2723,9 +2730,9 @@ async function editUser(id){
     { name:'role', label:'角色', type:'select', required:true,
       options: roleOpts.map(r => ({ value:r.code, label:r.name })) }
   ];
-  const modePages = (NAV[curMode()] || []).filter(n => !n[3]).map(n => ({ value:n[0], label:n[2] }));
-  if (modePages.length){
-    fields.push({ name:'pages', label:'员工个人追加权限', type:'checklist', options: modePages,
+  const pageOptsNow = pageOpts(curMode());
+  if (pageOptsNow.length){
+    fields.push({ name:'pages', label:'员工个人追加权限', type:'checklist', options: pageOptsNow,
       hint:'员工实际权限 = 所选角色已配置的权限 + 下方个人追加（勾选）' });
   }
   openForm(id ? '编辑员工' : '新增员工', fields, data, async (d, modal) => {
@@ -2813,9 +2820,9 @@ async function editRole(id){
   ];
   fields.push({ name:'description', label:'说明', type:'textarea', placeholder:'该角色的职责说明（可选）' });
   if (!isSys){
-    const modePages = (NAV[curMode()] || []).filter(n => !n[3]).map(n => ({ value:n[0], label:n[2] }));
-    if (modePages.length){
-      fields.push({ name:'pages', label:'角色页面权限', type:'checklist', options: modePages,
+    const rolePageOpts = pageOpts(curMode());
+    if (rolePageOpts.length){
+      fields.push({ name:'pages', label:'角色页面权限', type:'checklist', options: rolePageOpts,
         hint:'分配该角色的员工自动获得这些页面的访问权限（可在员工管理中按个人追加）' });
     }
   }
