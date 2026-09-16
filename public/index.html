@@ -3039,7 +3039,10 @@ async function renderRoles(){
 }
 
 async function editRole(id){
-  let data = { code:'', name:'', description:'', level:'staff', pages: [], ops: [] };
+  /* 新建角色默认页面参数：房产管理 / 账单收费 / 报修管理 / 网络管理 / 投诉建议（按当前系统可用项） */
+  const DEF_ROLE_PAGES = ['properties', 'bills', 'repairs', 'network', 'complaints'];
+  let data = { code:'', name:'', description:'', level:'staff',
+    pages: DEF_ROLE_PAGES.filter(p => pageOpts(curMode()).some(o => o.value === p)), ops: [] };
   if (id){
     const roles = await api('/api/roles');
     data = roles.find(x => x.id === id) || data;
