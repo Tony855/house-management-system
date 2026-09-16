@@ -2867,7 +2867,7 @@ async function renderUsers(){
   const permCell = u => {
     const rp = u.role_pages || [], ro = u.role_ops || [];
     const pages = rp.length ? rp.map(p => pageName(p)).join('、') : '无';
-    const ops = ro.length ? ro.map(opLabel).join('；') : '无';
+    const ops = ro.length ? ro.map(op => `${op} ${opLabel(op)}`).join('；') : '无';
     return `<small><span class="badge bg-info text-dark">页面</span> ${esc(pages)}<br>
       <span class="badge bg-primary">操作</span> ${esc(ops)}</small>`;
   };
@@ -2964,7 +2964,7 @@ async function renderRoles(){
     ? `<small>${r.pages.map(p => pageName(p)).join('、')}</small>`
     : (r.is_system ? '<span class="text-muted small">—</span>' : '<span class="text-muted small">未配置</span>');
   const opsTxt = r => (r.ops && r.ops.length)
-    ? `<small class="text-primary">${r.ops.map(opLabel).join('；')}</small>`
+    ? `<small class="text-primary">${r.ops.map(op => `${op} ${opLabel(op)}`).join('；')}</small>`
     : '<span class="text-muted small">—</span>';
   $('#page').innerHTML = `
   <div class="mb-3 d-flex gap-2">
@@ -3019,10 +3019,10 @@ async function editRole(id){
       fields.push({ name:'pages', label:'角色权限', type:'checklist', options: rolePageOpts,
         hint:'勾选后可访问对应页面；分配该角色的员工自动获得' });
     }
-    const roleOpOpts = (OP_DEFS[curMode()] || []).map(([value, label]) => ({ value, label }));
+    const roleOpOpts = (OP_DEFS[curMode()] || []).map(([value, label]) => ({ value, label: value + '　' + label }));
     if (roleOpOpts.length){
       fields.push({ name:'ops', label:'操作权限', type:'checklist', options: roleOpOpts,
-        hint:'勾选后拥有对应页面的操作按钮（如新增、编辑、删除、收款）' });
+        hint:'勾选后拥有对应页面的操作按钮（如新增、编辑、删除、收款）。选项前的编码即该权限的数据标识' });
     }
   }
   openForm(id ? '编辑角色' : '新增角色', fields, data, async (d, modal) => {
