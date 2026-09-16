@@ -228,7 +228,7 @@ CREATE TABLE net_requests (
 CREATE TABLE bills (
   id           INT AUTO_INCREMENT PRIMARY KEY,
   org_id       INT NOT NULL,
-  source       ENUM('rental','utility','network') NOT NULL DEFAULT 'rental',
+  source       ENUM('rental','utility','network','net_repair','install','repair','other') NOT NULL DEFAULT 'rental',
   room_id      INT NOT NULL,
   tenant_id    INT NULL,
   contract_id  INT NULL,
@@ -479,7 +479,7 @@ CREATE TABLE net_changes (
 CREATE TABLE bills (
   id           INT AUTO_INCREMENT PRIMARY KEY,
   org_id       INT NOT NULL,
-  source       ENUM('property','network') NOT NULL DEFAULT 'property',
+  source       ENUM('property','utility','network','net_repair','install','repair','other') NOT NULL DEFAULT 'property',
   room_id      INT NOT NULL,
   tenant_id    INT NULL,
   contract_id  INT NULL,

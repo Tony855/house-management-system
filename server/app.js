@@ -1664,7 +1664,9 @@ async function rentedTenant(conn, roomId, oid) {
 
 router.post('/bills', auth, h(async (req, res) => {
   const B = req.body || {};
-  const allowed = { rental: ['rental', 'utility', 'network'], hotel: ['hotel'], property: ['property', 'network'] };
+  const allowed = { rental: ['rental', 'utility', 'network', 'net_repair', 'install', 'repair', 'other'],
+    hotel: ['hotel'],
+    property: ['property', 'utility', 'network', 'net_repair', 'install', 'repair', 'other'] };
   const v = V(B);
   const source = v.str('source', { enum: allowed[req.mode], def: allowed[req.mode][0] });
   const room_id = v.int('room_id', { min: 1, max: 1e7 });

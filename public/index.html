@@ -135,7 +135,9 @@ const BILL_STATUS = {
 };
 const BILL_SOURCE = {
   rental:['租金','secondary'], utility:['水电','info'], hotel:['酒店','info'],
-  property:['物业','warning'], network:['网费','primary']
+  property:['物业','warning'], network:['网费','primary'],
+  net_repair:['网维修','danger'], install:['设备安装','success'],
+  repair:['维修','warning'], other:['其它','secondary']
 };
 const CONTRACT_STATUS = {
   active:['履行中','success'], expired:['已到期','secondary'], terminated:['已终止','dark']
@@ -1757,8 +1759,13 @@ async function renderBills(){
       <div class="col-auto">
         <select class="form-select form-select-sm" onchange="billFilter.source=this.value;renderBills()">
           <option value="">全部来源</option>
-          <option value="property" ${billFilter.source === 'property' ? 'selected' : ''}>物业费</option>
-          <option value="network"  ${billFilter.source === 'network' ? 'selected' : ''}>网费</option>
+          <option value="property"   ${billFilter.source === 'property' ? 'selected' : ''}>物业费</option>
+          <option value="utility"    ${billFilter.source === 'utility' ? 'selected' : ''}>水电费</option>
+          <option value="network"    ${billFilter.source === 'network' ? 'selected' : ''}>网费</option>
+          <option value="net_repair" ${billFilter.source === 'net_repair' ? 'selected' : ''}>网维修费</option>
+          <option value="install"    ${billFilter.source === 'install' ? 'selected' : ''}>设备安装费</option>
+          <option value="repair"     ${billFilter.source === 'repair' ? 'selected' : ''}>维修费</option>
+          <option value="other"      ${billFilter.source === 'other' ? 'selected' : ''}>其它</option>
         </select>
       </div>`;
   } else if (mode === 'rental'){
@@ -1766,9 +1773,13 @@ async function renderBills(){
       <div class="col-auto">
         <select class="form-select form-select-sm" onchange="billFilter.source=this.value;renderBills()">
           <option value="">全部来源</option>
-          <option value="rental"  ${billFilter.source === 'rental' ? 'selected' : ''}>租金</option>
-          <option value="utility" ${billFilter.source === 'utility' ? 'selected' : ''}>水电</option>
-          <option value="network" ${billFilter.source === 'network' ? 'selected' : ''}>网费</option>
+          <option value="rental"     ${billFilter.source === 'rental' ? 'selected' : ''}>租金</option>
+          <option value="utility"    ${billFilter.source === 'utility' ? 'selected' : ''}>水电</option>
+          <option value="network"    ${billFilter.source === 'network' ? 'selected' : ''}>网费</option>
+          <option value="net_repair" ${billFilter.source === 'net_repair' ? 'selected' : ''}>网维修费</option>
+          <option value="install"    ${billFilter.source === 'install' ? 'selected' : ''}>设备安装费</option>
+          <option value="repair"     ${billFilter.source === 'repair' ? 'selected' : ''}>维修费</option>
+          <option value="other"      ${billFilter.source === 'other' ? 'selected' : ''}>其它</option>
         </select>
       </div>`;
   }
@@ -1898,8 +1909,13 @@ async function editBill(){
 
   openForm('手动添加账单', [
     { name:'source', label:'账单来源', type:'select', required:true, options:[
-      { value:'property', label:'物业费（含水电）' },
-      { value:'network',  label:'网费' }] },
+      { value:'property', label:'物业费' },
+      { value:'utility',  label:'水电费' },
+      { value:'network',  label:'网费' },
+      { value:'net_repair', label:'网维修费' },
+      { value:'install',    label:'设备安装费' },
+      { value:'repair',     label:'维修费' },
+      { value:'other',      label:'其它' }] },
     { name:'room_id', label:'房产', type:'select', required:true,
       options: owned.map(r => ({ value:r.id,
         label:`${r.building_name || ''} ${r.room_no}｜${r.owner_name || ''}` })) },
@@ -1910,6 +1926,7 @@ async function editBill(){
     { name:'amount',       label:'金额', type:'number', required:true, step:'0.01', money:true, default:0 },
     { name:'remark', label:'备注', type:'textarea' }
   ], { source:'property' }, async (d, modal) => {
+    if (d.source === 'other' && !(d.remark || '').trim()){ alert('选择「其它」来源时请填写备注说明'); return; }
     const r = owned.find(x => x.id === Number(d.room_id));
     await api('/api/bills', 'POST', {
       ...d, room_id: r.id, tenant_id: r.owner_id
@@ -1979,6 +1996,7 @@ async function renderMeters(){
       </div>
       <div class="col-auto">
         ${canOp('meter_add') ? `<button class="btn btn-sm btn-primary" onclick="editMeter()">+ 新增抄表</button>` : ''}
+        ${canOp('bill_add') ? `<button class="btn btn-sm btn-outline-primary" onclick="addMeterBill()">+ 手动新增账单</button>` : ''}
       </div>
       <div class="col-auto text-muted small">共 ${list.length} 条</div>
     </div>
@@ -2046,6 +2064,35 @@ async function renderMeters(){
     录入当月抄表后，在「账单收费」页点击「生成${curMode() === 'property' ? '物业' : '水电'}账单」即可${curMode() === 'property' ? '合并到物业费账单' : '生成水电费账单'}。
     网费独立计算，请见「网络管理」。
   </div>`;
+}
+
+/* 抄表页手动新增账单（维修费 / 其它维修） */
+async function addMeterBill(){
+  const rooms = await safeApi('/api/rooms');
+  if (!rooms) return;
+  const scoped = billableRooms(rooms);
+  if (!scoped.length){ alert(curMode() === 'property' ? '请先在房产管理中为房屋绑定企业' : '请先在合同管理中为房间办理出租'); return; }
+  const t = today(); const ym = curMonth();
+  openForm('手动新增账单', [
+    { name:'bill_type', label:'账单类型', type:'select', required:true, options:[
+      { value:'repair', label:'维修费' }, { value:'other', label:'其它维修' }] },
+    { name:'room_id', label:'房间', type:'select', required:true,
+      options: scoped.map(r => ({ value:r.id,
+        label:`${r.building_name || ''} ${r.room_no}｜${r.owner_name || ''}` })) },
+    { name:'period_start', label:'费用起始日', type:'date', required:true, default: ym + '-01' },
+    { name:'period_end',   label:'费用截止日', type:'date', required:true,
+      default: addDays(addMonths(ym + '-01', 1), -1) },
+    { name:'due_date',     label:'应缴日期', type:'date', required:true, default: ym + '-10' },
+    { name:'amount',       label:'金额', type:'number', required:true, step:'0.01', money:true },
+    { name:'remark', label:'备注', type:'textarea' }
+  ], { bill_type:'repair' }, async (d, modal) => {
+    await api('/api/bills', 'POST', {
+      source: d.bill_type, room_id: Number(d.room_id),
+      period_start:d.period_start, period_end:d.period_end, due_date:d.due_date,
+      amount:d.amount, remark:d.remark || ''
+    });
+    modal.hide(); renderMeters();
+  });
 }
 
 async function editMeter(id){
@@ -2457,7 +2504,11 @@ async function editNetBill(){
   /* 单价取本经营主体「系统设置」，按 org 隔离 */
   const priceCny = Number(DB.data.settings.net_price_per_mb) || 0;
 
-  openForm('手动新增网费账单', [
+  openForm('手动新增账单', [
+    { name:'bill_type', label:'账单类型', type:'select', required:true, options:[
+      { value:'network', label:'网费' },
+      { value:'net_repair', label:'网维修费' },
+      { value:'install',    label:'设备安装费' }] },
     { name:'room_id', label:'房间', type:'select', required:true, options },
     { name:'net_bandwidth', label:'带宽（兆）', type:'number', required:true, step:'1', default:Number(firstBw) || 0 },
     { name:'net_price', label:'每兆月租单价', type:'number', step:'0.0001', money:true, readonly:true,
@@ -2465,18 +2516,20 @@ async function editNetBill(){
     { name:'period_start', label:'费用起始日', type:'date', required:true, default:pStart },
     { name:'period_end',   label:'费用截止日', type:'date', required:true, default:pEnd },
     { name:'due_date',     label:'应缴日期', type:'date', required:true, default:ym + '-10' },
-    { name:'amount',       label:'网费金额', type:'number', required:true, step:'0.01', money:true },
+    { name:'amount',       label:'金额', type:'number', required:true, step:'0.01', money:true },
     { name:'remark', label:'备注', type:'textarea' }
-  ], {}, async (d, modal) => {
+  ], { bill_type:'network' }, async (d, modal) => {
     await api('/api/bills', 'POST', {
-      source:'network', room_id:Number(d.room_id), tenant_id:resolveTenant(Number(d.room_id)) || null,
+      source:d.bill_type, room_id:Number(d.room_id), tenant_id:resolveTenant(Number(d.room_id)) || null,
       period_start:d.period_start, period_end:d.period_end, due_date:d.due_date,
       amount:d.amount, remark:d.remark
     });
     modal.hide(); renderNetwork();
   }, (el) => {
     const $ = n => el.querySelector(`[name="${n}"]`);
-    const roomSel = $('room_id'), bwInput = $('net_bandwidth'),
+    const typeSel = $('bill_type'), roomSel = $('room_id'), bwInput = $('net_bandwidth'),
+          priceRow = $('net_price').closest('.mb-3'), bwRow = $('net_bandwidth').closest('.mb-3'),
+          amtLabel = $('amount').closest('.mb-3').querySelector('.form-label'),
           ps = $('period_start'), pe = $('period_end'), amt = $('amount');
     const recalc = () => {
       const bw = Number(bwInput.value) || 0;
@@ -2486,6 +2539,14 @@ async function editNetBill(){
       const amountCny = bw * priceCny * (days > 0 ? days / dim : 0);
       amt.value = toDisplayMoney(amountCny);
     };
+    const sync = () => {
+      const isNet = typeSel.value === 'network';
+      bwRow.style.display = isNet ? '' : 'none';
+      priceRow.style.display = isNet ? '' : 'none';
+      amtLabel.innerHTML = (isNet ? '金额' : '金额') + ' <span class="text-danger">*</span>';
+      if (isNet) recalc();
+    };
+    typeSel.addEventListener('change', sync);
     roomSel.addEventListener('change', () => {
       const r = roomById[Number(roomSel.value)];
       if (r){ bwInput.value = bwByRoom[r.id] || 0; recalc(); }
@@ -2493,7 +2554,7 @@ async function editNetBill(){
     bwInput.addEventListener('input', recalc);
     ps.addEventListener('change', recalc);
     pe.addEventListener('change', recalc);
-    recalc();
+    sync();
   });
 }
 
