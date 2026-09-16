@@ -144,7 +144,7 @@ async function calcNetFee(q, roomId, month) {
     const calc = await calcLineFee(q, line, month, price);
     linesOut.push({ id: line.id, line_name: line.line_name, bandwidth: Number(line.bandwidth) || 0,
       start_date: line.start_date, status: line.status, stop_date: line.stop_date, total: calc.total,
-      segments: calc.segments });
+      price, segments: calc.segments });
     segments = segments.concat(calc.segments);
     total = round2(total + calc.total);
   }
@@ -1491,12 +1491,17 @@ router.post('/bills/generate', auth, h(async (req, res) => {
           return `【${l.line_name}】${segTxt}`;
         }).join(' ');
         const tenant = mode === 'property' ? r.owner_id : await rentedTenant(conn, r.id, oid);
+        const [st0] = await conn.query('SELECT currency, rate FROM settings WHERE org_id = ?', [oid]);
+        const isUsd = st0[0] && st0[0].currency === 'USD';
+        const rate0 = st0[0] && Number(st0[0].rate) > 0 ? Number(st0[0].rate) : 7.2;
+        const unit = calc.lines[0] ? calc.lines[0].price : 0;
+        const unitTxt = (isUsd ? '$' : '¥') + (isUsd ? (unit / rate0).toFixed(2) : unit.toFixed(2));
         await conn.query(
           `INSERT INTO bills (org_id, source, room_id, tenant_id, period_start, period_end, due_date,
               amount, paid_amount, status, remark)
            VALUES (?, 'network', ?, ?, ?, ?, ?, ?, 0, 'unpaid', ?)`,
           [oid, r.id, tenant, start, end, ym + '-10', calc.total,
-           `网费：${detail}（按 ${calc.daysInMonth} 天折算，单价 ¥${calc.lines[0] ? calc.lines[0].price : 0}/兆）`]);
+           `网费：${detail}（按 ${calc.daysInMonth} 天折算，单价 ${unitTxt}/兆）`]);
         n++;
       }
     }
