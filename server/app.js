@@ -15,9 +15,10 @@ const {
   hashPassword, verifyPassword, today, nowStr, addDays, addMonths, daysBetween,
   daysInMonth, monthStart, monthEnd
 } = require('./util');
+const { V, clean } = require('./validate');
 
 const app = express();
-app.use(express.json());
+app.use(express.json({ limit: '256kb' }));
 app.use(express.static(path.join(__dirname, '..', 'public')));
 /* 上传图片静态访问（uploads/org-<主体ID>/，按主体隔离） */
 app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads')));
@@ -25,10 +26,13 @@ app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads')));
 /* ---------- 辅助 ---------- */
 const h = fn => (req, res) => fn(req, res).catch(e => {
   console.error(e);
-  res.status(500).json({ error: e.message });
+  res.status(e.status || 500).json({ error: e.message });
 });
 const num = v => (v === null || v === undefined || v === '') ? null : Number(v);
 const round2 = n => Math.round((Number(n) || 0) * 100) / 100;
+
+/* 登录限流：同 IP 1 分钟最多 30 次尝试（防脚本爆破，兼顾正常使用与自动化测试） */
+const loginHits = new Map();
 
 /* ---------- 三系统能力矩阵 ---------- */
 const FEATURES = {
@@ -364,15 +368,24 @@ async function rolePerms(roleId) {
  * 登录 / 会话
  * ================================================================== */
 router.post('/login', h(async (req, res) => {
+  const ip = req.ip || req.connection.remoteAddress || '?';
+  const nowT = Date.now();
+  const hit = loginHits.get(ip) || { n: 0, t: nowT };
+  if (nowT - hit.t > 60000) { hit.n = 0; hit.t = nowT; }
+  hit.n++;
+  loginHits.set(ip, hit);
+  if (hit.n > 30) return res.status(429).json({ error: '尝试过于频繁，请 1 分钟后再试' });
   const B = req.body || {};
-  const { username, password } = B;
+  const v = V(B);
+  const username = v.str('username', { required: true, max: 50 });
+  const password = v.str('password', { required: true, max: 100, clean: false });
+  v.ok();
   /* 入口强绑定：账号必须从所属系统窗口登录（超管=super 窗口；业务账号=对应系统窗口）。
    * 跨系统信息一律不外泄——查不到/不匹配统一返回「用户名或密码错误」。 */
   const modeQ = B.mode === 'super' ? 'AND u.mode IS NULL'
               : B.mode            ? 'AND u.mode = ?'
               : 'AND 1 = 0';
-  const params = [username || '', ...(B.mode && B.mode !== 'super' ? [B.mode] : [])];
-  const [rows] = await shared.query(
+  const params = [username || '', ...(B.mode && B.mode !== 'super' ? [B.mode] : [])];  const [rows] = await shared.query(
     `SELECT u.*, COALESCE(rc.name, rb.name) AS role_name, COALESCE(rc.level, rb.level) AS level,
             o.name AS org_name
        FROM users u
@@ -454,13 +467,14 @@ router.get('/orgs', authMode, superOnly, h(async (req, res) => {
 
 router.post('/orgs', authMode, superOnly, h(async (req, res) => {
   const B = req.body || {};
-  const name = String(B.name || '').trim();
-  const mode = B.mode;
-  const username = String(B.username || '').trim();
-  const password = String(B.password || '');
-  if (!name) return res.status(400).json({ error: '经营主体名称不能为空' });
-  if (!MODES.includes(mode)) return res.status(400).json({ error: '请选择所属系统' });
-  if (!username || password.length < 6) return res.status(400).json({ error: '管理员用户名不能为空，密码至少 6 位' });
+  const v = V(B);
+  const name = v.str('name', { required: true, max: 50 });
+  const mode = v.str('mode', { required: true, enum: MODES });
+  const username = v.str('username', { required: true, max: 50, pattern: /^[A-Za-z0-9_@.\-]+$/ });
+  const password = v.str('password', { required: true, max: 100, clean: false });
+  const real_name = v.str('real_name', { max: 50 });
+  v.ok();
+  if (password.length < 6) return res.status(400).json({ error: '密码至少 6 位' });
   const [[dup]] = await shared.query('SELECT COUNT(*) AS c FROM users WHERE username = ?', [username]);
   if (Number(dup.c) > 0) return res.status(400).json({ error: '用户名已存在' });
 
@@ -471,7 +485,7 @@ router.post('/orgs', authMode, superOnly, h(async (req, res) => {
     const orgId = orgR.insertId;
     const [uR] = await conn.query(
       'INSERT INTO users (username, password, real_name, role, mode, org_id) VALUES (?, ?, ?, ?, ?, ?)',
-      [username, hashPassword(password), B.real_name || name + '管理员', 'admin', mode, orgId]);
+      [username, hashPassword(password), real_name || name + '管理员', 'admin', mode, orgId]);
     await conn.query('UPDATE orgs SET admin_user_id = ? WHERE id = ?', [uR.insertId, orgId]);
     await conn.query(
       'INSERT INTO settings (org_id, currency, rate, net_price_per_mb, water_price, elec_price) VALUES (?, ?, ?, ?, ?, ?)',
@@ -488,20 +502,24 @@ router.post('/orgs', authMode, superOnly, h(async (req, res) => {
 
 router.put('/orgs/:id', authMode, superOnly, h(async (req, res) => {
   const B = req.body || {};
+  const v = V(B);
+  const name = v.str('name', { max: 50 });
+  const real_name = v.str('real_name', { max: 50 });
+  const password = v.str('password', { max: 100, clean: false });
+  v.ok();
   const [os] = await shared.query('SELECT * FROM orgs WHERE id = ?', [req.params.id]);
   if (!os.length) return res.status(400).json({ error: '经营主体不存在' });
   const o = os[0];
-  if (B.name !== undefined) {
-    const name = String(B.name).trim();
+  if (name !== null) {
     if (!name) return res.status(400).json({ error: '名称不能为空' });
     await shared.query('UPDATE orgs SET name = ? WHERE id = ?', [name, o.id]);
   }
-  if (B.real_name !== undefined) {
-    await shared.query('UPDATE users SET real_name = ? WHERE id = ?', [B.real_name || '', o.admin_user_id]);
+  if (real_name !== null) {
+    await shared.query('UPDATE users SET real_name = ? WHERE id = ?', [real_name || '', o.admin_user_id]);
   }
-  if (B.password) {
-    if (String(B.password).length < 6) return res.status(400).json({ error: '密码至少 6 位' });
-    await shared.query('UPDATE users SET password = ? WHERE id = ?', [hashPassword(B.password), o.admin_user_id]);
+  if (password !== null && password) {
+    if (password.length < 6) return res.status(400).json({ error: '密码至少 6 位' });
+    await shared.query('UPDATE users SET password = ? WHERE id = ?', [hashPassword(password), o.admin_user_id]);
   }
   res.json({ ok: true });
 }));
@@ -552,15 +570,16 @@ router.get('/settings', authMode, h(async (req, res) => {
 router.put('/settings', authMode, orgAdminOnly, h(async (req, res) => {
   const B = req.body || {};
   const s = (await getOrgSettings(req.orgId)) || { ...DEF_SETTINGS };
-  const currency = (B.currency === 'CNY' || B.currency === 'USD') ? B.currency : s.currency;
-  const rate = (Number(B.rate) > 0) ? Number(B.rate) : Number(s.rate);
+  const v = V(B);
+  const currency = v.str('currency', { enum: ['CNY', 'USD'], def: s.currency });
+  const rate = v.num('rate', { min: 0.01, max: 10000, def: Number(s.rate) });
   let net = Number(s.net_price_per_mb), water = Number(s.water_price), elec = Number(s.elec_price);
   if (FEATURES[req.mode].settingsPrices) {
-    const pick = (v, cur) => (v !== undefined && Number(v) >= 0) ? Number(v) : cur;
-    net = pick(B.net_price_per_mb, net);
-    water = pick(B.water_price, water);
-    elec = pick(B.elec_price, elec);
+    net = v.num('net_price_per_mb', { min: 0, max: 1e7, def: net });
+    water = v.num('water_price', { min: 0, max: 1e7, def: water });
+    elec = v.num('elec_price', { min: 0, max: 1e7, def: elec });
   }
+  v.ok();
   await shared.query(
     `INSERT INTO settings (org_id, currency, rate, net_price_per_mb, water_price, elec_price)
      VALUES (?, ?, ?, ?, ?, ?)
@@ -879,18 +898,27 @@ router.get('/buildings', auth, h(async (req, res) => {
 }));
 router.post('/buildings', auth, h(async (req, res) => {
   const B = req.body || {};
-  if (!B.name) return res.status(400).json({ error: '楼栋名称不能为空' });
+  const v = V(B);
+  const name = v.str('name', { required: true, max: 50 });
+  const address = v.str('address', { max: 200 });
+  const remark = v.str('remark', { max: 500 });
+  v.ok();
   const [r] = await pool.query(
     'INSERT INTO buildings (org_id, name, address, remark) VALUES (?, ?, ?, ?)',
-    [req.orgId, B.name, B.address || '', B.remark || '']);
+    [req.orgId, name, address || '', remark || '']);
   const [rows] = await pool.query('SELECT * FROM buildings WHERE id = ? AND org_id = ?', [r.insertId, req.orgId]);
   res.json({ ...rows[0], room_count: 0 });
 }));
 router.put('/buildings/:id', auth, h(async (req, res) => {
   const B = req.body || {};
+  const v = V(B);
+  const name = v.str('name', { required: true, max: 50 });
+  const address = v.str('address', { max: 200 });
+  const remark = v.str('remark', { max: 500 });
+  v.ok();
   const [r] = await pool.query(
     'UPDATE buildings SET name = ?, address = ?, remark = ? WHERE id = ? AND org_id = ?',
-    [B.name, B.address || '', B.remark || '', req.params.id, req.orgId]);
+    [name, address || '', remark || '', req.params.id, req.orgId]);
   if (!r.affectedRows) return res.status(400).json({ error: '楼栋不存在' });
   const [rows] = await pool.query('SELECT * FROM buildings WHERE id = ? AND org_id = ?', [req.params.id, req.orgId]);
   res.json(rows[0]);
@@ -945,18 +973,39 @@ router.get('/rooms', auth, h(async (req, res) => {
   res.json(rows);
 }));
 function roomPayload(B, mode) {
-  const d = { org_id: currentOrgId(), remark: B.remark || '', room_no: B.room_no,
-    room_type: B.room_type || '', status: B.status || 'vacant' };
+  const d = { org_id: currentOrgId(), remark: clean(B.remark || ''), room_no: clean(B.room_no),
+    room_type: clean(B.room_type || ''), status: B.status || 'vacant' };
   for (const k of ROOM_FIELDS[mode]) {
     if (k === 'room_no' || k === 'room_type' || k === 'status' || k === 'remark') continue;
-    d[k] = NUM_ROOM_FIELDS.includes(k) ? num(B[k]) : B[k];
+    d[k] = NUM_ROOM_FIELDS.includes(k) ? num(B[k]) : clean(B[k]);
   }
   return d;
 }
+const ROOM_STATUS = ['vacant', 'rented', 'booked', 'cleaning', 'maintenance'];
+function roomRules(v, mode, partial) {
+  if (partial) v.int('building_id', { min: 1, max: 1e7 });
+  else v.int('building_id', { required: true, min: 1, max: 1e7 });
+  v.str('room_no', partial ? { max: 50 } : { required: true, max: 50 });
+  v.str('room_type', { max: 50 });
+  v.str('status', { enum: ROOM_STATUS });
+  v.str('remark', { max: 500 });
+  v.num('floor', { min: -5, max: 500 });
+  v.num('area', { min: 0, max: 1e6 });
+  v.num('rent', { min: 0, max: 1e9 });
+  v.num('deposit', { min: 0, max: 1e9 });
+  v.num('day_price', { min: 0, max: 1e9 });
+  v.num('property_fee', { min: 0, max: 1e9 });
+  if (mode !== 'hotel') {
+    v.num('water_price', { min: 0, max: 1e6 });
+    v.num('elec_price', { min: 0, max: 1e6 });
+  }
+}
 router.post('/rooms', auth, h(async (req, res) => {
   const B = req.body || {};
-  if (!B.building_id || !B.room_no) return res.status(400).json({ error: '楼栋与房间号不能为空' });
   const mode = req.mode;
+  const v = V(B);
+  roomRules(v, mode, false);
+  v.ok();
   const d = roomPayload(B, mode);
   /* 水电单价：空值取本主体默认（仅租房/物业，且为新增时） */
   if (FEATURES[mode].settingsPrices) {
@@ -974,6 +1023,9 @@ router.post('/rooms', auth, h(async (req, res) => {
 router.put('/rooms/:id', auth, h(async (req, res) => {
   const B = req.body || {};
   const mode = req.mode;
+  const v = V(B);
+  roomRules(v, mode, true);
+  v.ok();
   const d = roomPayload(B, mode);
   delete d.org_id;
   const sets = Object.keys(d).map(c => `${c} = ?`).join(', ');
@@ -1040,35 +1092,52 @@ router.get('/tenants', auth, h(async (req, res) => {
 }));
 router.post('/tenants', auth, h(async (req, res) => {
   const B = req.body || {};
-  if (!B.name) return res.status(400).json({ error: '名称不能为空' });
+  const v = V(B);
+  const name = v.str('name', { required: true, max: 80 });
+  const contact = v.str('contact', { max: 50 });
+  const phone = v.str('phone', { max: 40 });
+  const license_no = v.str('license_no', { max: 60 });
+  const id_card = v.str('id_card', { max: 60 });
+  const remark = v.str('remark', { max: 500 });
+  const gender = v.str('gender', { enum: ['男', '女'], def: '男' });
+  v.ok();
   if (req.mode === 'property') {
     /* 物业：企业（电话非必填） */
     const [r] = await pool.query(
       'INSERT INTO tenants (org_id, name, contact, phone, license_no, remark) VALUES (?, ?, ?, ?, ?, ?)',
-      [req.orgId, B.name, B.contact || '', B.phone || '', B.license_no || '', B.remark || '']);
+      [req.orgId, name, contact || '', phone || '', license_no || '', remark || '']);
     const [rows] = await pool.query('SELECT * FROM tenants WHERE id = ? AND org_id = ?', [r.insertId, req.orgId]);
     return res.json({ ...rows[0], rooms: '', emp_count: 0 });
   }
-  if (!B.phone) return res.status(400).json({ error: '姓名与联系电话不能为空' });
+  if (!phone) return res.status(400).json({ error: '姓名与联系电话不能为空' });
   const [r] = await pool.query(
     'INSERT INTO tenants (org_id, name, gender, phone, id_card, remark) VALUES (?, ?, ?, ?, ?, ?)',
-    [req.orgId, B.name, B.gender === '女' ? '女' : '男', B.phone, B.id_card || '', B.remark || '']);
+    [req.orgId, name, gender, phone, id_card || '', remark || '']);
   const [rows] = await pool.query('SELECT * FROM tenants WHERE id = ? AND org_id = ?', [r.insertId, req.orgId]);
   res.json({ ...rows[0], rooms: '' });
 }));
 router.put('/tenants/:id', auth, h(async (req, res) => {
   const B = req.body || {};
+  const v = V(B);
+  const name = v.str('name', { required: true, max: 80 });
+  const contact = v.str('contact', { max: 50 });
+  const phone = v.str('phone', { max: 40 });
+  const license_no = v.str('license_no', { max: 60 });
+  const id_card = v.str('id_card', { max: 60 });
+  const remark = v.str('remark', { max: 500 });
+  const gender = v.str('gender', { enum: ['男', '女'], def: '男' });
+  v.ok();
   if (req.mode === 'property') {
     const [r] = await pool.query(
       'UPDATE tenants SET name = ?, contact = ?, phone = ?, license_no = ?, remark = ? WHERE id = ? AND org_id = ?',
-      [B.name, B.contact || '', B.phone || '', B.license_no || '', B.remark || '', req.params.id, req.orgId]);
+      [name, contact || '', phone || '', license_no || '', remark || '', req.params.id, req.orgId]);
     if (!r.affectedRows) return res.status(400).json({ error: '记录不存在' });
     const [rows] = await pool.query('SELECT * FROM tenants WHERE id = ? AND org_id = ?', [req.params.id, req.orgId]);
     return res.json(rows[0]);
   }
   const [r] = await pool.query(
     'UPDATE tenants SET name = ?, gender = ?, phone = ?, id_card = ?, remark = ? WHERE id = ? AND org_id = ?',
-    [B.name, B.gender === '女' ? '女' : '男', B.phone, B.id_card || '', B.remark || '', req.params.id, req.orgId]);
+    [name, gender, phone, id_card || '', remark || '', req.params.id, req.orgId]);
   if (!r.affectedRows) return res.status(400).json({ error: '记录不存在' });
   const [rows] = await pool.query('SELECT * FROM tenants WHERE id = ? AND org_id = ?', [req.params.id, req.orgId]);
   res.json(rows[0]);
@@ -1104,28 +1173,29 @@ router.post('/tenants/:id/company-admin', authMode, orgAdminOnly, h(async (req, 
   if (req.mode !== 'property') return res.status(404).json({ error: '仅物业系统支持企业管理员' });
   const id = Number(req.params.id);
   const B = req.body || {};
-  if (!B.username || !B.password) return res.status(400).json({ error: '用户名与密码不能为空' });
-  if (!/^[a-zA-Z][a-zA-Z0-9_]{2,19}$/.test(B.username)) {
-    return res.status(400).json({ error: '用户名需以字母开头，仅字母/数字/下划线，3-20位' });
-  }
-  if (B.password.length < 6) return res.status(400).json({ error: '密码至少 6 位' });
+  const v = V(B);
+  const username = v.str('username', { required: true, max: 20, pattern: /^[a-zA-Z][a-zA-Z0-9_]{2,19}$/ });
+  const password = v.str('password', { required: true, max: 100, clean: false });
+  const real_name = v.str('real_name', { max: 50 });
+  v.ok();
+  if (password.length < 6) return res.status(400).json({ error: '密码至少 6 位' });
   const [[comp]] = await pool.query('SELECT * FROM tenants WHERE id = ? AND org_id = ?', [id, req.orgId]);
   if (!comp) return res.status(400).json({ error: '企业不存在' });
   const dup = await shared.query(
-    'SELECT id FROM users WHERE username = ? AND org_id = ? AND (company_id IS NULL OR company_id <> ?)', [B.username, req.orgId, id]);
+    'SELECT id FROM users WHERE username = ? AND org_id = ? AND (company_id IS NULL OR company_id <> ?)', [username, req.orgId, id]);
   if (dup[0].length) return res.status(400).json({ error: '用户名已被使用' });
   const [exist] = await shared.query(
     'SELECT id FROM users WHERE company_id = ? AND org_id = ?', [id, req.orgId]);
   if (exist.length) {
     await shared.query('UPDATE users SET password = ?, real_name = ? WHERE id = ?',
-      [hashPassword(B.password), B.real_name || '', exist[0].id]);
+      [hashPassword(password), real_name || '', exist[0].id]);
   } else {
     await shared.query(
       `INSERT INTO users (username, password, real_name, role, mode, org_id, company_id)
        VALUES (?, ?, ?, 'staff', 'property', ?, ?)`,
-      [B.username, hashPassword(B.password), B.real_name || '', req.orgId, id]);
+      [username, hashPassword(password), real_name || '', req.orgId, id]);
   }
-  res.json({ ok: true, username: B.username });
+  res.json({ ok: true, username });
 }));
 
 /* ==================================================================
@@ -1150,22 +1220,35 @@ router.get('/org-employees', authMode, h(async (req, res) => {
 router.post('/org-employees', authMode, orgAdminOnly, h(async (req, res) => {
   if (req.mode !== 'property') return res.status(404).json({ error: '仅物业系统支持企业员工' });
   const B = req.body || {};
-  if (!B.company || !B.name) return res.status(400).json({ error: '所属企业与姓名不能为空' });
+  const v = V(B);
+  const company = v.str('company', { required: true, max: 80 });
+  const name = v.str('name', { required: true, max: 50 });
+  const id_number = v.str('id_number', { max: 60 });
+  const phone = v.str('phone', { max: 40 });
+  const department = v.str('department', { max: 50 });
+  const position = v.str('position', { max: 50 });
+  const card_no = v.str('card_no', { max: 40 });
+  const photo_url = v.str('photo_url', { max: 200 });
+  const id_photo_url = v.str('id_photo_url', { max: 200 });
+  const remark = v.str('remark', { max: 500 });
+  const room_id = v.int('room_id', { min: 1, max: 1e7 });
+  const owner_id = v.int('owner_id', { min: 1, max: 1e7 });
+  v.ok();
   /* 自动匹配/创建企业（企业业主）记录，实现与业主绑定 */
-  let ownerId = B.owner_id ? Number(B.owner_id) : null;
+  let ownerId = owner_id;
   if (!ownerId) {
     const [match] = await pool.query(
-      'SELECT * FROM tenants WHERE org_id = ? AND name = ? LIMIT 1', [req.orgId, B.company]);
+      'SELECT * FROM tenants WHERE org_id = ? AND name = ? LIMIT 1', [req.orgId, company]);
     ownerId = match.length ? match[0].id : (await pool.query(
-      'INSERT INTO tenants (org_id, name) VALUES (?, ?)', [req.orgId, B.company]))[0].insertId;
+      'INSERT INTO tenants (org_id, name) VALUES (?, ?)', [req.orgId, company]))[0].insertId;
   }
   const [r] = await pool.query(
     `INSERT INTO org_employees (org_id, company, owner_id, room_id, name, id_number, phone,
        department, position, card_no, photo_url, id_photo_url, remark)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [req.orgId, B.company, ownerId, B.room_id ? Number(B.room_id) : null, B.name,
-     B.id_number || '', B.phone || '', B.department || '', B.position || '', B.card_no || '',
-     B.photo_url || '', B.id_photo_url || '', B.remark || '']);
+    [req.orgId, company, ownerId, room_id || null, name,
+     id_number || '', phone || '', department || '', position || '', card_no || '',
+     photo_url || '', id_photo_url || '', remark || '']);
   const [rows] = await pool.query(
     `SELECT e.*, r.room_no, b.name AS building_name, t.name AS owner_name
        FROM org_employees e
@@ -1177,16 +1260,29 @@ router.post('/org-employees', authMode, orgAdminOnly, h(async (req, res) => {
 router.put('/org-employees/:id', authMode, orgAdminOnly, h(async (req, res) => {
   if (req.mode !== 'property') return res.status(404).json({ error: '仅物业系统支持企业员工' });
   const B = req.body || {};
-  if (!B.company || !B.name) return res.status(400).json({ error: '所属企业与姓名不能为空' });
+  const v = V(B);
+  const company = v.str('company', { required: true, max: 80 });
+  const name = v.str('name', { required: true, max: 50 });
+  const id_number = v.str('id_number', { max: 60 });
+  const phone = v.str('phone', { max: 40 });
+  const department = v.str('department', { max: 50 });
+  const position = v.str('position', { max: 50 });
+  const card_no = v.str('card_no', { max: 40 });
+  const photo_url = v.str('photo_url', { max: 200 });
+  const id_photo_url = v.str('id_photo_url', { max: 200 });
+  const remark = v.str('remark', { max: 500 });
+  const room_id = v.int('room_id', { min: 1, max: 1e7 });
+  const owner_id = v.int('owner_id', { min: 1, max: 1e7 });
+  v.ok();
   const [exist] = await pool.query('SELECT * FROM org_employees WHERE id = ? AND org_id = ?', [req.params.id, req.orgId]);
   if (!exist.length) return res.status(400).json({ error: '记录不存在' });
   const [r] = await pool.query(
     `UPDATE org_employees SET company = ?, owner_id = ?, room_id = ?, name = ?, id_number = ?, phone = ?,
        department = ?, position = ?, card_no = ?, photo_url = ?, id_photo_url = ?, remark = ?
      WHERE id = ? AND org_id = ?`,
-    [B.company, B.owner_id ? Number(B.owner_id) : null, B.room_id ? Number(B.room_id) : null, B.name,
-     B.id_number || '', B.phone || '', B.department || '', B.position || '', B.card_no || '',
-     B.photo_url || '', B.id_photo_url || '', B.remark || '', req.params.id, req.orgId]);
+    [company, owner_id || null, room_id || null, name,
+     id_number || '', phone || '', department || '', position || '', card_no || '',
+     photo_url || '', id_photo_url || '', remark || '', req.params.id, req.orgId]);
   if (!r.affectedRows) return res.status(400).json({ error: '记录不存在' });
   const [rows] = await pool.query(
     `SELECT e.*, r.room_no, b.name AS building_name, t.name AS owner_name
@@ -1237,7 +1333,18 @@ router.get('/contracts', auth, h(async (req, res) => {
 }));
 router.post('/contracts', auth, h(async (req, res) => {
   const B = req.body || {};
-  const [rooms] = await pool.query('SELECT * FROM rooms WHERE id = ? AND org_id = ?', [Number(B.room_id), req.orgId]);
+  const v = V(B);
+  const room_id = v.int('room_id', { required: true, min: 1, max: 1e7 });
+  const tenant_id = v.int('tenant_id', { required: true, min: 1, max: 1e7 });
+  const start_date = v.date('start_date', { required: true });
+  const end_date = v.date('end_date', { required: true });
+  const rent = v.num('rent', { required: true, min: 0, max: 1e9 });
+  const deposit = v.num('deposit', { min: 0, max: 1e9, def: 0 });
+  const pay_cycle = v.num('pay_cycle', { min: 0.5, max: 36, def: 1 });
+  const sign_date = v.date('sign_date', { def: today() });
+  const remark = v.str('remark', { max: 500 });
+  v.ok();
+  const [rooms] = await pool.query('SELECT * FROM rooms WHERE id = ? AND org_id = ?', [room_id, req.orgId]);
   const room = rooms[0];
   if (!room) return res.status(400).json({ error: '房间不存在' });
   if (room.status === 'rented') return res.status(400).json({ error: '该房间已出租' });
@@ -1246,19 +1353,30 @@ router.post('/contracts', auth, h(async (req, res) => {
     `INSERT INTO contracts (org_id, contract_no, room_id, tenant_id, start_date, end_date, rent, deposit,
         pay_cycle, sign_date, status, remark)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)`,
-    [req.orgId, contract_no, Number(B.room_id), Number(B.tenant_id), B.start_date, B.end_date,
-     Number(B.rent) || 0, Number(B.deposit) || 0, Number(B.pay_cycle) || 1, B.sign_date || today(), B.remark || '']);
+    [req.orgId, contract_no, room_id, tenant_id, start_date, end_date,
+     rent, deposit, pay_cycle, sign_date || today(), remark || '']);
   await pool.query("UPDATE rooms SET status = 'rented' WHERE id = ? AND org_id = ?", [room.id, req.orgId]);
   const [rows] = await pool.query('SELECT * FROM contracts WHERE id = ? AND org_id = ?', [r.insertId, req.orgId]);
   res.json({ ...rows[0], rent: Number(rows[0].rent), deposit: Number(rows[0].deposit) });
 }));
 router.put('/contracts/:id', auth, h(async (req, res) => {
   const B = req.body || {};
+  const v = V(B);
+  const room_id = v.int('room_id', { required: true, min: 1, max: 1e7 });
+  const tenant_id = v.int('tenant_id', { required: true, min: 1, max: 1e7 });
+  const start_date = v.date('start_date', { required: true });
+  const end_date = v.date('end_date', { required: true });
+  const rent = v.num('rent', { required: true, min: 0, max: 1e9 });
+  const deposit = v.num('deposit', { min: 0, max: 1e9, def: 0 });
+  const pay_cycle = v.num('pay_cycle', { min: 0.5, max: 36, def: 1 });
+  const sign_date = v.date('sign_date', { def: today() });
+  const remark = v.str('remark', { max: 500 });
+  v.ok();
   const [r] = await pool.query(
     `UPDATE contracts SET room_id = ?, tenant_id = ?, start_date = ?, end_date = ?, rent = ?,
             deposit = ?, pay_cycle = ?, sign_date = ?, remark = ? WHERE id = ? AND org_id = ?`,
-    [Number(B.room_id), Number(B.tenant_id), B.start_date, B.end_date, Number(B.rent) || 0,
-     Number(B.deposit) || 0, Number(B.pay_cycle) || 1, B.sign_date || today(), B.remark || '',
+    [room_id, tenant_id, start_date, end_date, rent,
+     deposit, pay_cycle, sign_date || today(), remark || '',
      req.params.id, req.orgId]);
   if (!r.affectedRows) return res.status(400).json({ error: '合同不存在' });
   const [rows] = await pool.query('SELECT * FROM contracts WHERE id = ? AND org_id = ?', [req.params.id, req.orgId]);
@@ -1293,18 +1411,26 @@ router.get('/orders', auth, h(async (req, res) => {
 }));
 router.post('/orders', auth, h(async (req, res) => {
   const B = req.body || {};
-  const [rooms] = await pool.query('SELECT * FROM rooms WHERE id = ? AND org_id = ?', [Number(B.room_id), req.orgId]);
+  const v = V(B);
+  const room_id = v.int('room_id', { required: true, min: 1, max: 1e7 });
+  const guest_id = v.int('guest_id', { required: true, min: 1, max: 1e7 });
+  const check_in_date = v.date('check_in_date', { required: true });
+  const check_out_date = v.date('check_out_date', { required: true });
+  const day_price = v.num('day_price', { required: true, min: 0, max: 1e9 });
+  const deposit = v.num('deposit', { min: 0, max: 1e9, def: 0 });
+  const remark = v.str('remark', { max: 500 });
+  v.ok();
+  const [rooms] = await pool.query('SELECT * FROM rooms WHERE id = ? AND org_id = ?', [room_id, req.orgId]);
   const room = rooms[0];
   if (!room) return res.status(400).json({ error: '房间不存在' });
-  const days = daysBetween(B.check_in_date, B.check_out_date);
-  const day_price = Number(B.day_price) || 0;
+  const days = daysBetween(check_in_date, check_out_date);
   const total = days * day_price;
   const [r] = await pool.query(
     `INSERT INTO orders (org_id, order_no, room_id, guest_id, check_in_date, check_out_date, days, day_price,
         total, deposit, status, remark, created_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'booked', ?, ?)`,
-    [req.orgId, 'DD' + Date.now().toString().slice(-8), Number(B.room_id), Number(B.guest_id),
-     B.check_in_date, B.check_out_date, days, day_price, total, Number(B.deposit) || 0, B.remark || '', nowStr()]);
+    [req.orgId, 'DD' + Date.now().toString().slice(-8), room_id, guest_id,
+     check_in_date, check_out_date, days, day_price, total, deposit, remark || '', nowStr()]);
   if (room.status === 'vacant') {
     await pool.query("UPDATE rooms SET status = 'booked' WHERE id = ? AND org_id = ?", [room.id, req.orgId]);
   }
@@ -1313,15 +1439,23 @@ router.post('/orders', auth, h(async (req, res) => {
 }));
 router.put('/orders/:id', auth, h(async (req, res) => {
   const B = req.body || {};
+  const v = V(B);
+  const room_id = v.int('room_id', { required: true, min: 1, max: 1e7 });
+  const guest_id = v.int('guest_id', { required: true, min: 1, max: 1e7 });
+  const check_in_date = v.date('check_in_date', { required: true });
+  const check_out_date = v.date('check_out_date', { required: true });
+  const day_price = v.num('day_price', { required: true, min: 0, max: 1e9 });
+  const deposit = v.num('deposit', { min: 0, max: 1e9, def: 0 });
+  const remark = v.str('remark', { max: 500 });
+  v.ok();
   const [os] = await pool.query('SELECT * FROM orders WHERE id = ? AND org_id = ?', [req.params.id, req.orgId]);
   if (!os.length) return res.status(400).json({ error: '订单不存在' });
-  const days = daysBetween(B.check_in_date, B.check_out_date);
-  const day_price = Number(B.day_price) || 0;
+  const days = daysBetween(check_in_date, check_out_date);
   await pool.query(
     `UPDATE orders SET room_id = ?, guest_id = ?, check_in_date = ?, check_out_date = ?, days = ?,
             day_price = ?, total = ?, deposit = ?, remark = ? WHERE id = ? AND org_id = ?`,
-    [Number(B.room_id), Number(B.guest_id), B.check_in_date, B.check_out_date, days, day_price,
-     days * day_price, Number(B.deposit) || 0, B.remark || '', req.params.id, req.orgId]);
+    [room_id, guest_id, check_in_date, check_out_date, days, day_price,
+     days * day_price, deposit, remark || '', req.params.id, req.orgId]);
   const [rows] = await pool.query('SELECT * FROM orders WHERE id = ? AND org_id = ?', [req.params.id, req.orgId]);
   res.json(normOrder(rows[0]));
 }));
@@ -1397,8 +1531,11 @@ router.get('/bills', auth, h(async (req, res) => {
 /* 账单生成（按系统） */
 router.post('/bills/generate', auth, h(async (req, res) => {
   const mode = req.mode, f = FEATURES[mode];
-  const kind = (req.body && req.body.kind) || 'all';
-  const roomId = (req.body && req.body.room_id) ? Number(req.body.room_id) : null;
+  const v = V(req.body || {});
+  const kind = v.str('kind', { enum: ['all', 'rental', 'hotel', 'property', 'utility', 'network'], def: 'all' });
+  const room_id = v.int('room_id', { min: 1, max: 1e7 });
+  v.ok();
+  const roomId = room_id;
   const oid = req.orgId;
   const t = today(), ym = t.slice(0, 7);
   const start = monthStart(t), end = addDays(addMonths(start, 1), -1);
@@ -1491,7 +1628,7 @@ router.post('/bills/generate', auth, h(async (req, res) => {
           return `【${l.line_name}】${segTxt}`;
         }).join(' ');
         const tenant = mode === 'property' ? r.owner_id : await rentedTenant(conn, r.id, oid);
-        const [st0] = await conn.query('SELECT currency, rate FROM settings WHERE org_id = ?', [oid]);
+        const [st0] = await shared.query('SELECT currency, rate FROM settings WHERE org_id = ?', [oid]);
         const isUsd = st0[0] && st0[0].currency === 'USD';
         const rate0 = st0[0] && Number(st0[0].rate) > 0 ? Number(st0[0].rate) : 7.2;
         const unit = calc.lines[0] ? calc.lines[0].price : 0;
@@ -1528,30 +1665,44 @@ async function rentedTenant(conn, roomId, oid) {
 router.post('/bills', auth, h(async (req, res) => {
   const B = req.body || {};
   const allowed = { rental: ['rental', 'utility', 'network'], hotel: ['hotel'], property: ['property', 'network'] };
-  const list = allowed[req.mode];
-  const source = list.includes(B.source) ? B.source : list[0];
+  const v = V(B);
+  const source = v.str('source', { enum: allowed[req.mode], def: allowed[req.mode][0] });
+  const room_id = v.int('room_id', { min: 1, max: 1e7 });
+  const tenant_id = v.int('tenant_id', { min: 1, max: 1e7 });
+  const contract_id = v.int('contract_id', { min: 1, max: 1e7 });
+  const order_id = v.int('order_id', { min: 1, max: 1e7 });
+  const period_start = v.date('period_start', { required: true });
+  const period_end = v.date('period_end', { required: true });
+  const due_date = v.date('due_date', { def: today() });
+  const amount = v.num('amount', { required: true, min: 0, max: 1e12 });
+  const remark = v.str('remark', { max: 500 });
+  v.ok();
   const [r] = await pool.query(
     `INSERT INTO bills (org_id, source, room_id, tenant_id, contract_id, order_id, period_start, period_end,
         due_date, amount, paid_amount, status, remark)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'unpaid', ?)`,
-    [req.orgId, source, B.room_id ? Number(B.room_id) : null, B.tenant_id ? Number(B.tenant_id) : null,
-     B.contract_id ? Number(B.contract_id) : null, B.order_id ? Number(B.order_id) : null,
-     B.period_start, B.period_end, B.due_date || today(), Number(B.amount) || 0, B.remark || '手动添加']);
+    [req.orgId, source, room_id || null, tenant_id || null,
+     contract_id || null, order_id || null,
+     period_start, period_end, due_date || today(), amount, remark || '手动添加']);
   const [rows] = await pool.query('SELECT * FROM bills WHERE id = ? AND org_id = ?', [r.insertId, req.orgId]);
   res.json(normBill(rows[0]));
 }));
 router.post('/bills/:id/pay', auth, h(async (req, res) => {
+  const B = req.body || {};
+  const v = V(B);
+  const amt = v.num('amount', { required: true, min: 0, max: 1e12 });
+  const pay_date = v.date('pay_date', { def: today() });
+  const pay_method = v.str('pay_method', { max: 30 });
+  v.ok();
   const [rows] = await pool.query('SELECT * FROM bills WHERE id = ? AND org_id = ?', [req.params.id, req.orgId]);
   const b = rows[0];
   if (!b) return res.status(400).json({ error: '账单不存在' });
-  const amt = Number(req.body.amount) || 0;
   const paid = Math.min(Number(b.amount), Number(b.paid_amount) + amt);
   const status = paid >= Number(b.amount) ? 'paid' : (paid > 0 ? 'partial' : 'unpaid');
-  const pay_date = req.body.pay_date || today();
   await pool.query(
     `UPDATE bills SET paid_amount = ?, status = ?, pay_method = COALESCE(?, pay_method), pay_date = ?
       WHERE id = ? AND org_id = ?`,
-    [paid, status, req.body.pay_method || null, pay_date, b.id, req.orgId]);
+    [paid, status, pay_method || null, pay_date, b.id, req.orgId]);
   const [after] = await pool.query('SELECT * FROM bills WHERE id = ? AND org_id = ?', [b.id, req.orgId]);
   res.json(normBill(after[0]));
 }));
@@ -1603,12 +1754,23 @@ const normMeter = m => ({ ...m,
   elec_usage: Number(m.elec_usage), elec_fee: Number(m.elec_fee) });
 router.post('/meters', auth, h(async (req, res) => {
   const B = req.body || {};
-  const [rooms] = await pool.query('SELECT * FROM rooms WHERE id = ? AND org_id = ?', [Number(B.room_id), req.orgId]);
+  const v = V(B);
+  const room_id = v.int('room_id', { required: true, min: 1, max: 1e7 });
+  const month = v.date('month', { required: true });
+  const water_prev = v.num('water_prev', { min: 0, max: 1e12, def: 0 });
+  const water_curr = v.num('water_curr', { min: 0, max: 1e12, def: 0 });
+  const elec_prev = v.num('elec_prev', { min: 0, max: 1e12, def: 0 });
+  const elec_curr = v.num('elec_curr', { min: 0, max: 1e12, def: 0 });
+  const remark = v.str('remark', { max: 500 });
+  v.ok();
+  B.room_id = room_id; B.month = month; B.water_prev = water_prev; B.water_curr = water_curr;
+  B.elec_prev = elec_prev; B.elec_curr = elec_curr; B.remark = remark;
+  const [rooms] = await pool.query('SELECT * FROM rooms WHERE id = ? AND org_id = ?', [room_id, req.orgId]);
   const room = rooms[0];
   if (!room) return res.status(400).json({ error: '房间不存在' });
   const [[{ c }]] = await pool.query(
     'SELECT COUNT(*) AS c FROM meters WHERE room_id = ? AND org_id = ? AND month = ?',
-    [Number(B.room_id), req.orgId, B.month]);
+    [room_id, req.orgId, month]);
   if (Number(c) > 0) return res.status(400).json({ error: '该房间本月已存在抄表记录，请直接编辑。' });
   const d = await meterPayload(B, room);
   const [r] = await pool.query(
@@ -1622,12 +1784,23 @@ router.post('/meters', auth, h(async (req, res) => {
 }));
 router.put('/meters/:id', auth, h(async (req, res) => {
   const B = req.body || {};
-  const [rooms] = await pool.query('SELECT * FROM rooms WHERE id = ? AND org_id = ?', [Number(B.room_id), req.orgId]);
+  const v = V(B);
+  const room_id = v.int('room_id', { required: true, min: 1, max: 1e7 });
+  const month = v.date('month', { required: true });
+  const water_prev = v.num('water_prev', { min: 0, max: 1e12, def: 0 });
+  const water_curr = v.num('water_curr', { min: 0, max: 1e12, def: 0 });
+  const elec_prev = v.num('elec_prev', { min: 0, max: 1e12, def: 0 });
+  const elec_curr = v.num('elec_curr', { min: 0, max: 1e12, def: 0 });
+  const remark = v.str('remark', { max: 500 });
+  v.ok();
+  B.room_id = room_id; B.month = month; B.water_prev = water_prev; B.water_curr = water_curr;
+  B.elec_prev = elec_prev; B.elec_curr = elec_curr; B.remark = remark;
+  const [rooms] = await pool.query('SELECT * FROM rooms WHERE id = ? AND org_id = ?', [room_id, req.orgId]);
   const room = rooms[0];
   if (!room) return res.status(400).json({ error: '房间不存在' });
   const [[{ c }]] = await pool.query(
     'SELECT COUNT(*) AS c FROM meters WHERE room_id = ? AND org_id = ? AND month = ? AND id <> ?',
-    [Number(B.room_id), req.orgId, B.month, req.params.id]);
+    [room_id, req.orgId, month, req.params.id]);
   if (Number(c) > 0) return res.status(400).json({ error: '该房间本月已存在抄表记录，请直接编辑。' });
   const d = await meterPayload(B, room);
   const [r] = await pool.query(
@@ -1663,28 +1836,35 @@ router.get('/netLines', auth, h(async (req, res) => {
 }));
 router.post('/netLines', auth, h(async (req, res) => {
   const B = req.body || {};
-  const roomId = Number(B.room_id);
-  const [rooms] = await pool.query('SELECT * FROM rooms WHERE id = ? AND org_id = ?', [roomId, req.orgId]);
+  const v = V(B);
+  const room_id = v.int('room_id', { required: true, min: 1, max: 1e7 });
+  const bandwidth = v.num('bandwidth', { required: true, min: 1, max: 1e6 });
+  const line_name = v.str('line_name', { max: 50, def: '默认线路' });
+  const start_date = v.date('start_date', { def: today() });
+  const remark = v.str('remark', { max: 500 });
+  v.ok();
+  const [rooms] = await pool.query('SELECT * FROM rooms WHERE id = ? AND org_id = ?', [room_id, req.orgId]);
   if (!rooms[0]) return res.status(400).json({ error: '房间不存在' });
-  const bw = Number(B.bandwidth);
-  if (!Number.isFinite(bw) || bw <= 0) return res.status(400).json({ error: '请填写有效的带宽兆数' });
-  const startDate = B.start_date || today();
   const [r] = await pool.query(
     `INSERT INTO room_net_lines (org_id, room_id, line_name, bandwidth, start_date, status, stop_date, remark, created_at)
      VALUES (?, ?, ?, ?, ?, 'active', NULL, ?, ?)`,
-    [req.orgId, roomId, B.line_name || '默认线路', bw, startDate, B.remark || '', nowStr()]);
+    [req.orgId, room_id, line_name || '默认线路', bandwidth, start_date, remark || '', nowStr()]);
   const [rows] = await pool.query('SELECT * FROM room_net_lines WHERE id = ? AND org_id = ?', [r.insertId, req.orgId]);
   res.json(rows[0]);
 }));
 router.put('/netLines/:id', auth, h(async (req, res) => {
   const B = req.body || {};
+  const v = V(B);
+  const line_name = v.str('line_name', { max: 50 });
+  const remark = v.str('remark', { max: 500 });
+  v.ok();
   const [rows] = await pool.query('SELECT * FROM room_net_lines WHERE id = ? AND org_id = ?', [req.params.id, req.orgId]);
   if (!rows[0]) return res.status(400).json({ error: '线路不存在' });
   const line = rows[0];
   const sets = [];
   const params = [];
-  if (B.line_name !== undefined) { sets.push('line_name = ?'); params.push(B.line_name || line.line_name); }
-  if (B.remark !== undefined) { sets.push('remark = ?'); params.push(B.remark || ''); }
+  if (line_name !== null) { sets.push('line_name = ?'); params.push(line_name || line.line_name); }
+  if (remark !== null) { sets.push('remark = ?'); params.push(remark || ''); }
   if (sets.length) {
     await pool.query(`UPDATE room_net_lines SET ${sets.join(', ')} WHERE id = ? AND org_id = ?`,
       [...params, req.params.id, req.orgId]);
@@ -1693,11 +1873,13 @@ router.put('/netLines/:id', auth, h(async (req, res) => {
   res.json(after[0]);
 }));
 router.post('/netLines/:id/stop', auth, h(async (req, res) => {
+  const v = V(req.body || {});
+  const stopDate = v.date('stop_date', { def: today() });
+  v.ok();
   const [rows] = await pool.query('SELECT * FROM room_net_lines WHERE id = ? AND org_id = ?', [req.params.id, req.orgId]);
   const line = rows[0];
   if (!line) return res.status(400).json({ error: '线路不存在' });
   if (line.status === 'stopped') return res.status(400).json({ error: '线路已停用' });
-  const stopDate = req.body.stop_date || today();
   if (line.start_date && stopDate < String(line.start_date)) {
     return res.status(400).json({ error: '停用日期不能早于开通日' });
   }
@@ -1708,11 +1890,13 @@ router.post('/netLines/:id/stop', auth, h(async (req, res) => {
   res.json(after[0]);
 }));
 router.post('/netLines/:id/start', auth, h(async (req, res) => {
+  const v = V(req.body || {});
+  const startDate = v.date('start_date', { def: today() });
+  v.ok();
   const [rows] = await pool.query('SELECT * FROM room_net_lines WHERE id = ? AND org_id = ?', [req.params.id, req.orgId]);
   const line = rows[0];
   if (!line) return res.status(400).json({ error: '线路不存在' });
   if (line.status === 'active') return res.status(400).json({ error: '线路已启用' });
-  const startDate = req.body.start_date || today();
   await pool.query(
     "UPDATE room_net_lines SET status = 'active', start_date = ?, stop_date = NULL WHERE id = ? AND org_id = ?",
     [startDate, req.params.id, req.orgId]);
@@ -1744,20 +1928,22 @@ router.get('/netChanges', auth, h(async (req, res) => {
 }));
 router.post('/netChanges', auth, h(async (req, res) => {
   const B = req.body || {};
-  const roomId = Number(B.room_id);
-  const lineId = Number(B.line_id);
-  if (!Number.isFinite(lineId)) return res.status(400).json({ error: '请选择宽带线路' });
+  const v = V(B);
+  const roomId = v.int('room_id', { required: true, min: 1, max: 1e7 });
+  const lineId = v.int('line_id', { required: true, min: 1, max: 1e7 });
+  const new_bandwidth = v.num('new_bandwidth', { required: true, min: 0, max: 1e6 });
+  const change_date = v.date('change_date', { def: today() });
+  const remark = v.str('remark', { max: 500 });
+  v.ok();
   const [lines] = await pool.query(
     'SELECT * FROM room_net_lines WHERE id = ? AND org_id = ? AND room_id = ?', [lineId, req.orgId, roomId]);
   const line = lines[0];
   if (!line) return res.status(400).json({ error: '宽带线路不存在' });
   if (line.status !== 'active') return res.status(400).json({ error: '该线路已停用，不能变更带宽' });
   const oldBw = Number(line.bandwidth) || 0;
-  const newBw = Number(B.new_bandwidth);
-  if (!Number.isFinite(newBw) || newBw < 0) return res.status(400).json({ error: '请填写有效的带宽兆数' });
+  const newBw = new_bandwidth;
   if (newBw === oldBw) return res.status(400).json({ error: '带宽未变化' });
-  const changeDate = B.change_date || today();
-  if (line.start_date && changeDate < String(line.start_date)) {
+  if (line.start_date && change_date < String(line.start_date)) {
     return res.status(400).json({ error: '变更日期不能早于线路开通日' });
   }
   const change_type = newBw > oldBw ? 'add' : 'reduce';
@@ -1765,7 +1951,7 @@ router.post('/netChanges', auth, h(async (req, res) => {
     `INSERT INTO net_changes (org_id, room_id, line_id, change_date, change_type, old_bandwidth, new_bandwidth,
         remark, created_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [req.orgId, roomId, lineId, changeDate, change_type, oldBw, newBw, B.remark || '', nowStr()]);
+    [req.orgId, roomId, lineId, change_date, change_type, oldBw, newBw, remark || '', nowStr()]);
   await pool.query('UPDATE room_net_lines SET bandwidth = ? WHERE id = ? AND org_id = ?',
     [newBw, lineId, req.orgId]);
   const [rows] = await pool.query(
@@ -1803,10 +1989,14 @@ router.post('/netRequests', auth, h(async (req, res) => {
     return res.status(403).json({ error: '仅主管理员或企业管理员可提交申请' });
   }
   const B = req.body || {};
-  const type = ['install', 'add', 'reduce'].includes(B.type) ? B.type : null;
-  if (!type) return res.status(400).json({ error: '申请类型不正确' });
-  const roomId = Number(B.room_id);
-  if (!Number.isFinite(roomId)) return res.status(400).json({ error: '请选择房间' });
+  const v = V(B);
+  const type = v.str('type', { required: true, enum: ['install', 'add', 'reduce'] });
+  const roomId = v.int('room_id', { required: true, min: 1, max: 1e7 });
+  const line_id = v.int('line_id', { min: 1, max: 1e7 });
+  const bandwidth = v.num('bandwidth', { min: 1, max: 1e6 });
+  const delta = v.num('delta', { min: 0.01, max: 1e6 });
+  const reason = v.str('reason', { max: 500 });
+  v.ok();
   /* 企业管理员只能为本企业房产提交申请 */
   const roomSql = req.level === 'company_admin'
     ? 'SELECT id FROM rooms WHERE id = ? AND org_id = ? AND owner_id = ?'
@@ -1814,21 +2004,21 @@ router.post('/netRequests', auth, h(async (req, res) => {
   const roomParams = req.level === 'company_admin' ? [roomId, req.orgId, req.companyId] : [roomId, req.orgId];
   const [[room]] = await pool.query(roomSql, roomParams);
   if (!room) return res.status(403).json({ error: '只能为本企业房产提交宽带申请' });
-  let bandwidth = null, delta = null, lineId = null;
+  let bandwidth2 = null, delta2 = null, lineId = null;
   if (type === 'install') {
-    bandwidth = Number(B.bandwidth);
-    if (!Number.isFinite(bandwidth) || bandwidth <= 0) return res.status(400).json({ error: '请填写有效的报装带宽（兆）' });
+    bandwidth2 = bandwidth;
+    if (bandwidth2 === null) return res.status(400).json({ error: '请填写有效的报装带宽（兆）' });
   } else {
-    lineId = Number(B.line_id);
+    lineId = line_id;
     if (!Number.isFinite(lineId)) return res.status(400).json({ error: '请选择宽带线路' });
     const [lines] = await pool.query(
       'SELECT * FROM room_net_lines WHERE id = ? AND org_id = ? AND room_id = ?', [lineId, req.orgId, roomId]);
     const line = lines[0];
     if (!line) return res.status(400).json({ error: '宽带线路不存在' });
     if (line.status !== 'active') return res.status(400).json({ error: '该线路已停用，不能申请变更' });
-    delta = Number(B.delta);
-    if (!Number.isFinite(delta) || delta <= 0) return res.status(400).json({ error: '请填写有效的增减兆数' });
-    if (type === 'reduce' && (Number(line.bandwidth) || 0) - delta < 0) {
+    delta2 = delta;
+    if (delta2 === null) return res.status(400).json({ error: '请填写有效的增减兆数' });
+    if (type === 'reduce' && (Number(line.bandwidth) || 0) - delta2 < 0) {
       return res.status(400).json({ error: '减兆后带宽不能为负' });
     }
   }
@@ -1836,7 +2026,7 @@ router.post('/netRequests', auth, h(async (req, res) => {
     `INSERT INTO net_requests (org_id, company_id, room_id, type, bandwidth, delta, line_id, reason, status, created_by, created_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
     [req.orgId, req.level === 'company_admin' ? req.companyId : null, roomId, type,
-     bandwidth, delta, lineId, B.reason || '', req.user.real_name || req.user.username, nowStr()]);
+     bandwidth2, delta2, lineId, reason || '', req.user.real_name || req.user.username, nowStr()]);
   const [rows] = await pool.query('SELECT * FROM net_requests WHERE id = ? AND org_id = ?', [r.insertId, req.orgId]);
   res.json(rows[0]);
 }));
@@ -1844,21 +2034,23 @@ router.post('/netRequests', auth, h(async (req, res) => {
 router.put('/netRequests/:id', auth, h(async (req, res) => {
   if (req.level !== 'admin') return res.status(403).json({ error: '仅主管理员可审批申请' });
   const B = req.body || {};
+  const v = V(B);
+  const action = v.str('action', { required: true, enum: ['approve', 'reject'] });
+  const handle_note = v.str('handle_note', { max: 500 });
+  v.ok();
   const [qs] = await pool.query('SELECT * FROM net_requests WHERE id = ? AND org_id = ?', [req.params.id, req.orgId]);
   const q = qs[0];
   if (!q) return res.status(400).json({ error: '申请单不存在' });
   if (q.status !== 'pending') return res.status(400).json({ error: '该申请已处理' });
-  const action = B.action;
+  const note = handle_note || '';
   if (action === 'reject') {
     await pool.query(
       `UPDATE net_requests SET status = 'rejected', handled_by = ?, handle_note = ?, handled_at = ? WHERE id = ?`,
-      [req.user.real_name || req.user.username, B.handle_note || '', nowStr(), req.params.id]);
+      [req.user.real_name || req.user.username, note, nowStr(), req.params.id]);
     return res.json({ ok: true, status: 'rejected' });
   }
-  if (action !== 'approve') return res.status(400).json({ error: '审批动作不正确' });
   const [[room]] = await pool.query('SELECT * FROM rooms WHERE id = ? AND org_id = ?', [q.room_id, req.orgId]);
   if (!room) return res.status(400).json({ error: '房间不存在' });
-  const note = B.handle_note || '';
   if (q.type === 'install') {
     /* 报装：创建启用线路 */
     const [r] = await pool.query(
@@ -1978,25 +2170,33 @@ router.get('/repairs', auth, h(async (req, res) => {
 }));
 router.post('/repairs', auth, h(async (req, res) => {
   const B = req.body || {};
-  if (!B.title) return res.status(400).json({ error: '报修标题不能为空' });
-  if (!B.room_id) return res.status(400).json({ error: '请选择报修房间' });
+  const v = V(B);
+  const room_id = v.int('room_id', { required: true, min: 1, max: 1e7 });
+  const title = v.str('title', { required: true, max: 100 });
+  const content = v.str('content', { max: 1000 });
+  v.ok();
   if (req.level === 'company_admin') {
     const [[rm]] = await pool.query(
       'SELECT id FROM rooms WHERE id = ? AND org_id = ? AND owner_id = ?',
-      [Number(B.room_id), req.orgId, req.companyId]);
+      [room_id, req.orgId, req.companyId]);
     if (!rm) return res.status(403).json({ error: '仅可报修本企业房产' });
   }
   const [r] = await pool.query(
     "INSERT INTO repairs (org_id, room_id, title, content, status, handler, handle_note, created_at) VALUES (?, ?, ?, ?, 'pending', '', '', ?)",
-    [req.orgId, Number(B.room_id), B.title, B.content || '', nowStr()]);
+    [req.orgId, room_id, title, content || '', nowStr()]);
   const [rows] = await pool.query('SELECT * FROM repairs WHERE id = ? AND org_id = ?', [r.insertId, req.orgId]);
   res.json(rows[0]);
 }));
 router.put('/repairs/:id', auth, h(async (req, res) => {
   const B = req.body || {};
+  const v = V(B);
+  const status = v.str('status', { enum: ['pending', 'processing', 'done'], def: 'pending' });
+  const handler = v.str('handler', { max: 50 });
+  const handle_note = v.str('handle_note', { max: 1000 });
+  v.ok();
   const [r] = await pool.query(
     'UPDATE repairs SET status = ?, handler = ?, handle_note = ? WHERE id = ? AND org_id = ?',
-    [B.status || 'pending', B.handler || '', B.handle_note || '', req.params.id, req.orgId]);
+    [status || 'pending', handler || '', handle_note || '', req.params.id, req.orgId]);
   if (!r.affectedRows) return res.status(400).json({ error: '报修记录不存在' });
   const [rows] = await pool.query('SELECT * FROM repairs WHERE id = ? AND org_id = ?', [req.params.id, req.orgId]);
   res.json(rows[0]);
@@ -2025,21 +2225,31 @@ router.get('/complaints', auth, h(async (req, res) => {
 }));
 router.post('/complaints', auth, h(async (req, res) => {
   const B = req.body || {};
-  if (!B.title) return res.status(400).json({ error: '标题不能为空' });
+  const v = V(B);
+  const room_id = v.int('room_id', { min: 1, max: 1e7 });
+  const owner_id = v.int('owner_id', { min: 1, max: 1e7 });
+  const type = v.str('type', { enum: ['投诉', '建议', '咨询', '其他'], def: '投诉' });
+  const title = v.str('title', { required: true, max: 100 });
+  const content = v.str('content', { max: 1000 });
+  v.ok();
   const [r] = await pool.query(
     `INSERT INTO complaints (org_id, room_id, owner_id, type, title, content, status, handler, handle_note, created_at)
      VALUES (?, ?, ?, ?, ?, ?, 'pending', '', '', ?)`,
-    [req.orgId, B.room_id ? Number(B.room_id) : 0, B.owner_id ? Number(B.owner_id) : null,
-     ['投诉', '建议', '咨询', '其他'].includes(B.type) ? B.type : '投诉',
-     B.title, B.content || '', nowStr()]);
+    [req.orgId, room_id || 0, owner_id || null,
+     type || '投诉', title, content || '', nowStr()]);
   const [rows] = await pool.query('SELECT * FROM complaints WHERE id = ? AND org_id = ?', [r.insertId, req.orgId]);
   res.json(rows[0]);
 }));
 router.put('/complaints/:id', auth, h(async (req, res) => {
   const B = req.body || {};
+  const v = V(B);
+  const status = v.str('status', { enum: ['pending', 'processing', 'done'], def: 'pending' });
+  const handler = v.str('handler', { max: 50 });
+  const handle_note = v.str('handle_note', { max: 1000 });
+  v.ok();
   const [r] = await pool.query(
     'UPDATE complaints SET status = ?, handler = ?, handle_note = ? WHERE id = ? AND org_id = ?',
-    [B.status || 'pending', B.handler || '', B.handle_note || '', req.params.id, req.orgId]);
+    [status || 'pending', handler || '', handle_note || '', req.params.id, req.orgId]);
   if (!r.affectedRows) return res.status(400).json({ error: '记录不存在' });
   const [rows] = await pool.query('SELECT * FROM complaints WHERE id = ? AND org_id = ?', [req.params.id, req.orgId]);
   res.json(rows[0]);
@@ -2083,19 +2293,21 @@ router.get('/roles', authMode, adminLevel, h(async (req, res) => {
 }));
 router.post('/roles', authMode, h(async (req, res) => {
   const B = req.body || {};
-  const code = String(B.code || '').trim();
-  const name = String(B.name || '').trim();
-  if (!code || !name) return res.status(400).json({ error: '角色编码与名称不能为空' });
-  if (!/^[a-zA-Z][a-zA-Z0-9_]{0,29}$/.test(code)) {
-    return res.status(400).json({ error: '角色编码需以字母开头，仅含字母/数字/下划线（≤30位）' });
-  }
+  const v = V(B);
+  const code = v.str('code', { required: true, max: 30, pattern: /^[a-zA-Z][a-zA-Z0-9_]{0,29}$/ });
+  const name = v.str('name', { required: true, max: 50 });
+  const description = v.str('description', { max: 200 });
+  v.ok();
+  const pages = v.arr('pages', { max: 30, itemMax: 30 });
+  const ops = v.arr('ops', { max: 60, itemMax: 40 });
+  v.ok();
   if (req.level === 'super') {
     const level = ['super', 'admin', 'staff'].includes(B.level) ? B.level : 'staff';
     const [[dup]] = await shared.query('SELECT COUNT(*) AS c FROM roles WHERE org_id IS NULL AND code = ?', [code]);
     if (Number(dup.c) > 0) return res.status(400).json({ error: '角色编码已存在' });
     const [r] = await shared.query(
       'INSERT INTO roles (org_id, code, name, description, level) VALUES (NULL, ?, ?, ?, ?)',
-      [code, name, String(B.description || ''), level]);
+      [code, name, description || '', level]);
     const [rows] = await shared.query('SELECT * FROM roles WHERE id = ?', [r.insertId]);
     return res.json({ ...rows[0], pages: [] });
   }
@@ -2105,15 +2317,23 @@ router.post('/roles', authMode, h(async (req, res) => {
   if (Number(dup.c) > 0) return res.status(400).json({ error: '角色编码已存在' });
   const [r] = await shared.query(
     'INSERT INTO roles (org_id, code, name, description, level) VALUES (?, ?, ?, ?, "staff")',
-    [orgId, code, name, String(B.description || '')]);
-  await setRolePerms(r.insertId, B.pages, B.ops);
+    [orgId, code, name, description || '']);
+  await setRolePerms(r.insertId, pages, ops);
   const [rows] = await shared.query('SELECT * FROM roles WHERE id = ?', [r.insertId]);
   res.json({ ...rows[0],
-    pages: Array.isArray(B.pages) ? [...new Set(B.pages)] : [],
-    ops: Array.isArray(B.ops) ? [...new Set(B.ops)] : [] });
+    pages: [...new Set(pages)],
+    ops: [...new Set(ops)] });
 }));
 router.put('/roles/:id', authMode, h(async (req, res) => {
   const B = req.body || {};
+  const v = V(B);
+  const name = v.str('name', { required: true, max: 50 });
+  const code = v.str('code', { max: 30, pattern: /^[a-zA-Z][a-zA-Z0-9_]{0,29}$/ });
+  const description = v.str('description', { max: 200 });
+  v.ok();
+  const pages = v.arr('pages', { max: 30, itemMax: 30 });
+  const ops = v.arr('ops', { max: 60, itemMax: 40 });
+  v.ok();
   const [rs] = await shared.query('SELECT * FROM roles WHERE id = ?', [req.params.id]);
   if (!rs.length) return res.status(400).json({ error: '角色不存在' });
   const role = rs[0];
@@ -2121,25 +2341,20 @@ router.put('/roles/:id', authMode, h(async (req, res) => {
   if (req.level !== 'super' && role.org_id !== req.orgId) {
     return res.status(403).json({ error: '只能管理本系统角色' });
   }
-  const name = String(B.name || '').trim();
   if (!name) return res.status(400).json({ error: '角色名称不能为空' });
   if (Number(role.is_system) || (req.level !== 'super' && role.org_id === null)) {
     await shared.query('UPDATE roles SET name = ?, description = ? WHERE id = ?',
-      [name, String(B.description || ''), req.params.id]);
+      [name, description || '', req.params.id]);
   } else {
-    const code = String(B.code || '').trim();
     if (!code) return res.status(400).json({ error: '角色编码不能为空' });
-    if (!/^[a-zA-Z][a-zA-Z0-9_]{0,29}$/.test(code)) {
-      return res.status(400).json({ error: '角色编码需以字母开头，仅含字母/数字/下划线（≤30位）' });
-    }
     const [[dup]] = await shared.query(
       'SELECT COUNT(*) AS c FROM roles WHERE code = ? AND org_id <=> ? AND id <> ?',
       [code, role.org_id, req.params.id]);
     if (Number(dup.c) > 0) return res.status(400).json({ error: '角色编码已存在' });
     await shared.query('UPDATE roles SET code = ?, name = ?, description = ? WHERE id = ?',
-      [code, name, String(B.description || ''), req.params.id]);
+      [code, name, description || '', req.params.id]);
     /* 自建角色可配置页面与操作权限（内置/全局角色不设） */
-    if (role.org_id !== null) await setRolePerms(req.params.id, B.pages, B.ops);
+    if (role.org_id !== null) await setRolePerms(req.params.id, pages, ops);
   }
   const [rows] = await shared.query('SELECT * FROM roles WHERE id = ?', [req.params.id]);
   const rp = role.org_id !== null && !Number(role.is_system)
@@ -2193,19 +2408,24 @@ router.get('/users', authMode, orgAdminOnly, h(async (req, res) => {
 }));
 router.post('/users', authMode, orgAdminOnly, h(async (req, res) => {
   const B = req.body || {};
-  if (!B.username || !B.password) return res.status(400).json({ error: '用户名与密码不能为空' });
-  const role = String(B.role || 'staff');
+  const v = V(B);
+  const username = v.str('username', { required: true, max: 50, pattern: /^[A-Za-z0-9_@.\-]+$/ });
+  const password = v.str('password', { required: true, max: 100, clean: false });
+  const real_name = v.str('real_name', { max: 50 });
+  const role = v.str('role', { required: true, max: 30, pattern: /^[a-zA-Z][a-zA-Z0-9_]*$/ });
+  v.ok();
+  if (password.length < 6) return res.status(400).json({ error: '密码至少 6 位' });
   const [meta] = await shared.query(
     'SELECT * FROM roles WHERE code = ? AND (org_id = ? OR (org_id IS NULL AND level = "staff")) LIMIT 1',
     [role, req.orgId]);
   if (!meta.length) return res.status(400).json({ error: '角色不存在' });
   /* 账号名同系统内唯一（跨系统/跨主体可重名，按系统独立运营） */
   const [[dup]] = await shared.query(
-    'SELECT COUNT(*) AS c FROM users WHERE mode = ? AND username = ?', [req.mode, B.username]);
+    'SELECT COUNT(*) AS c FROM users WHERE mode = ? AND username = ?', [req.mode, username]);
   if (Number(dup.c) > 0) return res.status(400).json({ error: '该用户名在本系统已存在' });
   const [ins] = await shared.query(
     'INSERT INTO users (username, password, real_name, role, mode, org_id) VALUES (?, ?, ?, ?, ?, ?)',
-    [B.username, hashPassword(B.password), B.real_name || '', role, req.mode, req.orgId]);
+    [username, hashPassword(password), real_name || '', role, req.mode, req.orgId]);
   const [rows] = await shared.query(
     `SELECT u.id, u.username, u.real_name, u.role, u.mode, u.org_id,
             COALESCE(rc.name, rb.name) AS role_name
@@ -2217,21 +2437,26 @@ router.post('/users', authMode, orgAdminOnly, h(async (req, res) => {
 }));
 router.put('/users/:id', authMode, orgAdminOnly, h(async (req, res) => {
   const B = req.body || {};
+  const v = V(B);
+  const username = v.str('username', { max: 50, pattern: /^[A-Za-z0-9_@.\-]+$/ });
+  const password = v.str('password', { max: 100, clean: false });
+  const real_name = v.str('real_name', { max: 50 });
+  const role = v.str('role', { max: 30, pattern: /^[a-zA-Z][a-zA-Z0-9_]*$/, def: 'staff' });
+  v.ok();
   const [us] = await shared.query('SELECT * FROM users WHERE id = ?', [req.params.id]);
   if (!us.length) return res.status(400).json({ error: '用户不存在' });
   const target = us[0];
   if (target.org_id !== req.orgId || target.role === 'admin') {
     return res.status(403).json({ error: '只能管理本系统员工' });
   }
-  const role = String(B.role || 'staff');
   const [meta] = await shared.query(
     'SELECT * FROM roles WHERE code = ? AND (org_id = ? OR (org_id IS NULL AND level = "staff")) LIMIT 1',
     [role, req.orgId]);
   if (!meta.length) return res.status(400).json({ error: '角色不存在' });
   await shared.query('UPDATE users SET real_name = ?, role = ? WHERE id = ?',
-    [B.real_name || '', role, req.params.id]);
-  if (B.password) {
-    await shared.query('UPDATE users SET password = ? WHERE id = ?', [hashPassword(B.password), req.params.id]);
+    [real_name || '', role, req.params.id]);
+  if (password) {
+    await shared.query('UPDATE users SET password = ? WHERE id = ?', [hashPassword(password), req.params.id]);
   }
   const [rows] = await shared.query('SELECT * FROM users WHERE id = ?', [req.params.id]);
   res.json(rows[0]);

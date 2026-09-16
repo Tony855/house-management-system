@@ -28,8 +28,14 @@ async function call(token, method, path, body) {
   try { json = text ? JSON.parse(text) : null; } catch { json = text; }
   return { status: res.status, body: json };
 }
+const sleep = (ms) => new Promise(res => setTimeout(res, ms));
 const login = async (username, password, mode) => {
-  const r = await call(null, 'POST', '/login', { username, password, ...(mode ? { mode } : {}) });
+  let r = await call(null, 'POST', '/login', { username, password, ...(mode ? { mode } : {}) });
+  /* 尊重登录限流：命中 429 时等窗口过后重试一次 */
+  if (r.status === 429) {
+    await sleep(61000);
+    r = await call(null, 'POST', '/login', { username, password, ...(mode ? { mode } : {}) });
+  }
   return r;
 };
 
@@ -516,7 +522,29 @@ const addDays = (n) => { const d = new Date(); d.setDate(d.getDate() + n); retur
     r = await call(PROP, 'DELETE', '/roles/' + caRole.id);
     check('清理企业上报角色(账号已级联删除)', r.status === 200 && r.body.ok, JSON.stringify(r.body));
 
-    console.log('== 7. 员工页面权限 ==');
+    console.log('== 7. 数据安全验证 ==');
+    /* 后端统一校验：超长字段 400 */
+    r = await call(RENT, 'POST', '/buildings', { name: 'X'.repeat(51), address: 'a' });
+    check('超长楼栋名被拒 400', r.status === 400, r.status + ' ' + JSON.stringify(r.body));
+    /* XSS 标签剥离后入库 */
+    r = await call(RENT, 'POST', '/buildings', { name: '<script>alert(1)</script>安全楼', address: 'x' });
+    check('XSS 标签被剥离后入库', r.status === 200 && !String(r.body.name).includes('<script'), JSON.stringify(r.body));
+    const safeBld = r.body.id;
+    r = await call(RENT, 'DELETE', '/buildings/' + safeBld);
+    check('清理安全楼栋', r.status === 200, r.status + '');
+    /* 负数金额 400 */
+    r = await call(RENT, 'POST', '/bills', { amount: -5, period_start: '2026-01-01', period_end: '2026-01-31' });
+    check('负数账单金额被拒 400', r.status === 400, r.status + ' ' + JSON.stringify(r.body));
+    /* 超范围汇率 400 */
+    r = await call(RENT, 'PUT', '/settings', { rate: 99999999 });
+    check('超范围汇率被拒 400', r.status === 400, r.status + ' ' + JSON.stringify(r.body));
+    /* 非法枚举 / 超长标题 400（投诉） */
+    r = await call(PROP, 'POST', '/complaints', { type: '<script>', title: 't' });
+    check('非法投诉类型被拒 400', r.status === 400, r.status + ' ' + JSON.stringify(r.body));
+    r = await call(PROP, 'POST', '/complaints', { type: '投诉', title: 'X'.repeat(101) });
+    check('超长投诉标题被拒 400', r.status === 400, r.status + ' ' + JSON.stringify(r.body));
+
+    console.log('== 8. 员工页面权限 ==');
     /* 新模型：员工页面权限全部来自角色；建临时角色+员工验证 */
     r = await call(RENT, 'POST', '/roles', { code: 'pg' + ts, name: '看房', pages: ['rooms'] });
     check('建临时查看角色(rooms)', r.status === 200 && r.body.pages.includes('rooms'), JSON.stringify(r.body));
@@ -536,7 +564,7 @@ const addDays = (n) => { const d = new Date(); d.setDate(d.getDate() + n); retur
     r = await call(RENT, 'DELETE', '/roles/' + pgRoleId);
     check('清理临时角色', r.status === 200 && r.body.ok, '');
 
-    console.log('== 8. 级联删除主体 ==');
+    console.log('== 9. 级联删除主体 ==');
     for (const id of createdOrgs) {
       r = await call(SUPER, 'DELETE', '/orgs/' + id);
       check('级联删除主体 ' + id, r.status === 200 && r.body.ok, JSON.stringify(r.body));
