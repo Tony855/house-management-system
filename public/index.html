@@ -187,6 +187,12 @@ async function api(path, method = 'GET', data){
   return body;
 }
 
+/* 安全请求：加载失败时明确弹窗提示并返回 null（避免"点击无反应"式静默失败） */
+async function safeApi(path, method, data){
+  try { return await api(path, method, data); }
+  catch(e){ alert(e.message); return null; }
+}
+
 /* ==================================================================
  *  6. 通用 UI 组件
  * ================================================================== */
@@ -973,8 +979,8 @@ async function renderDashboard(){
 }
 
 async function finishClean(roomId){
-  await api('/api/rooms/' + roomId, 'PUT', { status:'vacant' });
-  renderDashboard();
+  try { await api('/api/rooms/' + roomId, 'PUT', { status:'vacant' }); renderDashboard(); }
+  catch(e){ alert(e.message); }
 }
 
 /* ==================================================================
@@ -1108,7 +1114,8 @@ async function editRoom(id){
     owner_id:null, building_id: buildings[0].id
   };
   if (id){
-    const rooms = await api('/api/rooms');
+    const rooms = await safeApi('/api/rooms');
+    if (!rooms) return;
     data = rooms.find(r => r.id === id) || data;
   }
 
@@ -1206,7 +1213,8 @@ async function renderRoomMap(){
 }
 
 async function roomMenu(roomId){
-  const rooms = await api('/api/rooms');
+  const rooms = await safeApi('/api/rooms');
+  if (!rooms) return;
   const r = rooms.find(x => x.id === roomId);
   if (!r) return;
 
@@ -1220,7 +1228,8 @@ async function roomMenu(roomId){
     }});
   }
   if (r.status === 'booked'){
-    const orders = await api('/api/orders?status=booked');
+    const orders = await safeApi('/api/orders?status=booked');
+    if (!orders) return;
     const o = orders.find(o => o.room_id === r.id);
     if (o){
       if (canOp('order_status')){
@@ -1235,7 +1244,8 @@ async function roomMenu(roomId){
     }
   }
   if (r.status === 'rented'){
-    const orders = await api('/api/orders?status=checked_in');
+    const orders = await safeApi('/api/orders?status=checked_in');
+    if (!orders) return;
     const o = orders.find(o => o.room_id === r.id);
     if (o){
       if (canOp('order_status')) items.push({ label:'🚪 办理退房', cls:'btn-outline-warning', fn: async () => {
@@ -1544,7 +1554,8 @@ async function editContract(id, presetRoomId){
   let data = { pay_cycle: 1, sign_date: t, start_date: t,
                end_date: addMonths(t, 12), rent: 0, deposit: 0 };
   if (id){
-    const list = await api('/api/contracts');
+    const list = await safeApi('/api/contracts');
+    if (!list) return;
     data = list.find(x => x.id === id) || data;
   }
   if (presetRoomId) data.room_id = presetRoomId;
@@ -1836,7 +1847,8 @@ async function editBill(){
   const ym = curMonth();
 
   if (mode === 'rental'){
-    const contracts = await api('/api/contracts?status=active');
+    const contracts = await safeApi('/api/contracts?status=active');
+    if (!contracts) return;
     if (!contracts.length){ alert('没有履行中的合同'); return; }
     openForm('手动添加账单', [
       { name:'contract_id', label:'合同', type:'select', required:true,
@@ -1860,7 +1872,8 @@ async function editBill(){
   }
 
   if (mode === 'hotel'){
-    const rooms = await api('/api/rooms');
+    const rooms = await safeApi('/api/rooms');
+    if (!rooms) return;
     if (!rooms.length){ alert('请先创建房间'); return; }
     openForm('手动添加账单', [
       { name:'room_id', label:'房间', type:'select', required:true,
@@ -1878,7 +1891,8 @@ async function editBill(){
   }
 
   /* 物业模式：让用户选择来源 */
-  const rooms = await api('/api/rooms');
+  const rooms = await safeApi('/api/rooms');
+  if (!rooms) return;
   const owned = rooms.filter(r => r.owner_id);
   if (!owned.length){ alert('请先在房产管理中为房屋绑定企业'); return; }
 
@@ -2035,7 +2049,8 @@ async function renderMeters(){
 }
 
 async function editMeter(id){
-  const rooms = await api('/api/rooms');
+  const rooms = await safeApi('/api/rooms');
+  if (!rooms) return;
   const scoped = billableRooms(rooms);
   if (!scoped.length){ alert(curMode() === 'property' ? '请先在房产管理中为房屋绑定企业' : '请先在合同管理中为房间办理出租'); return; }
 
@@ -2332,9 +2347,11 @@ async function renderNetRequests(){
 
 /* 企业管理员：提交宽带申请（上报） */
 async function addNetRequest(){
-  const rooms = await api('/api/rooms');
+  const rooms = await safeApi('/api/rooms');
+  if (!rooms) return;
   if (!rooms.length){ alert('暂无本企业房产，请先由物业主管理员绑定'); return; }
-  const netLines = await api('/api/netLines');
+  const netLines = await safeApi('/api/netLines');
+  if (!netLines) return;
   const roomOpts = rooms.map(r => ({ value: r.id,
     label: `${r.building_name || ''} ${r.room_no}｜${r.owner_name || ''}` }));
   openForm('上报宽带申请', [
@@ -2404,12 +2421,14 @@ async function editNetBill(){
   const pStart = ym + '-01';
   const pEnd = addDays(addMonths(pStart, 1), -1);
 
-  const roomsAll = await api('/api/rooms');
+  const roomsAll = await safeApi('/api/rooms');
+  if (!roomsAll) return;
   const roomById = {};
   roomsAll.forEach(r => { roomById[r.id] = r; });
 
   /* 带宽默认取该房所有启用线路的总带宽 */
-  const netLines = await api('/api/netLines');
+  const netLines = await safeApi('/api/netLines');
+  if (!netLines) return;
   const bwByRoom = {};
   netLines.filter(l => l.status === 'active').forEach(l => {
     bwByRoom[l.room_id] = (bwByRoom[l.room_id] || 0) + (Number(l.bandwidth) || 0);
@@ -2424,7 +2443,8 @@ async function editNetBill(){
     resolveTenant = roomId => (roomById[roomId] || {}).owner_id;
     firstBw = bwByRoom[owned[0].id] || 0;
   } else {
-    const contracts = await api('/api/contracts?status=active');
+    const contracts = await safeApi('/api/contracts?status=active');
+    if (!contracts) return;
     if (!contracts.length){ alert('没有履行中的合同，请先在合同管理为房间办理出租'); return; }
     const tenantByRoom = {};
     contracts.forEach(c => { tenantByRoom[c.room_id] = c.tenant_id; });
@@ -2495,7 +2515,8 @@ async function delRoomNetBill(billId){
 
 /* 宽带线路：加兆 / 减兆（针对具体线路） */
 async function changeBandwidth(roomId, lineId, kind){
-  const lines = await api('/api/netLines?room_id=' + roomId);
+  const lines = await safeApi('/api/netLines?room_id=' + roomId);
+  if (!lines) return;
   const line = lines.find(x => x.id === Number(lineId));
   if (!line){ alert('宽带线路不存在'); return; }
 
@@ -2528,7 +2549,8 @@ async function changeBandwidth(roomId, lineId, kind){
 
 /* 添加一条宽带线路 */
 async function addNetLine(roomId, totalBw){
-  const rooms = await api('/api/rooms');
+  const rooms = await safeApi('/api/rooms');
+  if (!rooms) return;
   const r = rooms.find(x => x.id === roomId);
   if (!r) return;
   openForm(`添加线路 - ${esc(r.building_name || '')} ${esc(r.room_no || '')}`, [
@@ -2549,7 +2571,8 @@ async function addNetLine(roomId, totalBw){
 
 /* 编辑线路名称/备注 */
 async function editNetLine(lineId){
-  const lines = await api('/api/netLines');
+  const lines = await safeApi('/api/netLines');
+  if (!lines) return;
   const line = lines.find(x => x.id === Number(lineId));
   if (!line){ alert('线路不存在'); return; }
   openForm(`编辑线路 - ${esc(line.line_name)}`, [
@@ -2574,7 +2597,8 @@ async function startNetLine(lineId){
 }
 
 async function showNetSegments(roomId, month){
-  const data = await api(`/api/netfee?month=${encodeURIComponent(month)}`);
+  const data = await safeApi(`/api/netfee?month=${encodeURIComponent(month)}`);
+  if (!data) return;
   const r = (data.list || []).find(x => x.room_id === roomId);
   if (!r){ alert('未找到该房间的网费数据'); return; }
 
@@ -2693,7 +2717,8 @@ async function renderRepairs(){
 }
 
 async function editRepair(){
-  const rooms = await api('/api/rooms');
+  const rooms = await safeApi('/api/rooms');
+  if (!rooms) return;
   if (!rooms.length){ alert(ME.level === 'company_admin' ? '暂无本企业房产，请先由物业主管理员绑定' : '请先创建房间'); return; }
   if (ME.level === 'company_admin'){
     /* 企业管理员：报修管理作为统一申请入口（网络维修 / 水电维修 / 其它维修） */
@@ -2810,7 +2835,8 @@ async function renderComplaints(){
 }
 
 async function editComplaint(){
-  const rooms = await api('/api/rooms');
+  const rooms = await safeApi('/api/rooms');
+  if (!rooms) return;
   const owned = rooms.filter(r => r.owner_id);
   if (!owned.length){ alert('请先在房产管理中为房屋绑定企业'); return; }
 
@@ -3078,6 +3104,33 @@ async function editRole(id){
     if (isSys) delete d.ops;
     await api(id ? '/api/roles/' + id : '/api/roles', id ? 'PUT' : 'POST', d);
     modal.hide(); renderRoles();
+  }, (el) => {
+    /* 联动提示：账单操作（手动添加/生成）依赖房产管理页面权限 */
+    const propsCb = el.querySelector('input[name="pages"][value="properties"]');
+    if (!propsCb) return;
+    const needOps = ['bill_add', 'bill_generate'];
+    const labels = {};
+    (OP_DEFS[curMode()] || []).forEach(g => g.items.forEach(([v, l]) => { labels[v] = l; }));
+    const tip = document.createElement('div');
+    tip.className = 'form-text text-warning mt-1';
+    const opsBox = el.querySelector('input[name="ops"]');
+    const box = opsBox ? opsBox.closest('.mb-3') : null;
+    if (!box) return;
+    box.appendChild(tip);
+    const sync = () => {
+      const miss = needOps.filter(op => {
+        const cb = el.querySelector(`input[name="ops"][value="${op}"]`);
+        return cb && cb.checked && !propsCb.checked;
+      });
+      tip.textContent = miss.length
+        ? '提示：勾选「' + miss.map(op => labels[op] || op).join('、') + '」需同时勾选「房产管理」页面权限，员工才能正常使用'
+        : '';
+    };
+    needOps.forEach(op => {
+      const cb = el.querySelector(`input[name="ops"][value="${op}"]`);
+      if (cb) cb.addEventListener('change', sync);
+    });
+    propsCb.addEventListener('change', sync);
   });
 }
 
