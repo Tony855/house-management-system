@@ -232,9 +232,22 @@ const addDays = (n) => { const d = new Date(); d.setDate(d.getDate() + n); retur
     opLogin = await login('op' + 'emp' + ts, 'test123456', 'rental');
     check('改角色权限后员工动态生效', opLogin.status === 200 && opLogin.body.pages.sort().join() === 'meters,rooms', JSON.stringify(opLogin.body.pages));
     r = await call(A, 'PUT', '/users/' + opEmpId, { real_name: '运营员工', role: roleCode, pages: ['bills'] });
-    check('员工个人追加 bills 权限', r.status === 200, '');
+    check('员工接口忽略个人追加权限(不再生效)', r.status === 200, '');
     opLogin = await login('op' + 'emp' + ts, 'test123456', 'rental');
-    check('员工实际权限=角色∪个人(bills,meters,rooms)', opLogin.status === 200 && opLogin.body.pages.sort().join() === 'bills,meters,rooms', JSON.stringify(opLogin.body.pages));
+    check('员工实际权限=仅角色权限(meters,rooms)', opLogin.status === 200 && opLogin.body.pages.sort().join() === 'meters,rooms', JSON.stringify(opLogin.body.pages));
+    /* 操作权限细分：员工写操作按角色 ops 放行/拦截 */
+    r = await call(A, 'PUT', '/roles/' + roleA.id, { code: roleCode, name: '运营', pages: ['rooms', 'bills'], ops: ['room_write'] });
+    check('角色配置操作权限 room_write', r.status === 200 && Array.isArray(r.body.ops) && r.body.ops.includes('room_write'), JSON.stringify(r.body.ops));
+    opLogin = await login('op' + 'emp' + ts, 'test123456', 'rental');
+    check('员工登录返回操作权限', opLogin.status === 200 && opLogin.body.ops.includes('room_write'), JSON.stringify(opLogin.body.ops));
+    r = await call(opLogin.body.token, 'POST', '/rooms', {});
+    check('有 room_write 的员工写房源放行(缺参数报 400)', r.status === 400, JSON.stringify(r.body));
+    r = await call(opLogin.body.token, 'POST', '/meters', {});
+    check('无 meter_write 的员工写抄表被拦截 403', r.status === 403, JSON.stringify(r.body));
+    r = await call(A, 'PUT', '/roles/' + roleA.id, { code: roleCode, name: '运营', pages: ['rooms', 'bills'], ops: [] });
+    opLogin = await login('op' + 'emp' + ts, 'test123456', 'rental');
+    r = await call(opLogin.body.token, 'POST', '/rooms', {});
+    check('移除操作权限后员工写被拦截 403', r.status === 403, JSON.stringify(r.body));
     r = await call(A, 'DELETE', '/users/' + opEmpId);
     check('清理运营员工', r.status === 200 && r.body.ok, '');
     r = await call(A, 'DELETE', '/roles/' + roleA.id);
@@ -268,9 +281,15 @@ const addDays = (n) => { const d = new Date(); d.setDate(d.getDate() + n); retur
     check('企业员工数统计=1', Number(r.body.find(x => x.id === compId).emp_count) === 1, JSON.stringify(r.body.find(x => x.id === compId)));
     r = await call(PROP, 'GET', '/org-employees');
     check('主管理员可见企业员工列表', r.status === 200 && r.body.some(e => e.id === empId && e.owner_name === compName), JSON.stringify(r.body));
-    /* 未授权物业员工：不可见 */
-    r = await call(WY, 'GET', '/org-employees');
+    /* 未授权员工（内置 staff 角色，无 orgemp 页面权限）：不可见 */
+    r = await call(PROP, 'POST', '/users', { username: 'nop' + 'emp' + ts, password: 'test123456', role: 'staff' });
+    check('建未授权员工(内置staff角色)', r.status === 200 && r.body.id, JSON.stringify(r.body));
+    const noPermId = r.body.id;
+    const noPermLogin = await login('nop' + 'emp' + ts, 'test123456', 'property');
+    r = await call(noPermLogin.body.token, 'GET', '/org-employees');
     check('未授权员工访问企业员工被拒', r.status === 403, JSON.stringify(r.body));
+    r = await call(PROP, 'DELETE', '/users/' + noPermId);
+    check('清理未授权员工', r.status === 200 && r.body.ok, '');
     /* 物业主管理员给员工角色授权 orgemp（角色权限） */
     r = await call(PROP, 'POST', '/roles', { code: 'empview' + ts, name: '企业查看', pages: ['orgemp'] });
     check('建企业查看角色(带orgemp权限)', r.status === 200 && r.body.pages.includes('orgemp'), JSON.stringify(r.body));
@@ -454,12 +473,24 @@ const addDays = (n) => { const d = new Date(); d.setDate(d.getDate() + n); retur
     check('清理上报测试数据', r.status === 200 && r.body.ok, '');
 
     console.log('== 7. 员工页面权限 ==');
-    r = await call(STAFF, 'GET', '/rooms');
+    /* 新模型：员工页面权限全部来自角色；建临时角色+员工验证 */
+    r = await call(RENT, 'POST', '/roles', { code: 'pg' + ts, name: '看房', pages: ['rooms'] });
+    check('建临时查看角色(rooms)', r.status === 200 && r.body.pages.includes('rooms'), JSON.stringify(r.body));
+    const pgRoleId = r.body.id;
+    r = await call(RENT, 'POST', '/users', { username: 'pg' + 'emp' + ts, password: 'test123456', role: 'pg' + ts });
+    check('建员工挂查看角色', r.status === 200 && r.body.id, JSON.stringify(r.body));
+    const pgEmpId = r.body.id;
+    const pgLogin = await login('pg' + 'emp' + ts, 'test123456', 'rental');
+    r = await call(pgLogin.body.token, 'GET', '/rooms');
     check('员工可访问授权页面(房源)', r.status === 200, r.status + '');
-    r = await call(STAFF, 'PUT', '/settings', { rate: 9 });
+    r = await call(pgLogin.body.token, 'PUT', '/settings', { rate: 9 });
     check('员工不能修改设置', r.status === 403, r.status + '');
-    r = await call(STAFF, 'GET', '/users');
+    r = await call(pgLogin.body.token, 'GET', '/users');
     check('员工不能访问员工管理', r.status === 403, r.status + '');
+    r = await call(RENT, 'DELETE', '/users/' + pgEmpId);
+    check('清理临时员工', r.status === 200 && r.body.ok, '');
+    r = await call(RENT, 'DELETE', '/roles/' + pgRoleId);
+    check('清理临时角色', r.status === 200 && r.body.ok, '');
 
     console.log('== 8. 级联删除主体 ==');
     for (const id of createdOrgs) {

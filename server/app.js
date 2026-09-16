@@ -189,8 +189,9 @@ async function authenticate(req, res, next) {
   req.mode = u.session_mode || u.user_mode || 'rental';
   req.orgId = u.session_org || u.org_id || null;
   req.orgName = u.org_name || null;
-  const [pages] = await shared.query('SELECT page FROM user_permissions WHERE user_id = ?', [u.id]);
-  req.pages = pages.map(p => p.page);
+  const [perms] = [await userPerms(u.id)];
+  req.pages = perms.pages;
+  req.ops = perms.ops;
   next();
 }
 const wrap = (req, res, next) => withMode(req.mode, req.orgId, next);
@@ -199,12 +200,12 @@ const authMode = (req, res, next) => authenticate(req, res, () => wrap(req, res,
 /* 集中式页面权限（员工按授予页面；主管理员/超管全放行） */
 const ROUTE_PAGES = [
   [/^\/stats/, ['dashboard']],
-  [/^\/buildings/, ['rooms', 'roommap', 'buildings', 'properties']],
+  [/^\/buildings/, ['rooms', 'roommap', 'buildings', 'properties', 'meters', 'network']],
   [/^\/rooms/, ['rooms', 'roommap', 'properties']],
   [/^\/tenants/, ['tenants', 'owners']],
   [/^\/contracts/, ['contracts']],
   [/^\/orders/, ['orders']],
-  [/^\/bills/, ['bills']],
+  [/^\/bills/, ['bills', 'network']],
   [/^\/meters/, ['meters']],
   [/^\/netChanges/, ['network']],
   [/^\/netfee/, ['network']],
@@ -236,13 +237,61 @@ function checkFeature(req) {
   }
   return true;
 }
+/* 业务写操作 → 所需操作权限（员工角色 ops；主管理员不受限，企业管理员见 authPerm） */
+const OP_ROUTES = [
+  [/^\/buildings$/, 'building_write', 'POST'],
+  [/^\/buildings\/\d+$/, 'building_write', 'PUT'],
+  [/^\/buildings\/\d+$/, 'building_write', 'DELETE'],
+  [/^\/rooms$/, 'room_write', 'POST'],
+  [/^\/rooms\/\d+$/, 'room_write', 'PUT'],
+  [/^\/rooms\/\d+$/, 'room_write', 'DELETE'],
+  [/^\/tenants$/, 'tenant_write', 'POST'],
+  [/^\/tenants\/\d+$/, 'tenant_write', 'PUT'],
+  [/^\/tenants\/\d+$/, 'tenant_write', 'DELETE'],
+  [/^\/contracts$/, 'contract_write', 'POST'],
+  [/^\/contracts\/\d+$/, 'contract_write', 'PUT'],
+  [/^\/contracts\/\d+$/, 'contract_write', 'DELETE'],
+  [/^\/orders$/, 'order_write', 'POST'],
+  [/^\/orders\/\d+$/, 'order_write', 'PUT'],
+  [/^\/orders\/\d+$/, 'order_write', 'DELETE'],
+  [/^\/orders\/\d+\/(checkin|checkout|cancel)$/, 'order_write', 'POST'],
+  [/^\/org-employees$/, 'orgemp_write', 'POST'],
+  [/^\/org-employees\/\d+$/, 'orgemp_write', 'PUT'],
+  [/^\/org-employees\/\d+$/, 'orgemp_write', 'DELETE'],
+  [/^\/meters$/, 'meter_write', 'POST'],
+  [/^\/meters\/\d+$/, 'meter_write', 'PUT'],
+  [/^\/meters\/\d+$/, 'meter_write', 'DELETE'],
+  [/^\/netLines$/, 'network_write', 'POST'],
+  [/^\/netLines\/\d+$/, 'network_write', 'PUT'],
+  [/^\/netLines\/\d+\/(stop|start)$/, 'network_write', 'POST'],
+  [/^\/netChanges$/, 'network_write', 'POST'],
+  [/^\/netChanges\/\d+$/, 'network_write', 'DELETE'],
+  [/^\/bills$/, 'bill_write', 'POST'],
+  [/^\/bills\/generate$/, 'bill_write', 'POST'],
+  [/^\/bills\/\d+$/, 'bill_write', 'DELETE'],
+  [/^\/bills\/\d+\/pay$/, 'bill_pay', 'POST'],
+  [/^\/repairs$/, 'repair_write', 'POST'],
+  [/^\/repairs\/\d+$/, 'repair_write', 'PUT'],
+  [/^\/repairs\/\d+$/, 'repair_write', 'DELETE'],
+  [/^\/complaints$/, 'complaint_write', 'POST'],
+  [/^\/complaints\/\d+$/, 'complaint_write', 'PUT'],
+  [/^\/complaints\/\d+$/, 'complaint_write', 'DELETE']
+];
 const authPerm = (req, res, next) => authMode(req, res, () => {
   /* 超级管理员只负责开通主体与系统监控，不参与任何业务数据读写 */
   if (req.level === 'super') return res.status(403).json({ error: '超级管理员不参与业务操作' });
-  /* 企业管理员：本企业数据只读；仅放行「宽带报装/加兆/减兆上报」业务写操作 */
-  if (req.level === 'company_admin' && req.method !== 'GET') {
-    const allowedWrite = (req.method === 'POST' && req.path === '/netRequests');
-    if (!allowedWrite) return res.status(403).json({ error: '企业管理员无此操作权限' });
+  if (req.method !== 'GET') {
+    if (req.level === 'company_admin') {
+      /* 企业管理员：本企业数据只读；仅放行「宽带报装/加兆/减兆上报」业务写操作 */
+      const allowedWrite = (req.method === 'POST' && req.path === '/netRequests');
+      if (!allowedWrite) return res.status(403).json({ error: '企业管理员无此操作权限' });
+    } else if (req.level === 'staff') {
+      /* 员工：写操作按角色操作权限（ops）放行 */
+      const need = OP_ROUTES.find(r => (!r[2] || r[2] === req.method) && r[0].test(req.path));
+      if (!need || !(req.ops || []).includes(need[1])) {
+        return res.status(403).json({ error: '无此操作权限' });
+      }
+    }
   }
   if (!checkFeature(req)) return res.status(404).json({ error: '当前系统不提供该功能' });
   if (!checkPagePerm(req)) return res.status(403).json({ error: '无权访问该功能' });
@@ -266,27 +315,43 @@ const orgAdminOnly = (req, res, next) => {
 
 const router = express.Router();
 
-/* 员工实际可访问页面 = 角色权限 ∪ 个人权限（按主体隔离；动态生效，改角色权限即时反映） */
-async function userPages(userId) {
+/* 员工实际权限（页面访问 + 操作）全部来自角色，按主体隔离，改角色即时生效；
+ * role_permissions 中 `op:` 前缀为操作权限，其余为页面访问权限 */
+async function userPerms(userId) {
   const [[u]] = await shared.query('SELECT role, org_id FROM users WHERE id = ?', [userId]);
-  const [personal] = await shared.query('SELECT page FROM user_permissions WHERE user_id = ?', [userId]);
-  let rolePages = [];
+  const pages = [], ops = [];
   if (u && u.role) {
     const [rps] = await shared.query(
       `SELECT rp.page FROM role_permissions rp JOIN roles r ON r.id = rp.role_id
         WHERE r.code = ? AND r.org_id = ?`, [u.role, u.org_id]);
-    rolePages = rps.map(p => p.page);
-  }
-  return [...new Set([...personal.map(p => p.page), ...rolePages])];
-}
-/* 覆盖写角色权限（主管理员自建角色；内置/全局角色不设权限） */
-async function setRolePages(roleId, pages) {
-  await shared.query('DELETE FROM role_permissions WHERE role_id = ?', [roleId]);
-  if (Array.isArray(pages)) {
-    for (const p of [...new Set(pages)]) {
-      await shared.query('INSERT IGNORE INTO role_permissions (role_id, page) VALUES (?, ?)', [roleId, p]);
+    for (const p of rps) {
+      const v = String(p.page);
+      if (v.startsWith('op:')) ops.push(v.slice(3));
+      else pages.push(v);
     }
   }
+  return { pages: [...new Set(pages)], ops: [...new Set(ops)] };
+}
+/* 覆盖写角色权限（主管理员自建角色；内置/全局角色不设权限）：pages 存裸名，ops 存 op: 前缀 */
+async function setRolePerms(roleId, pages, ops) {
+  await shared.query('DELETE FROM role_permissions WHERE role_id = ?', [roleId]);
+  const items = [];
+  if (Array.isArray(pages)) for (const p of new Set(pages)) items.push([roleId, p]);
+  if (Array.isArray(ops)) for (const o of new Set(ops)) items.push([roleId, 'op:' + o]);
+  for (const it of items) {
+    await shared.query('INSERT IGNORE INTO role_permissions (role_id, page) VALUES (?, ?)', it);
+  }
+}
+/* 读取角色权限：返回 { pages, ops } */
+async function rolePerms(roleId) {
+  const [rps] = await shared.query('SELECT page FROM role_permissions WHERE role_id = ?', [roleId]);
+  const pages = [], ops = [];
+  for (const p of rps) {
+    const v = String(p.page);
+    if (v.startsWith('op:')) ops.push(v.slice(3));
+    else pages.push(v);
+  }
+  return { pages: [...new Set(pages)], ops: [...new Set(ops)] };
 }
 
 /* ==================================================================
@@ -325,7 +390,7 @@ router.post('/login', h(async (req, res) => {
   const token = crypto.randomBytes(32).toString('hex');
   await shared.query('INSERT INTO sessions (token, user_id, mode, org_id) VALUES (?, ?, ?, ?)',
     [token, u.id, mode, u.org_id || null]);
-  const pages = await userPages(u.id);
+  const pages = await userPerms(u.id);
   res.json({
     id: u.id, username: u.username, name: u.real_name,
     role: u.role, role_name: u.role_name,
@@ -333,12 +398,12 @@ router.post('/login', h(async (req, res) => {
     company_id: u.company_id || null,
     mode, org_id: u.org_id || null, org_name: u.org_name || null,
     company_name,
-    pages, token
+    pages: pages.pages, ops: pages.ops, token
   });
 }));
 
 router.get('/me', authMode, h(async (req, res) => {
-  const pages = await userPages(req.user.id);
+  const perms = await userPerms(req.user.id);
   let company_name = null;
   if (req.companyId) {
     const [[tc]] = await pool.query('SELECT name FROM tenants WHERE id = ? AND org_id = ?', [req.companyId, req.orgId]);
@@ -349,7 +414,7 @@ router.get('/me', authMode, h(async (req, res) => {
     role: req.user.role, role_name: req.user.role_name,
     level: req.level, mode: req.mode, org_id: req.orgId, org_name: req.orgName,
     company_id: req.companyId || null, company_name,
-    pages
+    pages: perms.pages, ops: perms.ops
   });
 }));
 
@@ -1063,7 +1128,7 @@ router.post('/tenants/:id/company-admin', authMode, orgAdminOnly, h(async (req, 
 router.get('/org-employees', authMode, h(async (req, res) => {
   if (req.mode !== 'property') return res.status(404).json({ error: '仅物业系统支持企业员工' });
   if (req.level !== 'admin' && req.level !== 'company_admin'
-      && !(await userPages(req.user.id)).includes('orgemp')) {
+      && !(await userPerms(req.user.id)).pages.includes('orgemp')) {
     return res.status(403).json({ error: '无权限访问企业员工' });
   }
   const [rows] = await pool.query(
@@ -1984,10 +2049,19 @@ router.get('/roles', authMode, adminLevel, h(async (req, res) => {
       WHERE r.org_id = ?`, [req.orgId]);
   const byRole = {};
   for (const p of perms) (byRole[p.role_id] = byRole[p.role_id] || []).push(p.page);
-  res.json(rows.map(r => ({
-    ...r, is_system: Number(r.is_system), user_count: Number(r.user_count),
-    pages: byRole[r.id] || []
-  })));
+  res.json(rows.map(r => {
+    const items = byRole[r.id] || [];
+    const pages = [], ops = [];
+    for (const it of items) {
+      const v = String(it);
+      if (v.startsWith('op:')) ops.push(v.slice(3));
+      else pages.push(v);
+    }
+    return {
+      ...r, is_system: Number(r.is_system), user_count: Number(r.user_count),
+      pages: [...new Set(pages)], ops: [...new Set(ops)]
+    };
+  }));
 }));
 router.post('/roles', authMode, h(async (req, res) => {
   const B = req.body || {};
@@ -2014,9 +2088,11 @@ router.post('/roles', authMode, h(async (req, res) => {
   const [r] = await shared.query(
     'INSERT INTO roles (org_id, code, name, description, level) VALUES (?, ?, ?, ?, "staff")',
     [orgId, code, name, String(B.description || '')]);
-  await setRolePages(r.insertId, B.pages);
+  await setRolePerms(r.insertId, B.pages, B.ops);
   const [rows] = await shared.query('SELECT * FROM roles WHERE id = ?', [r.insertId]);
-  res.json({ ...rows[0], pages: Array.isArray(B.pages) ? [...new Set(B.pages)] : [] });
+  res.json({ ...rows[0],
+    pages: Array.isArray(B.pages) ? [...new Set(B.pages)] : [],
+    ops: Array.isArray(B.ops) ? [...new Set(B.ops)] : [] });
 }));
 router.put('/roles/:id', authMode, h(async (req, res) => {
   const B = req.body || {};
@@ -2044,14 +2120,13 @@ router.put('/roles/:id', authMode, h(async (req, res) => {
     if (Number(dup.c) > 0) return res.status(400).json({ error: '角色编码已存在' });
     await shared.query('UPDATE roles SET code = ?, name = ?, description = ? WHERE id = ?',
       [code, name, String(B.description || ''), req.params.id]);
-    /* 自建角色可配置页面权限（内置/全局角色不设） */
-    if (role.org_id !== null) await setRolePages(req.params.id, B.pages);
+    /* 自建角色可配置页面与操作权限（内置/全局角色不设） */
+    if (role.org_id !== null) await setRolePerms(req.params.id, B.pages, B.ops);
   }
   const [rows] = await shared.query('SELECT * FROM roles WHERE id = ?', [req.params.id]);
-  const pages = role.org_id !== null && !Number(role.is_system)
-    ? (await shared.query('SELECT page FROM role_permissions WHERE role_id = ?', [req.params.id]))[0].map(p => p.page)
-    : [];
-  res.json({ ...rows[0], pages });
+  const rp = role.org_id !== null && !Number(role.is_system)
+    ? await rolePerms(req.params.id) : { pages: [], ops: [] };
+  res.json({ ...rows[0], pages: rp.pages, ops: rp.ops });
 }));
 router.delete('/roles/:id', authMode, h(async (req, res) => {
   const [rs] = await shared.query('SELECT * FROM roles WHERE id = ?', [req.params.id]);
@@ -2082,17 +2157,21 @@ router.get('/users', authMode, orgAdminOnly, h(async (req, res) => {
        LEFT JOIN roles rc ON rc.code = u.role AND rc.org_id = u.org_id
        LEFT JOIN roles rb ON rb.code = u.role AND rb.org_id IS NULL
       WHERE u.org_id = ? ORDER BY u.id`, [req.orgId]);
-  const [perms] = await shared.query('SELECT user_id, page FROM user_permissions');
-  const byUser = {};
-  for (const p of perms) (byUser[p.user_id] = byUser[p.user_id] || []).push(p.page);
   const [rolePerms] = await shared.query(
     `SELECT r.code, rp.page FROM role_permissions rp JOIN roles r ON r.id = rp.role_id
       WHERE r.org_id = ?`, [req.orgId]);
   const byRole = {};
   for (const p of rolePerms) (byRole[p.code] = byRole[p.code] || []).push(p.page);
-  res.json(rows.map(u => ({
-    ...u, pages: byUser[u.id] || [], role_pages: byRole[u.role] || []
-  })));
+  res.json(rows.map(u => {
+    const items = byRole[u.role] || [];
+    const pages = [], ops = [];
+    for (const it of items) {
+      const v = String(it);
+      if (v.startsWith('op:')) ops.push(v.slice(3));
+      else pages.push(v);
+    }
+    return { ...u, pages: [], role_pages: [...new Set(pages)], role_ops: [...new Set(ops)] };
+  }));
 }));
 router.post('/users', authMode, orgAdminOnly, h(async (req, res) => {
   const B = req.body || {};
@@ -2106,21 +2185,16 @@ router.post('/users', authMode, orgAdminOnly, h(async (req, res) => {
   const [[dup]] = await shared.query(
     'SELECT COUNT(*) AS c FROM users WHERE mode = ? AND username = ?', [req.mode, B.username]);
   if (Number(dup.c) > 0) return res.status(400).json({ error: '该用户名在本系统已存在' });
-  const [r] = await shared.query(
+  const [ins] = await shared.query(
     'INSERT INTO users (username, password, real_name, role, mode, org_id) VALUES (?, ?, ?, ?, ?, ?)',
     [B.username, hashPassword(B.password), B.real_name || '', role, req.mode, req.orgId]);
-  if (Array.isArray(B.pages)) {
-    for (const p of [...new Set(B.pages)]) {
-      await shared.query('INSERT IGNORE INTO user_permissions (user_id, page) VALUES (?, ?)', [r.insertId, p]);
-    }
-  }
   const [rows] = await shared.query(
     `SELECT u.id, u.username, u.real_name, u.role, u.mode, u.org_id,
             COALESCE(rc.name, rb.name) AS role_name
        FROM users u
        LEFT JOIN roles rc ON rc.code = u.role AND rc.org_id = u.org_id
        LEFT JOIN roles rb ON rb.code = u.role AND rb.org_id IS NULL
-      WHERE u.id = ?`, [r.insertId]);
+      WHERE u.id = ?`, [ins.insertId]);
   res.json(rows[0]);
 }));
 router.put('/users/:id', authMode, orgAdminOnly, h(async (req, res) => {
@@ -2140,12 +2214,6 @@ router.put('/users/:id', authMode, orgAdminOnly, h(async (req, res) => {
     [B.real_name || '', role, req.params.id]);
   if (B.password) {
     await shared.query('UPDATE users SET password = ? WHERE id = ?', [hashPassword(B.password), req.params.id]);
-  }
-  await shared.query('DELETE FROM user_permissions WHERE user_id = ?', [req.params.id]);
-  if (Array.isArray(B.pages)) {
-    for (const p of [...new Set(B.pages)]) {
-      await shared.query('INSERT IGNORE INTO user_permissions (user_id, page) VALUES (?, ?)', [req.params.id, p]);
-    }
   }
   const [rows] = await shared.query('SELECT * FROM users WHERE id = ?', [req.params.id]);
   res.json(rows[0]);
