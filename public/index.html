@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>房屋管理系统 · 租房 / 酒店 / 物业</title>
+<title>房屋管理系统</title>
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
 <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css" rel="stylesheet">
 <style>
@@ -541,6 +541,8 @@ function renderApp(){
   const cur = getCurrency();
   const isSuper = ME.level === 'super';
   const isStaff = ME.level === 'staff';
+  /* 标签页标题只显示当前系统 */
+  document.title = '房屋管理系统 · ' + (isSuper ? '管理控制台' : isStaff ? MODE_NAME[mode] + '员工工作台' : MODE_NAME[mode] + '系统');
   const nav = curNav();
   $('#root').innerHTML = `
   <div class="d-flex">
@@ -2876,7 +2878,7 @@ async function editUser(id){
   const roles = await api('/api/roles');
   /* 主管理员只能分配员工级角色（内置 staff + 本主体自建角色） */
   const roleOpts = roles.filter(r => r.level === 'staff');
-  if (!roleOpts.length){ alert('暂无可用员工角色'); return; }
+  if (!roleOpts.length){ alert('暂无可用角色'); return; }
   if (!roleOpts.some(r => r.code === data.role)) data.role = roleOpts[0].code;
   const fields = [
     { name:'username', label:'用户名', required:true },
@@ -2929,9 +2931,9 @@ async function renderRoles(){
     : (r.is_system ? '<span class="text-muted small">—</span>' : '<span class="text-muted small">未配置（员工按个人权限访问）</span>');
   $('#page').innerHTML = `
   <div class="mb-3 d-flex gap-2">
-    <button class="btn btn-sm btn-primary" onclick="editRole()">+ 新增员工角色</button>
+    <button class="btn btn-sm btn-primary" onclick="editRole()">+ 新增角色</button>
     <div class="text-muted small align-self-center">
-      为本系统（${esc(ME.org_name || '')}）自定义员工角色并配置页面权限，再到「员工管理」分配
+      为本系统（${esc(ME.org_name || '')}）自定义角色并配置页面权限，再到「员工管理」分配
     </div>
   </div>
   <div class="card"><div class="table-responsive"><table class="table table-hover mb-0">
@@ -2957,7 +2959,7 @@ async function renderRoles(){
     </tbody></table></div></div>
     <div class="text-muted small mt-2">
       <i class="bi bi-info-circle"></i> 自定义角色可配置页面权限，分配该角色的员工自动获得其权限（还可按员工单独追加）。
-      内置「员工」角色不可配置；已分配给员工的自定义角色需先调整员工角色后才能删除。
+      内置「员工」角色不可配置；已分配给员工的自定义角色需先调整后再删除。
     </div>`;
 }
 
@@ -2981,7 +2983,7 @@ async function editRole(id){
         hint:'分配该角色的员工自动获得这些页面的访问权限（可在员工管理中按个人追加）' });
     }
   }
-  openForm(id ? '编辑角色' : '新增员工角色', fields, data, async (d, modal) => {
+  openForm(id ? '编辑角色' : '新增角色', fields, data, async (d, modal) => {
     d.level = 'staff';
     if (isSys) delete d.code;
     if (isSys) delete d.pages;
