@@ -385,7 +385,6 @@ function renderLoginHome(){
   </div>`;
 }
 async function renderLoginPage(m){
-  const cur = getCurrency();
   const cfg = await getAppConfig();
   const isSuper = m === 'super';
   /* 仅超管入口预填初始超管账号；各系统窗口留空 */
@@ -405,15 +404,6 @@ async function renderLoginPage(m){
         <div class="mb-3"><label class="form-label">密码</label>
           <input id="lgPwd" type="password" class="form-control" value="${defPwd}" placeholder="请输入密码"
                  onkeydown="if(event.key==='Enter')doLogin()"></div>
-        <div class="mb-3 d-flex align-items-center gap-2">
-          <label class="form-label mb-0">币种</label>
-          <select class="form-select form-select-sm" style="width:130px"
-                  onchange="switchCurrency(this.value, true)">
-            <option value="CNY" ${cur === 'CNY' ? 'selected' : ''}>¥ 人民币</option>
-            <option value="USD" ${cur === 'USD' ? 'selected' : ''}>$ 美元</option>
-          </select>
-          <span class="text-muted small ms-auto">默认 $ 美元</span>
-        </div>
         <button class="btn btn-primary w-100" onclick="doLogin()">登 录</button>
         ${cfg.login_selector === 'hide' ? ''
           : '<div class="text-center mt-3"><a class="small" href="#login">← 返回选择登录入口</a></div>'}
@@ -430,6 +420,22 @@ async function doLogin(){
     const u = await api('/api/login', 'POST', body);
     ME = u; /* 含 role_name / level / mode / pages */
     sessionStorage.setItem('house_token', u.token);
+    /* 登录后立即加载本主体设置（默认币种/汇率/单价），避免用前端初始默认值 */
+    try {
+      const st = await api('/api/settings');
+      DB.data.settings = {
+        mode: u.mode || 'rental',
+        currency: st.currency || 'USD',
+        rate: Number(st.rate) || 7.2,
+        prices: !!st.prices,
+        net_price_per_mb: (st.net_price_per_mb !== undefined && st.net_price_per_mb !== null)
+          ? Number(st.net_price_per_mb) : 1,
+        water_price: (st.water_price !== undefined && st.water_price !== null)
+          ? Number(st.water_price) : 4.5,
+        elec_price: (st.elec_price !== undefined && st.elec_price !== null)
+          ? Number(st.elec_price) : 1
+      };
+    } catch(e){ console.error('settings 加载失败', e); }
     history.replaceState(null, '', '#' + (u.level === 'staff' ? 'home' : firstAllowedPage(u.mode) || DEFAULT_PAGE[u.mode]));
     renderApp();
   } catch(e){ alert(e.message); }
@@ -556,13 +562,13 @@ function renderApp(){
       <div class="mode-lock mb-1 text-white-50 small">
         <i class="bi bi-lock"></i> ${MODE_NAME[mode]} · 员工工作台
       </div>` : ''}
-      ${isSuper ? '' : `
+      ${ME.level === 'admin' ? `
       <div class="cur-row mb-3">
         <select onchange="switchCurrency(this.value)">
           <option value="CNY" ${cur === 'CNY' ? 'selected' : ''}>¥ 人民币</option>
           <option value="USD" ${cur === 'USD' ? 'selected' : ''}>$ 美元</option>
         </select>
-      </div>`}
+      </div>` : ''}
       <nav class="nav flex-column" id="nav">
         ${nav.map(n => `<a class="nav-link" data-page="${n[0]}" onclick="go('${n[0]}')">
           <i class="bi bi-${n[1]}"></i> ${n[2]}</a>`).join('')}
