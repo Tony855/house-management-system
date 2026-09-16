@@ -2016,7 +2016,7 @@ async function renderMeters(){
   ${ME.level === 'company_admin' && canOp('repair_add') ? `
   <div class="card mt-3">
     <div class="card-header bg-white fw-bold d-flex align-items-center">
-      <i class="bi bi-droplet text-primary me-1"></i> 水电报修（上报）
+      <i class="bi bi-droplet text-primary me-1"></i> 水电报修
       <span class="small text-muted ms-2">企业管理员提交水电故障报修，主管理员在报修管理处理</span>
       <button class="btn btn-sm btn-primary ms-auto" onclick="addUtilityRepair()">+ 报修上报</button>
     </div>
@@ -2166,10 +2166,10 @@ async function renderNetwork(){
 
   <div class="card mb-3">
     <div class="card-header bg-white fw-bold d-flex align-items-center">
-      <i class="bi bi-wifi text-primary me-1"></i> 宽带申请（上报）
+      <i class="bi bi-wifi text-primary me-1"></i> 宽带申请
       <span class="small text-muted ms-2">企业管理员提交报装 / 加兆 / 减兆申请，主管理员审批后自动执行</span>
       ${ME.level === 'company_admin' && canOp('netline_bandwidth')
-        ? '<button class="btn btn-sm btn-primary ms-auto" onclick="addNetRequest()">+ 上报申请</button>' : ''}
+        ? '<button class="btn btn-sm btn-primary ms-auto" onclick="addNetRequest()">+ 申请上报</button>' : ''}
     </div>
     <div class="card-body py-2" id="netReqBox"><div class="text-muted">加载中…</div></div>
   </div>
@@ -2177,7 +2177,7 @@ async function renderNetwork(){
   ${ME.level === 'company_admin' && canOp('repair_add') ? `
   <div class="card mb-3">
     <div class="card-header bg-white fw-bold d-flex align-items-center">
-      <i class="bi bi-tools text-primary me-1"></i> 网络报修（上报）
+      <i class="bi bi-tools text-primary me-1"></i> 网络报修
       <span class="small text-muted ms-2">企业管理员提交网络故障报修，主管理员在报修管理处理</span>
       <button class="btn btn-sm btn-primary ms-auto" onclick="addNetRepair()">+ 报修上报</button>
     </div>
