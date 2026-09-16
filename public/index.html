@@ -2013,6 +2013,16 @@ async function renderMeters(){
       </td>` : ''}</tr>`).join('') || '<tr><td colspan="12" class="text-center text-muted py-4">暂无抄表记录</td></tr>'}
     </tbody></table></div></div>
 
+  ${ME.level === 'company_admin' && canOp('repair_add') ? `
+  <div class="card mt-3">
+    <div class="card-header bg-white fw-bold d-flex align-items-center">
+      <i class="bi bi-droplet text-primary me-1"></i> 水电报修（上报）
+      <span class="small text-muted ms-2">企业管理员提交水电故障报修，主管理员在报修管理处理</span>
+      <button class="btn btn-sm btn-primary ms-auto" onclick="addUtilityRepair()">+ 报修上报</button>
+    </div>
+    <div class="card-body py-2" id="utilRepairBox"><div class="text-muted">加载中…</div></div>
+  </div>` : ''}
+
   <div class="alert alert-info mt-3 small mb-0">
     <i class="bi bi-info-circle"></i>
     水费 = (本期水表 − 上期水表) × 房间水费单价；
@@ -2020,6 +2030,9 @@ async function renderMeters(){
     录入当月抄表后，在「账单收费」页点击「生成${curMode() === 'property' ? '物业' : '水电'}账单」即可${curMode() === 'property' ? '合并到物业费账单' : '生成水电费账单'}。
     网费独立计算，请见「网络管理」。
   </div>`;
+
+  /* 企业管理员水电报修列表 */
+  if (ME.level === 'company_admin' && canOp('repair_add')) renderUtilRepairs();
 }
 
 async function editMeter(id){
@@ -2426,6 +2439,53 @@ async function renderNetRepairs(){
   let list = [];
   try { list = await api('/api/repairs'); } catch(e){ box.innerHTML = '<div class="text-muted">' + esc(e.message) + '</div>'; return; }
   const mine = list.filter(r => String(r.title).startsWith('网络报修')).slice(0, 20);
+  box.innerHTML = `<div class="table-responsive" style="max-height:240px"><table class="table table-sm table-hover mb-0">
+    <thead class="table-light"><tr>
+      <th>ID</th><th>提交时间</th><th>楼栋/房号</th><th>报修内容</th><th>状态</th><th>处理说明</th>
+    </tr></thead>
+    <tbody>${mine.map(r => `<tr>
+      <td>${r.id}</td>
+      <td><small>${esc((r.created_at || '').slice(0, 16))}</small></td>
+      <td>${esc(r.building_name || '')} ${esc(r.room_no || '')}</td>
+      <td><small>${esc(r.title)}${r.content ? '：' + esc(r.content) : ''}</small></td>
+      <td>${r.status === 'done' ? '<span class="badge bg-success">已完成</span>'
+          : r.status === 'processing' ? '<span class="badge bg-info">处理中</span>'
+          : '<span class="badge bg-warning text-dark">待处理</span>'}</td>
+      <td><small>${esc(r.handle_note || '-')}</small></td>
+    </tr>`).join('') || '<tr><td colspan="6" class="text-center text-muted py-3">暂无报修记录</td></tr>'}
+    </tbody></table></div>`;
+}
+
+/* 企业管理员：水电报修上报 */
+async function addUtilityRepair(){
+  const rooms = await api('/api/rooms');
+  if (!rooms.length){ alert('暂无本企业房产，请先由物业主管理员绑定'); return; }
+  const roomOpts = rooms.map(r => ({ value: r.id,
+    label: `${r.building_name || ''} ${r.room_no}｜${r.owner_name || ''}` }));
+  openForm('上报水电报修', [
+    { name:'room_id', label:'房产', type:'select', required:true, options: roomOpts },
+    { name:'fault', label:'故障类型', type:'select', required:true, options:[
+      { value:'漏水', label:'漏水' }, { value:'停水', label:'停水' },
+      { value:'跳闸停电', label:'跳闸停电' }, { value:'电压异常', label:'电压异常' },
+      { value:'其他', label:'其他' }] },
+    { name:'content', label:'故障描述', type:'textarea', required:true, placeholder:'如：卫生间水管持续漏水' }
+  ], { fault:'漏水' }, async (d, modal) => {
+    await api('/api/repairs', 'POST', {
+      room_id: Number(d.room_id),
+      title: '水电报修：' + d.fault,
+      content: d.content || ''
+    });
+    modal.hide(); renderMeters();
+  });
+}
+
+/* 企业管理员：查看本企业水电报修列表（处理结果在报修管理） */
+async function renderUtilRepairs(){
+  const box = document.getElementById('utilRepairBox');
+  if (!box) return;
+  let list = [];
+  try { list = await api('/api/repairs'); } catch(e){ box.innerHTML = '<div class="text-muted">' + esc(e.message) + '</div>'; return; }
+  const mine = list.filter(r => String(r.title).startsWith('水电报修')).slice(0, 20);
   box.innerHTML = `<div class="table-responsive" style="max-height:240px"><table class="table table-sm table-hover mb-0">
     <thead class="table-light"><tr>
       <th>ID</th><th>提交时间</th><th>楼栋/房号</th><th>报修内容</th><th>状态</th><th>处理说明</th>
