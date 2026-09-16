@@ -12,6 +12,7 @@
 | **超级管理员** `super` | 超级管理员入口 | 仅两件事：**① 开通/编辑/删除主管理员（经营主体）；② 系统监控**。不参与任何业务，不配置角色权限，不设置单价/汇率；后端业务接口对其一律 403 |
 | **主管理员** `admin` | 所属系统入口（租房/酒店/物业） | 一个主管理员 = 一个经营主体，拥有本主体全部业务功能；并可在本主体内**自建员工角色、增删员工、配置员工页面权限、设置本主体币种/汇率/单价** |
 | **员工** `staff` | **所属系统入口**（租房/酒店/物业，与主管理员共用本系统窗口） | 独立员工工作台，仅能访问主管理员授予的页面，无任何管理功能 |
+| **企业管理员** `company_admin` | 物业系统入口 | **仅物业**：主管理员在「企业管理」页为某企业设置的账号（每企业 1 个），登录后**只读**查看本企业数据（房产/企业员工/账单/抄表/网络/报修/投诉/仪表盘统计），无任何写权限；删除企业时账号级联清理 |
 
 - 系统内置角色 `super / admin / staff`（`org_id = NULL`，不可删）；主管理员自建的
   角色固定为**员工层级**，仅在本主体内可见、可用。
@@ -184,6 +185,10 @@ node db/check_frontend.js # 前端 JS 语法校验
 - 每个业务请求经会话解析出 `mode` 与 `orgId`，由 `withMode(mode, orgId, fn)`
   （AsyncLocalStorage）注入当前连接上下文；所有业务 SQL 的 SELECT 带 `org_id` 条件、
   INSERT 带 `org_id` 列，从行级保证主体间互不可见、互不覆盖。
+- **企业管理员（物业）第二层隔离**：`users.company_id` 标记企业管理员；后端在
+  rooms/tenants/org-employees/bills/meters/netLines/netChanges/repairs/complaints
+  及 `/api/stats` 全部注入 `owner_id = company_id`（或经 rooms JOIN）条件，前端导航
+  裁剪为 8 个数据页并隐藏全部写按钮；写接口（含设置/账号管理）统一 403。
 - 超管开通主体（`POST /api/orgs`）在一个事务内：建 org → 建该主体 admin 用户 →
   建该主体 settings 默认行 → 回填 `admin_user_id`。
 - 删除主体（`DELETE /api/orgs/:id`）级联清空该主体在系统库的全部业务数据，以及共享库
@@ -209,6 +214,7 @@ node db/check_frontend.js # 前端 JS 语法校验
 | GET/POST · PUT/DELETE | /rooms · /rooms/:id | 房间/房产 |
 | GET/POST · PUT/DELETE | /tenants · /tenants/:id | 租客/房客/**企业**（物业=企业客户，删除前校验名下房产/企业员工） |
 | GET/POST · PUT/DELETE | /org-employees · /org-employees/:id | **仅物业**：企业员工档案（读需 orgemp 权限或主管理员，写仅主管理员；company 自动匹配/创建企业） |
+| POST | /tenants/:id/company-admin | **仅物业主管理员**：设置/重置企业管理员账号（username/real_name/password；重复设置=重置密码） |
 | POST | /upload | **仅物业主管理员**：base64 图片上传（jpeg/png/webp ≤2MB），返回 `/uploads/...` URL |
 | GET/POST · PUT · /terminate | /contracts | 租房合同（仅 rental） |
 | GET/POST · PUT/DELETE · /checkin · /checkout · /cancel | /orders | 酒店订单（仅 hotel） |

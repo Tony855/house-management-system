@@ -504,11 +504,13 @@ function roomPerson(r){ return curMode() === 'property' ? (r.owner_name || '') :
 function roomPersonPhone(r){ return r.owner_phone || ''; }
 
 function pageAllowed(p){
-  if (ME.level === 'super' || ME.level === 'admin') return true;
+  if (ME.level === 'super' || ME.level === 'admin' || ME.level === 'company_admin') return true;
   return (ME.pages || []).includes(p);
 }
+/* 写操作仅主管理员（企业管理员只读；员工按页面权限可写既有能力） */
+const canWrite = () => ME.level === 'admin';
 
-/* 按角色取导航：超管=控制台（系统监控 / 开通主管理员）；主管理员=所属系统全部管理页；员工=工作台+授权页 */
+/* 按角色取导航：超管=控制台（系统监控 / 开通主管理员）；主管理员=所属系统全部管理页；员工=工作台+授权页；企业管理员=本企业数据页（只读） */
 function curNav(){
   if (!ME) return [];
   if (ME.level === 'super') return [
@@ -518,6 +520,8 @@ function curNav(){
   ];
   if (ME.level === 'staff') return [['home','house','工作台'],
     ...NAV[curMode()].filter(n => pageAllowed(n[0]) && n[3] === undefined)];
+  if (ME.level === 'company_admin') return NAV.property.filter(n =>
+    ['dashboard','properties','owners','meters','network','bills','complaints','repairs'].includes(n[0]));
   return NAV[curMode()].filter(n => pageAllowed(n[0]) && (n[3] === undefined || n[3] === 'admin'));
 }
 function firstAllowedPage(mode){
@@ -543,10 +547,10 @@ function renderApp(){
       </div>` : ''}
       ${(!isSuper && !isStaff) ? `
       <div class="mode-lock mb-1 text-white-50 small">
-        <i class="bi bi-building"></i> ${esc(ME.org_name || '')}
+        <i class="bi bi-building"></i> ${esc(ME.level === 'company_admin' ? (ME.company_name || '') : (ME.org_name || ''))}
       </div>
       <div class="mode-lock mb-1 text-white-50 small">
-        <i class="bi bi-lock"></i> ${esc(ME.role_name || ME.role)}
+        <i class="bi bi-lock"></i> ${esc(ME.level === 'company_admin' ? '企业管理员' : (ME.role_name || ME.role))}
       </div>` : ''}
       ${isStaff ? `
       <div class="mode-lock mb-1 text-white-50 small">
@@ -565,7 +569,7 @@ function renderApp(){
       </nav>
       <div class="mt-auto pt-3 small text-white-50">
         <div class="mb-2"><i class="bi bi-person-circle"></i> ${esc(ME.name || ME.real_name || ME.username)}
-          <span class="badge bg-secondary">${esc(ME.role_name || ME.role)}</span></div>
+          <span class="badge bg-secondary">${esc(ME.level === 'company_admin' ? '企业管理员' : (ME.role_name || ME.role))}</span></div>
         <button class="btn btn-sm btn-outline-light w-100" onclick="doLogout()">退出登录</button>
       </div>
     </aside>
@@ -962,7 +966,7 @@ async function renderRooms(){
   else {
     statusOpts = [['vacant','空置'], ['rented','已入住'], ['maintenance','维修中']];
     addLabel = '新增房产';
-    head = '<th>楼栋</th><th>房号</th><th>面积</th><th>企业</th><th>电话</th><th>物业费/月</th><th>水价</th><th>电价</th><th>欠费</th><th width="170">操作</th>';
+    head = '<th>楼栋</th><th>房号</th><th>面积</th><th>企业</th><th>电话</th><th>物业费/月</th><th>水价</th><th>电价</th><th>欠费</th>' + (canWrite() ? '<th width="170">操作</th>' : '');
     const allBills = await api('/api/bills');
     const oweMap = {};
     allBills.forEach(b => {
@@ -982,10 +986,9 @@ async function renderRooms(){
         <td>${money(r.water_price)}/吨</td>
         <td>${money(r.elec_price)}/度</td>
         <td>${owe > 0 ? `<span class="text-danger fw-bold">${money(owe)}</span>` : '<span class="text-muted">-</span>'}</td>
-        <td>
+        <td>${canWrite() ? `
           <button class="btn btn-sm btn-outline-primary" onclick="editRoom(${r.id})">编辑</button>
-          <button class="btn btn-sm btn-outline-danger" onclick="delRoom(${r.id})">删除</button>
-        </td></tr>`;
+          <button class="btn btn-sm btn-outline-danger" onclick="delRoom(${r.id})">删除</button>` : ''}</td></tr>`;
     }).join('');
   }
 
@@ -1009,7 +1012,7 @@ async function renderRooms(){
                onkeydown="if(event.key==='Enter'){roomFilter.keyword=this.value;renderRooms()}">
       </div>
       <div class="col-auto">
-        <button class="btn btn-sm btn-primary" onclick="editRoom()">+ ${addLabel}</button>
+        ${canWrite() ? `<button class="btn btn-sm btn-primary" onclick="editRoom()">+ ${addLabel}</button>` : ''}
       </div>
       <div class="col-auto text-muted small">共 ${rooms.length} 间</div>
     </div>
@@ -1247,14 +1250,14 @@ async function renderPropertyCompanies(){
     <div class="card mb-3"><div class="card-body py-2">
       <div class="row g-2 align-items-center">
         <div class="col-auto"><div class="btn-group">${tab('owners','企业','building')}${canEmp ? tab('orgemp','企业员工','person-vcard') : ''}</div></div>
-        <div class="col-auto"><button class="btn btn-sm btn-primary" onclick="editOrgEmp()">+ 新增企业员工</button></div>
+        <div class="col-auto">${canWrite() ? `<button class="btn btn-sm btn-primary" onclick="editOrgEmp()">+ 新增企业员工</button>` : ''}</div>
         <div class="col-auto text-muted small">共 ${empList.length} 名企业员工</div>
       </div>
     </div></div>
     <div class="card"><div class="table-responsive"><table class="table table-hover mb-0">
       <thead class="table-light"><tr>
         <th>ID</th><th>照片</th><th>所属企业</th><th>姓名</th><th>身份证/护照</th><th>电话</th>
-        <th>部门</th><th>职位</th><th>门禁卡</th><th>绑定房号</th><th width="160">操作</th></tr></thead>
+        <th>部门</th><th>职位</th><th>门禁卡</th><th>绑定房号</th>${canWrite() ? '<th width="160">操作</th>' : ''}</tr></thead>
       <tbody>${empList.map(e => `<tr>
         <td>${e.id}</td>
         <td>${e.photo_url ? `<img src="${esc(e.photo_url)}" class="rounded" style="width:36px;height:36px;object-fit:cover">`
@@ -1267,10 +1270,10 @@ async function renderPropertyCompanies(){
         <td>${esc(e.position || '-')}</td>
         <td>${esc(e.card_no || '-')}</td>
         <td>${e.room_no ? esc((e.building_name || '') + ' ' + e.room_no) : (e.owner_name ? `<span class="text-muted">（${esc(e.owner_name)}）</span>` : '-')}</td>
-        <td>
+        ${canWrite() ? `<td>
           <button class="btn btn-sm btn-outline-primary" onclick="editOrgEmp(${e.id})">编辑</button>
           <button class="btn btn-sm btn-outline-danger" onclick="delOrgEmp(${e.id})">删除</button>
-        </td></tr>`).join('') || '<tr><td colspan="11" class="text-center text-muted py-4">暂无企业员工</td></tr>'}
+        </td>` : ''}</tr>`).join('') || '<tr><td colspan="12" class="text-center text-muted py-4">暂无企业员工</td></tr>'}
       </tbody></table></div></div>`;
     return;
   }
@@ -1283,14 +1286,14 @@ async function renderPropertyCompanies(){
         <input class="form-control form-control-sm" placeholder="企业名称 / 电话，回车搜索" value="${esc(tenantKeyword)}"
                onkeydown="if(event.key==='Enter'){tenantKeyword=this.value;renderTenants()}">
       </div>
-      <div class="col-auto"><button class="btn btn-sm btn-primary" onclick="editTenant()">+ 新增企业</button></div>
+      <div class="col-auto">${canWrite() ? `<button class="btn btn-sm btn-primary" onclick="editTenant()">+ 新增企业</button>` : ''}</div>
       <div class="col-auto text-muted small">共 ${companies.length} 家企业</div>
     </div>
   </div></div>
   <div class="card"><div class="table-responsive"><table class="table table-hover mb-0">
     <thead class="table-light"><tr>
       <th>ID</th><th>企业名称</th><th>联系人</th><th>电话</th><th>营业执照/信用代码</th>
-      <th>名下房产</th><th>企业员工</th><th>备注</th><th width="160">操作</th></tr></thead>
+      <th>名下房产</th><th>企业员工</th><th>备注</th>${canWrite() ? '<th width="280">操作</th>' : ''}</tr></thead>
     <tbody>${companies.map(t => `<tr>
       <td>${t.id}</td><td><b>${esc(t.name)}</b></td>
       <td>${esc(t.contact || '-')}</td>
@@ -1299,11 +1302,31 @@ async function renderPropertyCompanies(){
       <td>${t.rooms ? esc(t.rooms) : '<span class="text-muted">-</span>'}</td>
       <td>${t.emp_count !== undefined ? t.emp_count : 0}</td>
       <td>${esc(t.remark || '-')}</td>
-      <td>
+      ${canWrite() ? `<td>
         <button class="btn btn-sm btn-outline-primary" onclick="editTenant(${t.id})">编辑</button>
         <button class="btn btn-sm btn-outline-danger" onclick="delTenant(${t.id})">删除</button>
-      </td></tr>`).join('') || '<tr><td colspan="9" class="text-center text-muted py-4">暂无企业</td></tr>'}
+        <button class="btn btn-sm btn-outline-success" onclick="setCompanyAdmin(${t.id})">
+          ${t.admin_username ? '管理员：' + esc(t.admin_username) : '设管理员'}</button>
+      </td>` : ''}</tr>`).join('') || '<tr><td colspan="10" class="text-center text-muted py-4">暂无企业</td></tr>'}
     </tbody></table></div></div>`;
+}
+
+/* ---------- 企业管理员账号设置（仅主管理员；企业管理员登录后只读本企业数据） ---------- */
+async function setCompanyAdmin(id){
+  const companies = await api('/api/tenants');
+  const comp = companies.find(c => c.id === id);
+  if (!comp) return alert('企业不存在');
+  const has = !!comp.admin_username;
+  const data = { username: comp.admin_username || '', real_name: '', password: '' };
+  openForm(has ? '重置企业管理员（' + comp.name + '）' : '设置企业管理员（' + comp.name + '）',
+    [
+      { name:'username', label:'登录用户名', required:true, hint: has ? '当前账号，可修改' : '以字母开头，3-20位字母/数字/下划线' },
+      { name:'real_name', label:'姓名' },
+      { name:'password', label:'密码', type:'password', required:true, hint:'至少 6 位；企业管理员仅可查看本企业数据（只读）' }
+    ], data, async (d, modal) => {
+      await api('/api/tenants/' + id + '/company-admin', 'POST', d);
+      modal.hide(); renderTenants();
+    });
 }
 
 /* ---------- 企业员工表单（照片上传 + 绑定企业房号联动） ---------- */
@@ -1631,16 +1654,16 @@ async function renderBills(){
   const personCol = mode === 'hotel' ? '房客' : (mode === 'property' ? '企业' : '租客');
 
   let genBtns = '';
-  if (mode === 'rental'){
+  if (mode === 'rental' && canWrite()){
     genBtns = `
       <button class="btn btn-sm btn-outline-success" onclick="generateBills('rental')">生成租金</button>
       <button class="btn btn-sm btn-outline-info" onclick="generateBills('utility')">生成水电</button>
       <button class="btn btn-sm btn-outline-primary" onclick="generateBills('network')">生成网费</button>
       <button class="btn btn-sm btn-success" onclick="generateBills('all')"><i class="bi bi-magic"></i> 全部生成</button>`;
-  } else if (mode === 'hotel'){
+  } else if (mode === 'hotel' && canWrite()){
     genBtns = `<button class="btn btn-sm btn-success" onclick="generateBills('hotel')">
       <i class="bi bi-magic"></i> 补生成账单</button>`;
-  } else {
+  } else if (canWrite()){
     genBtns = `
       <button class="btn btn-sm btn-success" onclick="generateBills('property')">
         <i class="bi bi-magic"></i> 生成物业账单</button>
@@ -1685,7 +1708,7 @@ async function renderBills(){
       </div>
       ${srcOpts}
       <div class="col-auto">${genBtns}</div>
-      <div class="col-auto"><button class="btn btn-sm btn-outline-primary" onclick="editBill()">+ 手动添加</button></div>
+      <div class="col-auto">${canWrite() ? `<button class="btn btn-sm btn-outline-primary" onclick="editBill()">+ 手动添加</button>` : ''}</div>
       <div class="col-auto text-muted small">共 ${list.length} 条 · 未收合计
         <span class="text-danger fw-bold">${money(unpaid)}</span></div>
     </div>
@@ -1694,7 +1717,7 @@ async function renderBills(){
     <thead class="table-light"><tr>
       <th>ID</th><th>来源</th><th>楼栋/房间</th><th>${personCol}</th>
       <th>费用周期</th><th>应缴日期</th><th>应缴</th><th>已缴</th>
-      <th>状态</th><th>缴费方式</th><th width="180">操作</th>
+      <th>状态</th><th>缴费方式</th>${canWrite() ? '<th width="180">操作</th>' : ''}
     </tr></thead>
     <tbody>${list.map(b => {
       const src = BILL_SOURCE[b.source] || [b.source, 'secondary'];
@@ -1711,10 +1734,10 @@ async function renderBills(){
       <td>${billBadge(b.status)}</td>
       <td>${esc(b.pay_method || '-')}</td>
       <td>
-        ${b.status !== 'paid'
+        ${canWrite() ? (b.status !== 'paid'
           ? `<button class="btn btn-sm btn-success"
-               onclick="payBill(${b.id}, ${(b.amount - (b.paid_amount || 0)).toFixed(2)})">收款</button>` : ''}
-        <button class="btn btn-sm btn-outline-danger" onclick="delBill(${b.id})">删除</button>
+               onclick="payBill(${b.id}, ${(b.amount - (b.paid_amount || 0)).toFixed(2)})">收款</button>` : '')
+          + `<button class="btn btn-sm btn-outline-danger" onclick="delBill(${b.id})">删除</button>` : ''}
       </td></tr>`;
     }).join('') || '<tr><td colspan="11" class="text-center text-muted py-4">暂无数据</td></tr>'}
     </tbody></table></div></div>`;
@@ -1873,7 +1896,7 @@ async function renderMeters(){
         </select>
       </div>
       <div class="col-auto">
-        <button class="btn btn-sm btn-primary" onclick="editMeter()">+ 新增抄表</button>
+        ${canWrite() ? `<button class="btn btn-sm btn-primary" onclick="editMeter()">+ 新增抄表</button>` : ''}
       </div>
       <div class="col-auto text-muted small">共 ${list.length} 条</div>
     </div>
@@ -1915,7 +1938,7 @@ async function renderMeters(){
       <th>月份</th><th>楼栋/房号</th><th>${personLabel()}</th>
       <th>水表(上→本)</th><th>用水</th><th>水费</th>
       <th>电表(上→本)</th><th>用电</th><th>电费</th>
-      <th>合计</th><th width="150">操作</th>
+      <th>合计</th>${canWrite() ? '<th width="150">操作</th>' : ''}
     </tr></thead>
     <tbody>${list.map(m => `<tr>
       <td><b>${esc(m.month)}</b></td>
@@ -1928,10 +1951,10 @@ async function renderMeters(){
       <td>${m.elec_usage} 度</td>
       <td>${money(m.elec_fee)}</td>
       <td><b class="text-danger">${money((m.water_fee||0)+(m.elec_fee||0))}</b></td>
-      <td>
+      ${canWrite() ? `<td>
         <button class="btn btn-sm btn-outline-primary" onclick="editMeter(${m.id})">编辑</button>
         <button class="btn btn-sm btn-outline-danger" onclick="delMeter(${m.id})">删除</button>
-      </td></tr>`).join('') || '<tr><td colspan="11" class="text-center text-muted py-4">暂无抄表记录</td></tr>'}
+      </td>` : ''}</tr>`).join('') || '<tr><td colspan="12" class="text-center text-muted py-4">暂无抄表记录</td></tr>'}
     </tbody></table></div></div>
 
   <div class="alert alert-info mt-3 small mb-0">
@@ -2034,12 +2057,12 @@ async function renderNetwork(){
         </select>
       </div>
       <div class="col-auto">
-        <button class="btn btn-sm btn-success" onclick="generateBills('network')">
-          <i class="bi bi-magic"></i> 生成本月网费账单</button>
+        ${canWrite() ? `<button class="btn btn-sm btn-success" onclick="generateBills('network')">
+          <i class="bi bi-magic"></i> 生成本月网费账单</button>` : ''}
       </div>
       <div class="col-auto">
-        <button class="btn btn-sm btn-outline-primary" onclick="editNetBill()">
-          <i class="bi bi-plus-lg"></i> 手动新增</button>
+        ${canWrite() ? `<button class="btn btn-sm btn-outline-primary" onclick="editNetBill()">
+          <i class="bi bi-plus-lg"></i> 手动新增</button>` : ''}
       </div>
       <div class="col-auto text-muted small">共 ${list.length} 户</div>
     </div>
@@ -2078,28 +2101,30 @@ async function renderNetwork(){
     <thead class="table-light"><tr>
       <th>楼栋/房号</th><th>${personLabel()}</th><th>电话</th>
       <th>线路</th><th>月初带宽</th><th>当前带宽</th><th>每兆月租</th>
-      <th>本月变更</th><th>本月网费</th><th width="300">操作</th>
+      <th>本月变更</th><th>本月网费</th>${canWrite() ? '<th width="300">操作</th>' : ''}
     </tr></thead>
     <tbody>${list.map(r => {
       const bill = billByRoom[r.room_id];
-      const billBtns = bill
+      const billBtns = canWrite() ? (bill
         ? `<button class="btn btn-sm btn-outline-danger" onclick="delRoomNetBill(${bill.id})">删除账单</button>`
-        : `<button class="btn btn-sm btn-outline-warning" onclick="genRoomNetBill(${r.room_id}, '${esc(netFilter.month)}')">生成账单</button>`;
+        : `<button class="btn btn-sm btn-outline-warning" onclick="genRoomNetBill(${r.room_id}, '${esc(netFilter.month)}')">生成账单</button>`) : '';
       const lines = r.lines || [];
       const activeCount = lines.filter(l => l.status === 'active').length;
       const lineRows = lines.map(l => {
         const segTxt = (l.segments && l.segments.length)
           ? `<span class="text-muted small">${l.segments.map(s => `${s.bandwidth}兆×${s.days}天`).join(' + ')}</span>`
           : '';
-        const ops = l.status === 'active'
-          ? `<button class="btn btn-sm btn-outline-success" onclick="changeBandwidth(${r.room_id}, ${l.id}, 'add')">加兆</button>
-             <button class="btn btn-sm btn-outline-danger"  onclick="changeBandwidth(${r.room_id}, ${l.id}, 'reduce')">减兆</button>
-             <button class="btn btn-sm btn-outline-secondary" onclick="editNetLine(${l.id})">编辑</button>
-             <button class="btn btn-sm btn-outline-dark"    onclick="stopNetLine(${l.id})">停用</button>`
-          : `<span class="text-muted">已停用（${esc(l.stop_date || '-')}）</span>
-             <button class="btn btn-sm btn-outline-success" onclick="startNetLine(${l.id})">重新启用</button>`;
+        const ops = !canWrite()
+          ? ''
+          : (l.status === 'active'
+            ? `<button class="btn btn-sm btn-outline-success" onclick="changeBandwidth(${r.room_id}, ${l.id}, 'add')">加兆</button>
+               <button class="btn btn-sm btn-outline-danger"  onclick="changeBandwidth(${r.room_id}, ${l.id}, 'reduce')">减兆</button>
+               <button class="btn btn-sm btn-outline-secondary" onclick="editNetLine(${l.id})">编辑</button>
+               <button class="btn btn-sm btn-outline-dark"    onclick="stopNetLine(${l.id})">停用</button>`
+            : `<span class="text-muted">已停用（${esc(l.stop_date || '-')}）</span>
+               <button class="btn btn-sm btn-outline-success" onclick="startNetLine(${l.id})">重新启用</button>`);
         return `<tr class="table-light">
-          <td colspan="10" class="py-1">
+          <td colspan="${canWrite() ? 10 : 9}" class="py-1">
             <div class="d-flex align-items-center gap-2 flex-wrap" style="padding-left:28px">
               <i class="bi bi-diagram-3 text-muted"></i>
               <b>${esc(l.line_name)}</b>
@@ -2131,13 +2156,13 @@ async function renderNetwork(){
               （满月 ${money(r.full_month_fee)}）
             </div></td>
         <td>
-          <button class="btn btn-sm btn-outline-primary" onclick="addNetLine(${r.room_id}, ${r.bandwidth || 0})">+ 线路</button>
+          ${canWrite() ? `<button class="btn btn-sm btn-outline-primary" onclick="addNetLine(${r.room_id}, ${r.bandwidth || 0})">+ 线路</button>` : ''}
           <button class="btn btn-sm btn-outline-info"    onclick="showNetSegments(${r.room_id}, '${esc(data.month)}')">明细</button>
           <button class="btn btn-sm btn-outline-secondary" onclick="showNetHistory(${r.room_id})">历史</button>
           ${billBtns}
         </td>
       </tr>${lineRows}`;
-    }).join('') || `<tr><td colspan="10" class="text-center text-muted py-4">暂无数据（${curMode() === 'property' ? '请先在房产管理为房屋绑定企业' : '请先在合同管理为房间办理出租'}）</td></tr>`}
+    }).join('') || `<tr><td colspan="${canWrite() ? 10 : 9}" class="text-center text-muted py-4">暂无数据（${curMode() === 'property' ? '请先在房产管理为房屋绑定企业' : '请先在合同管理为房间办理出租'}）</td></tr>`}
     </tbody></table></div>
   </div>
 
@@ -2448,14 +2473,14 @@ async function renderRepairs(){
           <option value="done"       ${repairFilter === 'done' ? 'selected' : ''}>已完成</option>
         </select>
       </div>
-      <div class="col-auto"><button class="btn btn-sm btn-primary" onclick="editRepair()">+ 新增报修</button></div>
+      <div class="col-auto">${canWrite() ? `<button class="btn btn-sm btn-primary" onclick="editRepair()">+ 新增报修</button>` : ''}</div>
       <div class="col-auto text-muted small">共 ${list.length} 条</div>
     </div>
   </div></div>
   <div class="card"><div class="table-responsive"><table class="table table-hover mb-0">
     <thead class="table-light"><tr>
       <th>ID</th><th>楼栋/房间</th><th>报修人</th><th>标题</th><th>问题描述</th>
-      <th>状态</th><th>处理人</th><th>处理说明</th><th>报修时间</th><th width="170">操作</th>
+      <th>状态</th><th>处理人</th><th>处理说明</th><th>报修时间</th>${canWrite() ? '<th width="170">操作</th>' : ''}
     </tr></thead>
     <tbody>${list.map(r => `<tr>
       <td>${r.id}</td>
@@ -2467,11 +2492,11 @@ async function renderRepairs(){
       <td>${esc(r.handler || '-')}</td>
       <td><small>${esc(r.handle_note || '-')}</small></td>
       <td><small>${esc(r.created_at || '-')}</small></td>
-      <td>
+      ${canWrite() ? `<td>
         ${r.status !== 'done'
           ? `<button class="btn btn-sm btn-outline-success" onclick="handleRepair(${r.id})">处理</button>` : ''}
         <button class="btn btn-sm btn-outline-danger" onclick="delRepair(${r.id})">删除</button>
-      </td></tr>`).join('') || '<tr><td colspan="10" class="text-center text-muted py-4">暂无数据</td></tr>'}
+      </td>` : ''}</tr>`).join('') || '<tr><td colspan="11" class="text-center text-muted py-4">暂无数据</td></tr>'}
     </tbody></table></div></div>`;
 }
 
@@ -2542,7 +2567,7 @@ async function renderComplaints(){
         </select>
       </div>
       <div class="col-auto">
-        <button class="btn btn-sm btn-primary" onclick="editComplaint()">+ 登记投诉/建议</button>
+        ${canWrite() ? `<button class="btn btn-sm btn-primary" onclick="editComplaint()">+ 登记投诉/建议</button>` : ''}
       </div>
       <div class="col-auto text-muted small">
         共 ${list.length} 条 · 未办结 <span class="text-danger fw-bold">${pending}</span>
@@ -2552,7 +2577,7 @@ async function renderComplaints(){
   <div class="card"><div class="table-responsive"><table class="table table-hover mb-0">
     <thead class="table-light"><tr>
       <th>ID</th><th>楼栋/房号</th><th>企业</th><th>电话</th><th>类型</th>
-      <th>标题</th><th>内容</th><th>状态</th><th>处理人</th><th>处理说明</th><th>时间</th><th width="150">操作</th>
+      <th>标题</th><th>内容</th><th>状态</th><th>处理人</th><th>处理说明</th><th>时间</th>${canWrite() ? '<th width="150">操作</th>' : ''}
     </tr></thead>
     <tbody>${list.map(c => `<tr>
       <td>${c.id}</td>
@@ -2566,11 +2591,11 @@ async function renderComplaints(){
       <td>${esc(c.handler || '-')}</td>
       <td><small>${esc(c.handle_note || '-')}</small></td>
       <td><small>${esc(c.created_at || '-')}</small></td>
-      <td>
+      ${canWrite() ? `<td>
         ${c.status !== 'done'
           ? `<button class="btn btn-sm btn-outline-success" onclick="handleComplaint(${c.id})">处理</button>` : ''}
         <button class="btn btn-sm btn-outline-danger" onclick="delComplaint(${c.id})">删除</button>
-      </td></tr>`).join('') || '<tr><td colspan="12" class="text-center text-muted py-4">暂无数据</td></tr>'}
+      </td>` : ''}</tr>`).join('') || '<tr><td colspan="13" class="text-center text-muted py-4">暂无数据</td></tr>'}
     </tbody></table></div></div>`;
 }
 

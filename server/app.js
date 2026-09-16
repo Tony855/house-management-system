@@ -168,7 +168,7 @@ async function authenticate(req, res, next) {
   const token = header.startsWith('Bearer ') ? header.slice(7) : '';
   if (!token) return res.status(401).json({ error: '未登录' });
   const [rows] = await shared.query(
-    `SELECT u.id, u.username, u.real_name, u.role, u.mode AS user_mode, u.org_id,
+    `SELECT u.id, u.username, u.real_name, u.role, u.mode AS user_mode, u.org_id, u.company_id,
             COALESCE(rc.name, rb.name) AS role_name, COALESCE(rc.level, rb.level) AS level,
             s.mode AS session_mode, s.org_id AS session_org, o.name AS org_name
        FROM sessions s
@@ -184,7 +184,8 @@ async function authenticate(req, res, next) {
     role: u.role, role_name: u.role_name || u.role, level: u.level || 'staff'
   };
   req.token = token;
-  req.level = u.level || 'staff';
+  req.level = u.company_id ? 'company_admin' : (u.level || 'staff');
+  req.companyId = u.company_id || null;
   req.mode = u.session_mode || u.user_mode || 'rental';
   req.orgId = u.session_org || u.org_id || null;
   req.orgName = u.org_name || null;
@@ -220,7 +221,7 @@ const ROUTE_FEATURE = [
   [/^\/complaints/, 'complaint']
 ];
 function checkPagePerm(req) {
-  if (req.level === 'super' || req.level === 'admin') return true;
+  if (req.level === 'super' || req.level === 'admin' || req.level === 'company_admin') return true;
   for (const [re, pages] of ROUTE_PAGES) {
     if (re.test(req.path)) return (req.pages || []).some(p => pages.includes(p));
   }
@@ -236,6 +237,10 @@ function checkFeature(req) {
 const authPerm = (req, res, next) => authMode(req, res, () => {
   /* 超级管理员只负责开通主体与系统监控，不参与任何业务数据读写 */
   if (req.level === 'super') return res.status(403).json({ error: '超级管理员不参与业务操作' });
+  /* 企业管理员：物业系统内只读本企业数据，一切写操作拒绝 */
+  if (req.level === 'company_admin' && req.method !== 'GET') {
+    return res.status(403).json({ error: '企业管理员为只读权限' });
+  }
   if (!checkFeature(req)) return res.status(404).json({ error: '当前系统不提供该功能' });
   if (!checkPagePerm(req)) return res.status(403).json({ error: '无权访问该功能' });
   next();
@@ -306,24 +311,41 @@ router.post('/login', h(async (req, res) => {
     return res.status(400).json({ error: '用户名或密码错误' });
   }
   const mode = u.mode || 'rental';
+  const isCompanyAdmin = !!u.company_id;
+  /* 企业管理员附加企业名（tenants 在业务库，登录后单独查） */
+  let company_name = null;
+  if (u.company_id) {
+    const [[tc]] = await getPool(mode).query(
+      'SELECT name FROM tenants WHERE id = ? AND org_id = ?', [u.company_id, u.org_id]);
+    company_name = tc ? tc.name : null;
+  }
   const token = crypto.randomBytes(32).toString('hex');
   await shared.query('INSERT INTO sessions (token, user_id, mode, org_id) VALUES (?, ?, ?, ?)',
     [token, u.id, mode, u.org_id || null]);
   const pages = await userPages(u.id);
   res.json({
     id: u.id, username: u.username, name: u.real_name,
-    role: u.role, role_name: u.role_name, level: u.level || 'staff',
+    role: u.role, role_name: u.role_name,
+    level: isCompanyAdmin ? 'company_admin' : (u.level || 'staff'),
+    company_id: u.company_id || null,
     mode, org_id: u.org_id || null, org_name: u.org_name || null,
+    company_name,
     pages, token
   });
 }));
 
 router.get('/me', authMode, h(async (req, res) => {
   const pages = await userPages(req.user.id);
+  let company_name = null;
+  if (req.companyId) {
+    const [[tc]] = await pool.query('SELECT name FROM tenants WHERE id = ? AND org_id = ?', [req.companyId, req.orgId]);
+    company_name = tc ? tc.name : null;
+  }
   res.json({
     id: req.user.id, username: req.user.username, name: req.user.real_name,
     role: req.user.role, role_name: req.user.role_name,
     level: req.level, mode: req.mode, org_id: req.orgId, org_name: req.orgName,
+    company_id: req.companyId || null, company_name,
     pages
   });
 }));
@@ -521,6 +543,10 @@ async function getOrgPrices() {
 router.get('/stats', auth, h(async (req, res) => {
   const mode = req.mode, f = FEATURES[mode], t = today(), ym = t.slice(0, 7);
   const oid = req.orgId;
+  /* 企业管理员：全部统计仅限本企业房产 */
+  const so = req.level === 'company_admin' ? Number(req.companyId) : null;
+  const soAnd = (alias) => (so ? ` AND ${alias}.owner_id = ${so}` : '');
+  const soAndNoAlias = () => (so ? ' AND owner_id = ' + so : '');
   const empty = () => ({
     total_rooms: 0, vacant: 0, rented: 0, booked: 0, cleaning: 0, maintenance: 0, occupancy: 0,
     month_receivable: 0, month_received: 0, arrears: 0, pending_repairs: 0,
@@ -542,7 +568,7 @@ router.get('/stats', auth, h(async (req, res) => {
             COALESCE(SUM(status='booked'),0) AS booked,
             COALESCE(SUM(status='cleaning'),0) AS cleaning,
             COALESCE(SUM(status='maintenance'),0) AS maintenance
-       FROM rooms WHERE org_id = ?`, [oid]);
+       FROM rooms r WHERE r.org_id = ?${soAnd('r')}`, [oid]);
   Object.assign(R, {
     total_rooms: Number(roomStat.total), vacant: Number(roomStat.vacant), rented: Number(roomStat.rented),
     booked: Number(roomStat.booked), cleaning: Number(roomStat.cleaning), maintenance: Number(roomStat.maintenance)
@@ -550,22 +576,29 @@ router.get('/stats', auth, h(async (req, res) => {
   R.occupancy = R.total_rooms ? Math.round(R.rented / R.total_rooms * 100) : 0;
 
   const [monthBills] = await pool.query(
-    'SELECT amount, paid_amount FROM bills WHERE org_id = ? AND (due_date LIKE ? OR period_start LIKE ?)',
+    `SELECT b.amount, b.paid_amount FROM bills b JOIN rooms r ON r.id = b.room_id
+      WHERE b.org_id = ?${soAnd('r')} AND (b.due_date LIKE ? OR b.period_start LIKE ?)`,
     [oid, ym + '%', ym + '%']);
   R.month_receivable = round2(monthBills.reduce((s, b) => s + Number(b.amount), 0));
   R.month_received = round2(monthBills.reduce((s, b) => s + Number(b.paid_amount || 0), 0));
-  const [allBills] = await pool.query('SELECT amount, paid_amount FROM bills WHERE org_id = ?', [oid]);
+  const [allBills] = await pool.query(
+    `SELECT b.amount, b.paid_amount FROM bills b JOIN rooms r ON r.id = b.room_id
+      WHERE b.org_id = ?${soAnd('r')}`, [oid]);
   R.arrears = round2(allBills.reduce((s, b) => s + (Number(b.amount) - Number(b.paid_amount || 0)), 0));
-  const [[rp]] = await pool.query("SELECT COUNT(*) AS c FROM repairs WHERE org_id = ? AND status <> 'done'", [oid]);
+  const [[rp]] = await pool.query(
+    `SELECT COUNT(*) AS c FROM repairs x JOIN rooms rm ON rm.id = x.room_id
+      WHERE x.org_id = ?${soAnd('rm')} AND x.status <> 'done'`, [oid]);
   R.pending_repairs = Number(rp.c);
-  const [[mr]] = await pool.query('SELECT COUNT(*) AS c FROM repairs WHERE org_id = ? AND created_at LIKE ?', [oid, ym + '%']);
+  const [[mr]] = await pool.query(
+    `SELECT COUNT(*) AS c FROM repairs x JOIN rooms rm ON rm.id = x.room_id
+      WHERE x.org_id = ?${soAnd('rm')} AND x.created_at LIKE ?`, [oid, ym + '%']);
   R.month_repairs = Number(mr.c);
 
   const [recentBills] = await pool.query(
     `SELECT b.*, r.room_no, t.name AS tenant_name
        FROM bills b LEFT JOIN rooms r ON r.id = b.room_id
        LEFT JOIN tenants t ON t.id = b.tenant_id
-      WHERE b.org_id = ? ORDER BY b.id DESC LIMIT 6`, [oid]);
+      WHERE b.org_id = ?${soAnd('r')} ORDER BY b.id DESC LIMIT 6`, [oid]);
   R.recent_bills = recentBills.map(b => ({ ...b, amount: Number(b.amount), paid_amount: Number(b.paid_amount) }));
 
   /* 租房：合同到期 + 水电 + 网费 */
@@ -614,13 +647,14 @@ router.get('/stats', auth, h(async (req, res) => {
       `SELECT r.*, b.name AS building_name, t.name AS owner_name, t.phone AS owner_phone
          FROM rooms r LEFT JOIN buildings b ON b.id = r.building_id
          LEFT JOIN tenants t ON t.id = r.owner_id
-        WHERE r.org_id = ? AND r.owner_id IS NOT NULL`, [oid]);
+        WHERE r.org_id = ? AND r.owner_id IS NOT NULL${soAnd('r')}`, [oid]);
     R.owner_count = new Set(ownedRooms.map(r => r.owner_id)).size;
-    const [[ec]] = await pool.query('SELECT COUNT(*) AS c FROM org_employees WHERE org_id = ?', [oid]);
+    const [[ec]] = await pool.query(
+      'SELECT COUNT(*) AS c FROM org_employees WHERE org_id = ?' + soAndNoAlias(), [oid]);
     R.emp_count = Number(ec.c);
     const [[bwRow]] = await pool.query(
       `SELECT COALESCE(SUM(l.bandwidth),0) AS s FROM room_net_lines l JOIN rooms r ON r.id = l.room_id
-        WHERE l.org_id = ? AND l.status = 'active' AND r.owner_id IS NOT NULL`, [oid]);
+        WHERE l.org_id = ? AND l.status = 'active' AND r.owner_id IS NOT NULL${soAnd('r')}`, [oid]);
     R.total_bandwidth = Number(bwRow.s);
     for (const r of ownedRooms) R.net_estimate_month += (await calcNetFee(pool, r.id, ym)).total;
     R.net_estimate_month = round2(R.net_estimate_month);
@@ -629,7 +663,9 @@ router.get('/stats', auth, h(async (req, res) => {
 
   /* 水电抄表（租房/物业） */
   if (f.meter) {
-    const [monthMeters] = await pool.query('SELECT * FROM meters WHERE org_id = ? AND month = ?', [oid, ym]);
+    const [monthMeters] = await pool.query(
+      `SELECT m.* FROM meters m JOIN rooms r ON r.id = m.room_id
+        WHERE m.org_id = ?${soAnd('r')} AND m.month = ?`, [oid, ym]);
     R.meter_water_fee = monthMeters.reduce((s, m) => s + Number(m.water_fee || 0), 0);
     R.meter_elec_fee = monthMeters.reduce((s, m) => s + Number(m.elec_fee || 0), 0);
     R.meter_water_usage = monthMeters.reduce((s, m) => s + Number(m.water_usage || 0), 0);
@@ -638,22 +674,25 @@ router.get('/stats', auth, h(async (req, res) => {
 
   /* 网费（租房/物业） */
   if (f.network) {
-    const [netBills] = await pool.query("SELECT * FROM bills WHERE org_id = ? AND source = 'network'", [oid]);
+    const [netBills] = await pool.query(
+      `SELECT b.* FROM bills b JOIN rooms r ON r.id = b.room_id
+        WHERE b.org_id = ?${soAnd('r')} AND b.source = 'network'`, [oid]);
     const netMonth = netBills.filter(b => (b.due_date || '').startsWith(ym) || (b.period_start || '').startsWith(ym));
     R.net_receivable = round2(netMonth.reduce((s, b) => s + Number(b.amount), 0));
     R.net_received = round2(netMonth.reduce((s, b) => s + Number(b.paid_amount || 0), 0));
     R.net_arrears = round2(netBills.reduce((s, b) => s + (Number(b.amount) - Number(b.paid_amount || 0)), 0));
     const [[ncm]] = await pool.query(
-      'SELECT COUNT(*) AS c FROM net_changes WHERE org_id = ? AND change_date LIKE ?', [oid, ym + '%']);
+      `SELECT COUNT(*) AS c FROM net_changes n JOIN rooms r ON r.id = n.room_id
+        WHERE n.org_id = ?${soAnd('r')} AND n.change_date LIKE ?`, [oid, ym + '%']);
     R.net_change_month = Number(ncm.c);
     if (!f.owner) {
       /* 租房：网费房间为已出租房间 */
       const [rentedRooms] = await pool.query(
         `SELECT r.*, b.name AS building_name FROM rooms r LEFT JOIN buildings b ON b.id = r.building_id
-          WHERE r.org_id = ? AND r.status = 'rented'`, [oid]);
+          WHERE r.org_id = ? AND r.status = 'rented'${soAnd('r')}`, [oid]);
       const [[bwRow]] = await pool.query(
         `SELECT COALESCE(SUM(l.bandwidth),0) AS s FROM room_net_lines l JOIN rooms r ON r.id = l.room_id
-          WHERE l.org_id = ? AND l.status = 'active' AND r.status = 'rented'`, [oid]);
+          WHERE l.org_id = ? AND l.status = 'active' AND r.status = 'rented'${soAnd('r')}`, [oid]);
       R.total_bandwidth = Number(bwRow.s);
       for (const r of rentedRooms) R.net_estimate_month += (await calcNetFee(pool, r.id, ym)).total;
       R.net_estimate_month = round2(R.net_estimate_month);
@@ -661,7 +700,9 @@ router.get('/stats', auth, h(async (req, res) => {
     }
     /* 物业账单口径（物业费+水电） */
     if (f.owner) {
-      const [propertyBills] = await pool.query("SELECT * FROM bills WHERE org_id = ? AND source = 'property'", [oid]);
+      const [propertyBills] = await pool.query(
+        `SELECT b.* FROM bills b JOIN rooms r ON r.id = b.room_id
+          WHERE b.org_id = ?${soAnd('r')} AND b.source = 'property'`, [oid]);
       const pm = propertyBills.filter(b => (b.due_date || '').startsWith(ym) || (b.period_start || '').startsWith(ym));
       R.property_receivable = round2(pm.reduce((s, b) => s + Number(b.amount), 0));
       R.property_received = round2(pm.reduce((s, b) => s + Number(b.paid_amount || 0), 0));
@@ -672,13 +713,15 @@ router.get('/stats', auth, h(async (req, res) => {
 
   /* 投诉（物业） */
   if (f.complaint) {
-    const [[pc]] = await pool.query("SELECT COUNT(*) AS c FROM complaints WHERE org_id = ? AND status <> 'done'", [oid]);
+    const [[pc]] = await pool.query(
+      `SELECT COUNT(*) AS c FROM complaints c JOIN rooms r ON r.id = c.room_id
+        WHERE c.org_id = ?${soAnd('r')} AND c.status <> 'done'`, [oid]);
     R.pending_complaints = Number(pc.c);
     const [recentComplaints] = await pool.query(
       `SELECT c.*, r.room_no, b.name AS building_name, t.name AS owner_name
          FROM complaints c LEFT JOIN rooms r ON r.id = c.room_id
          LEFT JOIN buildings b ON b.id = r.building_id LEFT JOIN tenants t ON t.id = c.owner_id
-        WHERE c.org_id = ? ORDER BY c.id DESC LIMIT 6`, [oid]);
+        WHERE c.org_id = ?${soAnd('r')} ORDER BY c.id DESC LIMIT 6`, [oid]);
     R.recent_complaints = recentComplaints;
   }
 
@@ -822,6 +865,7 @@ router.get('/rooms', auth, h(async (req, res) => {
   if (building_id) { cond.push('r.building_id = ?'); params.push(Number(building_id)); }
   if (status) { cond.push('r.status = ?'); params.push(status); }
   if (keyword) { cond.push('r.room_no LIKE ?'); params.push('%' + keyword + '%'); }
+  if (req.level === 'company_admin') { cond.push('r.owner_id = ?'); params.push(req.companyId); }
   const [rows] = await pool.query(
     roomSelectSql(req.mode) + ' WHERE ' + cond.join(' AND ') + ' ORDER BY r.id', params);
   res.json(rows);
@@ -906,10 +950,19 @@ router.get('/tenants', auth, h(async (req, res) => {
     : `0 AS emp_count`;
   let sql = `SELECT t.*, ${roomExpr}, ${empExpr} FROM tenants t WHERE t.org_id = ?`;
   const params = [req.orgId];
+  if (req.level === 'company_admin') { sql += ' AND t.id = ?'; params.push(req.companyId); }
   if (keyword) { sql += ' AND (t.name LIKE ? OR t.phone LIKE ?)'; params.push('%' + keyword + '%', '%' + keyword + '%'); }
   sql += ' ORDER BY t.id';
   const [rows] = await pool.query(sql, params);
-  res.json(rows.map(r => ({ ...r, emp_count: Number(r.emp_count) })));
+  /* 企业管理员账号映射（users 在共享库，单独查询后合并） */
+  let adminMap = {};
+  if (req.mode === 'property' && rows.length) {
+    const [aus] = await shared.query(
+      'SELECT company_id, username FROM users WHERE org_id = ? AND company_id IS NOT NULL', [req.orgId]);
+    adminMap = Object.fromEntries(aus.map(a => [a.company_id, a.username]));
+  }
+  res.json(rows.map(r => ({ ...r, emp_count: Number(r.emp_count),
+    admin_username: adminMap[r.id] || null })));
 }));
 router.post('/tenants', auth, h(async (req, res) => {
   const B = req.body || {};
@@ -966,8 +1019,39 @@ router.delete('/tenants/:id', auth, h(async (req, res) => {
       'SELECT COUNT(*) AS c FROM org_employees WHERE owner_id = ? AND org_id = ?', [id, oid]);
     if (Number(ec) > 0) return res.status(400).json({ error: '该企业名下仍有企业员工，请先移除或改绑' });
   }
+  /* 级联删除该企业的企业管理员账号，避免孤儿账号 */
+  await shared.query('DELETE FROM users WHERE company_id = ? AND org_id = ?', [id, oid]);
   await pool.query('DELETE FROM tenants WHERE id = ? AND org_id = ?', [id, oid]);
   res.json({ ok: true });
+}));
+
+/* 企业管理员：主管理员为企业设置/重置账号（仅物业；企业管理员登录后只见本企业数据） */
+router.post('/tenants/:id/company-admin', authMode, orgAdminOnly, h(async (req, res) => {
+  if (req.mode !== 'property') return res.status(404).json({ error: '仅物业系统支持企业管理员' });
+  const id = Number(req.params.id);
+  const B = req.body || {};
+  if (!B.username || !B.password) return res.status(400).json({ error: '用户名与密码不能为空' });
+  if (!/^[a-zA-Z][a-zA-Z0-9_]{2,19}$/.test(B.username)) {
+    return res.status(400).json({ error: '用户名需以字母开头，仅字母/数字/下划线，3-20位' });
+  }
+  if (B.password.length < 6) return res.status(400).json({ error: '密码至少 6 位' });
+  const [[comp]] = await pool.query('SELECT * FROM tenants WHERE id = ? AND org_id = ?', [id, req.orgId]);
+  if (!comp) return res.status(400).json({ error: '企业不存在' });
+  const dup = await shared.query(
+    'SELECT id FROM users WHERE username = ? AND org_id = ? AND (company_id IS NULL OR company_id <> ?)', [B.username, req.orgId, id]);
+  if (dup[0].length) return res.status(400).json({ error: '用户名已被使用' });
+  const [exist] = await shared.query(
+    'SELECT id FROM users WHERE company_id = ? AND org_id = ?', [id, req.orgId]);
+  if (exist.length) {
+    await shared.query('UPDATE users SET password = ?, real_name = ? WHERE id = ?',
+      [hashPassword(B.password), B.real_name || '', exist[0].id]);
+  } else {
+    await shared.query(
+      `INSERT INTO users (username, password, real_name, role, mode, org_id, company_id)
+       VALUES (?, ?, ?, 'staff', 'property', ?, ?)`,
+      [B.username, hashPassword(B.password), B.real_name || '', req.orgId, id]);
+  }
+  res.json({ ok: true, username: B.username });
 }));
 
 /* ==================================================================
@@ -975,7 +1059,8 @@ router.delete('/tenants/:id', auth, h(async (req, res) => {
  * ================================================================== */
 router.get('/org-employees', authMode, h(async (req, res) => {
   if (req.mode !== 'property') return res.status(404).json({ error: '仅物业系统支持企业员工' });
-  if (req.level !== 'admin' && !(await userPages(req.user.id)).includes('orgemp')) {
+  if (req.level !== 'admin' && req.level !== 'company_admin'
+      && !(await userPages(req.user.id)).includes('orgemp')) {
     return res.status(403).json({ error: '无权限访问企业员工' });
   }
   const [rows] = await pool.query(
@@ -984,7 +1069,8 @@ router.get('/org-employees', authMode, h(async (req, res) => {
        LEFT JOIN rooms r ON r.id = e.room_id
        LEFT JOIN buildings b ON b.id = r.building_id
        LEFT JOIN tenants t ON t.id = e.owner_id
-      WHERE e.org_id = ? ORDER BY e.id`, [req.orgId]);
+      WHERE e.org_id = ?${req.level === 'company_admin' ? ' AND e.owner_id = ?' : ''} ORDER BY e.id`,
+    req.level === 'company_admin' ? [req.orgId, req.companyId] : [req.orgId]);
   res.json(rows);
 }));
 router.post('/org-employees', authMode, orgAdminOnly, h(async (req, res) => {
@@ -1225,6 +1311,7 @@ router.get('/bills', auth, h(async (req, res) => {
   const params = [req.orgId];
   if (status) { cond.push('b.status = ?'); params.push(status); }
   if (source) { cond.push('b.source = ?'); params.push(source); }
+  if (req.level === 'company_admin') { cond.push('r.owner_id = ?'); params.push(req.companyId); }
   const [rows] = await pool.query(
     `SELECT b.*, r.room_no, bd.name AS building_name, t.name AS tenant_name
        FROM bills b LEFT JOIN rooms r ON r.id = b.room_id
@@ -1414,6 +1501,7 @@ router.get('/meters', auth, h(async (req, res) => {
   if (month) { sql += ' AND m.month = ?'; params.push(month); }
   if (room_id) { sql += ' AND m.room_id = ?'; params.push(Number(room_id)); }
   if (building_id) { sql += ' AND r.building_id = ?'; params.push(Number(building_id)); }
+  if (req.level === 'company_admin') { sql += ' AND r.owner_id = ?'; params.push(req.companyId); }
   sql += ' ORDER BY m.month DESC, m.id DESC';
   const [rows] = await pool.query(sql, params);
   res.json(rows);
@@ -1489,6 +1577,7 @@ router.get('/netLines', auth, h(async (req, res) => {
                JOIN buildings b ON b.id = r.building_id WHERE l.org_id = ?`;
   const params = [req.orgId];
   if (room_id) { sql += ' AND l.room_id = ?'; params.push(Number(room_id)); }
+  if (req.level === 'company_admin') { sql += ' AND r.owner_id = ?'; params.push(req.companyId); }
   sql += ' ORDER BY l.room_id, l.id';
   const [rows] = await pool.query(sql, params);
   res.json(rows.map(l => ({ ...l, bandwidth: Number(l.bandwidth) || 0 })));
@@ -1568,6 +1657,7 @@ router.get('/netChanges', auth, h(async (req, res) => {
   if (room_id) { sql += ' AND ch.room_id = ?'; params.push(Number(room_id)); }
   if (month) { sql += ' AND ch.change_date LIKE ?'; params.push(month + '%'); }
   if (building_id) { sql += ' AND r.building_id = ?'; params.push(Number(building_id)); }
+  if (req.level === 'company_admin') { sql += ' AND r.owner_id = ?'; params.push(req.companyId); }
   sql += ' ORDER BY ch.change_date DESC, ch.id DESC';
   const [rows] = await pool.query(sql, params);
   res.json(rows.map(c => ({ ...c,
@@ -1620,6 +1710,7 @@ router.get('/netfee', auth, h(async (req, res) => {
   let sql = `SELECT * FROM rooms WHERE org_id = ? AND ${FEATURES[req.mode].billable}`;
   const params = [req.orgId];
   if (building_id) { sql += ' AND building_id = ?'; params.push(Number(building_id)); }
+  if (req.level === 'company_admin') { sql += ' AND owner_id = ?'; params.push(req.companyId); }
   const [rooms] = await pool.query(sql, params);
   const price = await netUnitPrice();
   const list = [];
@@ -1689,6 +1780,7 @@ router.get('/repairs', auth, h(async (req, res) => {
     WHERE r.org_id = ?`;
   const params = [req.orgId];
   if (status) { sql += ' AND r.status = ?'; params.push(status); }
+  if (req.level === 'company_admin') { sql += ' AND rm.owner_id = ?'; params.push(req.companyId); }
   sql += ' ORDER BY r.id DESC';
   const [rows] = await pool.query(sql, params);
   res.json(rows);
@@ -1725,6 +1817,7 @@ router.get('/complaints', auth, h(async (req, res) => {
   const params = [req.orgId];
   if (status) { cond.push('c.status = ?'); params.push(status); }
   if (type) { cond.push('c.type = ?'); params.push(type); }
+  if (req.level === 'company_admin') { cond.push('r.owner_id = ?'); params.push(req.companyId); }
   const [rows] = await pool.query(
     `SELECT c.*, r.room_no, b.name AS building_name, t.name AS owner_name, t.phone AS owner_phone
        FROM complaints c LEFT JOIN rooms r ON r.id = c.room_id

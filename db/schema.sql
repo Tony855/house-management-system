@@ -42,6 +42,7 @@ CREATE TABLE users (
   role       VARCHAR(30)  NOT NULL DEFAULT 'staff',
   mode       ENUM('rental','hotel','property') NULL,
   org_id     INT NULL,
+  company_id INT NULL,   -- 企业管理员：非空 = 物业系统某企业（tenants.id），仅本企业数据可见
   created_at DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
   INDEX idx_users_org (org_id),
   UNIQUE KEY uk_org_username (org_id, username)

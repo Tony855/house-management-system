@@ -296,6 +296,92 @@ const addDays = (n) => { const d = new Date(); d.setDate(d.getDate() + n); retur
     r = await call(PROP, 'DELETE', '/roles/' + viewRoleId);
     check('清理企业查看角色', r.status === 200 && r.body.ok, '');
 
+    console.log('== 6e. 企业管理员（物业：只读本企业数据，删除企业级联清理账号）==');
+    const caUser = 'biz' + String(ts).slice(-6);
+    r = await call(PROP, 'POST', '/tenants', { name: '测试' + '一公司' + ts });
+    check('建企业A', r.status === 200 && r.body.id, JSON.stringify(r.body));
+    const compA = r.body.id;
+    r = await call(PROP, 'POST', '/tenants', { name: '测试' + '二公司' + ts });
+    check('建企业B', r.status === 200 && r.body.id, JSON.stringify(r.body));
+    const compB = r.body.id;
+    r = await call(PROP, 'POST', '/buildings', { name: '企业楼', address: '路2' });
+    const bld = r.body.id;
+    r = await call(PROP, 'POST', '/rooms', { building_id: bld, room_no: 'A01', floor: 1, area: 30, room_type: '办公室', status: 'vacant', owner_id: compA, property_fee: 2 });
+    check('企业A名下房产', r.status === 200 && r.body.id, JSON.stringify(r.body));
+    const roomA2 = r.body.id;
+    r = await call(PROP, 'POST', '/rooms', { building_id: bld, room_no: 'B01', floor: 1, area: 30, room_type: '办公室', status: 'vacant', owner_id: compB, property_fee: 2 });
+    check('企业B名下房产', r.status === 200 && r.body.id, JSON.stringify(r.body));
+    const roomB2 = r.body.id;
+    r = await call(PROP, 'POST', '/org-employees', { company: '测试' + '一公司' + ts, name: '甲员工' });
+    const empA = r.body.id;
+    r = await call(PROP, 'POST', '/org-employees', { company: '测试' + '二公司' + ts, name: '乙员工' });
+    const empB = r.body.id;
+    r = await call(PROP, 'POST', '/bills', { room_id: roomA2, source: 'network', amount: 50, period_start: ym + '-01', period_end: ym + '-28', due_date: addDays(5) });
+    check('企业A房产生成网费账单', r.status === 200 && r.body.id, JSON.stringify(r.body));
+    const billA = r.body.id;
+    /* 设置 / 重置企业管理员账号 */
+    r = await call(PROP, 'POST', '/tenants/' + compA + '/company-admin',
+      { username: caUser, real_name: '一号管理员', password: 'ca123456' });
+    check('为企业设置管理员账号', r.status === 200 && r.body.username === caUser, JSON.stringify(r.body));
+    r = await call(PROP, 'POST', '/tenants/' + compA + '/company-admin',
+      { username: caUser, real_name: '一号管理员', password: 'ca654321' });
+    check('重复设置=重置密码', r.status === 200 && r.body.username === caUser, JSON.stringify(r.body));
+    r = await call(PROP, 'GET', '/tenants');
+    check('企业列表带管理员账号', r.body.find(x => x.id === compA).admin_username === caUser, JSON.stringify(r.body.find(x => x.id === compA)));
+    /* 企业管理员登录（物业窗口） */
+    r = await login(caUser, 'ca654321', 'property');
+    check('企业管理员登录物业窗口', r.status === 200 && r.body.level === 'company_admin' && r.body.company_id === compA, JSON.stringify(r.body).slice(0, 120));
+    const CA = r.body.token;
+    /* 数据隔离：只读本企业 */
+    r = await call(CA, 'GET', '/tenants');
+    check('企业管理员仅见本企业', r.status === 200 && r.body.length === 1 && r.body[0].id === compA, JSON.stringify(r.body.map(t => t.id)));
+    r = await call(CA, 'GET', '/org-employees');
+    check('企业管理员仅见本企业员工', r.status === 200 && r.body.length === 1 && r.body[0].id === empA, JSON.stringify(r.body.map(e => e.id)));
+    r = await call(CA, 'GET', '/rooms');
+    check('企业管理员仅见本企业房产', r.status === 200 && r.body.length === 1 && r.body[0].id === roomA2, JSON.stringify(r.body.map(x => x.id)));
+    r = await call(CA, 'GET', '/bills');
+    check('企业管理员仅见本企业账单', r.status === 200 && r.body.length === 1 && r.body[0].id === billA, JSON.stringify(r.body.map(b => b.id)));
+    r = await call(CA, 'GET', '/stats?f=room,owner,bill,network,repair,complaint,meter');
+    check('企业管理员统计仅本企业', r.status === 200 && Number(r.body.total_rooms) === 1 && Number(r.body.owner_count) === 1 && Number(r.body.emp_count) === 1, JSON.stringify({ total_rooms: r.body.total_rooms, owner_count: r.body.owner_count, emp_count: r.body.emp_count }));
+    /* 只读：写接口全部 403 */
+    const caWrites = [
+      ['POST', '/tenants', { name: '越权企业' }],
+      ['POST', '/org-employees', { company: '测试' + '一公司' + ts, name: '越权' }],
+      ['POST', '/rooms', { building_id: bld, room_no: 'X01', status: 'vacant' }],
+      ['POST', '/bills', { room_id: roomA2, source: 'network', amount: 9 }],
+      ['POST', '/bills/' + billA + '/pay', { paid_amount: 1 }],
+      ['POST', '/meters', { room_id: roomA2, month: ym, water_curr: 10, elec_curr: 10 }],
+      ['POST', '/repairs', { room_id: roomA2, title: 't' }],
+      ['POST', '/complaints', { room_id: roomA2, type: '投诉', title: 't' }],
+      ['POST', '/netLines', { room_id: roomA2, line_name: 'L1', bandwidth: 5 }],
+      ['PUT', '/settings', { rate: 9 }],
+      ['POST', '/tenants/' + compA + '/company-admin', { username: 'hack', password: '123456' }]
+    ];
+    for (const [m, p, b] of caWrites) {
+      r = await call(CA, m, p, b);
+      check('企业管理员只读(' + m + ' ' + p + ')', r.status === 403, JSON.stringify(r.body).slice(0, 80));
+    }
+    r = await call(CA, 'GET', '/users');
+    check('企业管理员不能访问员工管理', r.status === 403, '');
+    r = await call(CA, 'GET', '/roles');
+    check('企业管理员不能访问角色管理', r.status === 403, '');
+    /* 清理并验证级联删除管理员账号 */
+    r = await call(PROP, 'DELETE', '/org-employees/' + empA);
+    check('清理企业A员工', r.status === 200 && r.body.ok, '');
+    r = await call(PROP, 'DELETE', '/bills/' + billA);
+    check('清理企业A账单', r.status === 200 && r.body.ok, '');
+    r = await call(PROP, 'DELETE', '/rooms/' + roomA2);
+    check('清理企业A房产', r.status === 200 && r.body.ok, '');
+    r = await call(PROP, 'DELETE', '/tenants/' + compA);
+    check('删除企业A(级联清理管理员账号)', r.status === 200 && r.body.ok, JSON.stringify(r.body));
+    r = await login(caUser, 'ca654321', 'property');
+    check('删除企业后管理员账号失效', r.status === 400 && /用户名或密码错误/.test(r.body.error), JSON.stringify(r.body));
+    r = await call(PROP, 'DELETE', '/org-employees/' + empB);
+    r = await call(PROP, 'DELETE', '/rooms/' + roomB2);
+    r = await call(PROP, 'DELETE', '/tenants/' + compB);
+    r = await call(PROP, 'DELETE', '/buildings/' + bld);
+    check('清理企业B及楼栋', r.status === 200 && r.body.ok, '');
+
     console.log('== 7. 员工页面权限 ==');
     r = await call(STAFF, 'GET', '/rooms');
     check('员工可访问授权页面(房源)', r.status === 200, r.status + '');
