@@ -2441,7 +2441,7 @@ router.put('/users/:id', authMode, orgAdminOnly, h(async (req, res) => {
   const username = v.str('username', { max: 50, pattern: /^[A-Za-z0-9_@.\-]+$/ });
   const password = v.str('password', { max: 100, clean: false });
   const real_name = v.str('real_name', { max: 50 });
-  const role = v.str('role', { max: 30, pattern: /^[a-zA-Z][a-zA-Z0-9_]*$/, def: 'staff' });
+  const role = v.str('role', { max: 30, pattern: /^[a-zA-Z][a-zA-Z0-9_]*$/ });
   v.ok();
   const [us] = await shared.query('SELECT * FROM users WHERE id = ?', [req.params.id]);
   if (!us.length) return res.status(400).json({ error: '用户不存在' });
@@ -2449,12 +2449,14 @@ router.put('/users/:id', authMode, orgAdminOnly, h(async (req, res) => {
   if (target.org_id !== req.orgId || target.role === 'admin') {
     return res.status(403).json({ error: '只能管理本系统员工' });
   }
+  /* 未传 role 时保持原角色，避免误改 */
+  const newRole = role !== null ? role : target.role;
   const [meta] = await shared.query(
     'SELECT * FROM roles WHERE code = ? AND (org_id = ? OR (org_id IS NULL AND level = "staff")) LIMIT 1',
-    [role, req.orgId]);
+    [newRole, req.orgId]);
   if (!meta.length) return res.status(400).json({ error: '角色不存在' });
   await shared.query('UPDATE users SET real_name = ?, role = ? WHERE id = ?',
-    [real_name || '', role, req.params.id]);
+    [real_name !== null ? real_name : target.real_name, newRole, req.params.id]);
   if (password) {
     await shared.query('UPDATE users SET password = ? WHERE id = ?', [hashPassword(password), req.params.id]);
   }

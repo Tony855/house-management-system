@@ -1715,6 +1715,7 @@ async function renderBills(){
     Object.entries(billFilter).filter(([, v]) => v)
   ).toString();
   const list = await api('/api/bills' + (qs ? '?' + qs : ''));
+  const billTotal = list.reduce((s, b) => s + (Number(b.amount) || 0), 0);
   const unpaid = list.filter(b => b.status !== 'paid')
                      .reduce((s, b) => s + (b.amount - (b.paid_amount || 0)), 0);
 
@@ -1776,8 +1777,9 @@ async function renderBills(){
       ${srcOpts}
       <div class="col-auto">${genBtns}</div>
       <div class="col-auto">${canOp('bill_add') ? `<button class="btn btn-sm btn-outline-primary" onclick="editBill()">+ 手动添加</button>` : ''}</div>
-      <div class="col-auto text-muted small">共 ${list.length} 条 · 未收合计
-        <span class="text-danger fw-bold">${money(unpaid)}</span></div>
+      <div class="col-auto text-muted small">${ME.level === 'company_admin'
+        ? `账单费用 <span class="fw-bold">${money(billTotal)}</span> · 未付合计 <span class="text-danger fw-bold">${money(unpaid)}</span>`
+        : `共 ${list.length} 条 · 未收合计 <span class="text-danger fw-bold">${money(unpaid)}</span>`}</div>
     </div>
   </div></div>
   <div class="card"><div class="table-responsive"><table class="table table-hover mb-0">
