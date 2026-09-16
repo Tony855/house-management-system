@@ -32,6 +32,9 @@
   .bw-tag{display:inline-block;padding:1px 8px;border-radius:10px;background:#dbeafe;color:#1e40af;font-size:12px;font-weight:600}
   .bw-add{background:#dcfce7;color:#166534}
   .bw-reduce{background:#fee2e2;color:#991b1b}
+  .op-group-title{font-weight:600;color:#6c757d;font-size:13px;border-top:1px dashed #dee2e6;padding:6px 0 2px}
+  .op-group-title:first-child{border-top:0;padding-top:0}
+  .op-item{flex:0 0 178px;margin-right:6px;margin-bottom:0}
 </style>
 </head>
 <body>
@@ -217,8 +220,12 @@ function openForm(title, fields, values, onSubmit, onMount){
     } else if (f.type === 'checklist'){
       html += `<div class="d-flex flex-wrap gap-1">`;
       (f.options || []).forEach(o => {
+        if (o.type === 'group'){
+          html += `<div class="w-100 op-group-title mt-1 mb-0">${esc(o.label)}</div>`;
+          return;
+        }
         const checked = (Array.isArray(v) && v.includes(o.value)) ? 'checked' : '';
-        html += `<label class="form-check form-check-inline me-2">
+        html += `<label class="form-check me-3 op-item">
           <input class="form-check-input" type="checkbox" name="${f.name}" value="${esc(o.value)}" ${checked}>
           <span class="form-check-label">${esc(o.label)}</span></label>`;
       });
@@ -516,48 +523,45 @@ function pageAllowed(p){
 /* 操作权限：主管理员全有；员工按角色 ops 判定（企业管理员无操作权限，上报类单独放行） */
 const canOp = (op) => ME.level === 'admin' || (ME.ops || []).includes(op);
 
-/* 操作权限功能点清单（动作级；角色配置「操作权限」勾选；租房/酒店/物业各自独立） */
+/* 操作权限功能点清单（动作级，按功能模块分组；租房/酒店/物业各自独立） */
 const OP_DEFS = {
   rental: [
-    ['building_add','楼栋：新增'], ['building_edit','楼栋：编辑'], ['building_delete','楼栋：删除'],
-    ['room_add','房源：新增'], ['room_edit','房源：编辑/状态'], ['room_delete','房源：删除'],
-    ['tenant_add','租客：新增'], ['tenant_edit','租客：编辑'], ['tenant_delete','租客：删除'],
-    ['contract_add','合同：签订'], ['contract_edit','合同：编辑'], ['contract_delete','合同：终止/删除'],
-    ['meter_add','抄表：录入'], ['meter_edit','抄表：编辑'], ['meter_delete','抄表：删除'],
-    ['netline_add','网络：新增线路'], ['netline_edit','网络：编辑线路'],
-    ['netline_bandwidth','网络：加兆/减兆'], ['netline_status','网络：停用/启用'],
-    ['bill_add','账单：手动添加'], ['bill_generate','账单：生成'], ['bill_delete','账单：删除'],
-    ['bill_pay','账单：收款'],
-    ['repair_add','报修：登记'], ['repair_handle','报修：处理'], ['repair_delete','报修：删除']
+    { g:'楼栋管理', items:[['building_add','新增'],['building_edit','编辑'],['building_delete','删除']] },
+    { g:'房源管理', items:[['room_add','新增'],['room_edit','编辑/状态'],['room_delete','删除']] },
+    { g:'租客管理', items:[['tenant_add','新增'],['tenant_edit','编辑'],['tenant_delete','删除']] },
+    { g:'合同管理', items:[['contract_add','签订'],['contract_edit','编辑'],['contract_delete','终止/删除']] },
+    { g:'水电抄表', items:[['meter_add','录入'],['meter_edit','编辑'],['meter_delete','删除']] },
+    { g:'网络管理', items:[['netline_add','新增线路'],['netline_edit','编辑线路'],['netline_bandwidth','加兆/减兆'],['netline_status','停用/启用']] },
+    { g:'账单收费', items:[['bill_add','手动添加'],['bill_generate','生成'],['bill_delete','删除'],['bill_pay','收款']] },
+    { g:'报修管理', items:[['repair_add','登记'],['repair_handle','处理'],['repair_delete','删除']] }
   ],
   hotel: [
-    ['building_add','楼栋：新增'], ['building_edit','楼栋：编辑'], ['building_delete','楼栋：删除'],
-    ['room_add','房间：新增'], ['room_edit','房间：编辑/状态'], ['room_delete','房间：删除'],
-    ['order_add','订单：预订/开房'], ['order_edit','订单：编辑'],
-    ['order_status','订单：入住/退房/取消'], ['order_delete','订单：删除'],
-    ['tenant_add','房客：新增'], ['tenant_edit','房客：编辑'], ['tenant_delete','房客：删除'],
-    ['bill_add','账单：手动添加'], ['bill_generate','账单：生成'], ['bill_delete','账单：删除'],
-    ['bill_pay','账单：收款'],
-    ['repair_add','报修：登记'], ['repair_handle','报修：处理'], ['repair_delete','报修：删除']
+    { g:'楼栋管理', items:[['building_add','新增'],['building_edit','编辑'],['building_delete','删除']] },
+    { g:'房间管理', items:[['room_add','新增'],['room_edit','编辑/状态'],['room_delete','删除']] },
+    { g:'订单管理', items:[['order_add','预订/开房'],['order_edit','编辑'],['order_status','入住/退房/取消'],['order_delete','删除']] },
+    { g:'房客管理', items:[['tenant_add','新增'],['tenant_edit','编辑'],['tenant_delete','删除']] },
+    { g:'账单收费', items:[['bill_add','手动添加'],['bill_generate','生成'],['bill_delete','删除'],['bill_pay','收款']] },
+    { g:'报修管理', items:[['repair_add','登记'],['repair_handle','处理'],['repair_delete','删除']] }
   ],
   property: [
-    ['building_add','楼栋：新增'], ['building_edit','楼栋：编辑'], ['building_delete','楼栋：删除'],
-    ['room_add','房产：新增'], ['room_edit','房产：编辑/状态'], ['room_delete','房产：删除'],
-    ['tenant_add','企业：新增'], ['tenant_edit','企业：编辑/设管理员'], ['tenant_delete','企业：删除'],
-    ['orgemp_add','企业员工：新增'], ['orgemp_edit','企业员工：编辑'], ['orgemp_delete','企业员工：删除'],
-    ['meter_add','抄表：录入'], ['meter_edit','抄表：编辑'], ['meter_delete','抄表：删除'],
-    ['netline_add','网络：新增线路'], ['netline_edit','网络：编辑线路'],
-    ['netline_bandwidth','网络：加兆/减兆'], ['netline_status','网络：停用/启用'],
-    ['bill_add','账单/网费：手动添加'], ['bill_generate','账单/网费：生成'], ['bill_delete','账单/网费：删除'],
-    ['bill_pay','账单：收款'],
-    ['repair_add','报修：登记'], ['repair_handle','报修：处理'], ['repair_delete','报修：删除'],
-    ['complaint_add','投诉：登记'], ['complaint_handle','投诉：处理'], ['complaint_delete','投诉：删除']
+    { g:'楼栋管理', items:[['building_add','新增'],['building_edit','编辑'],['building_delete','删除']] },
+    { g:'房产管理', items:[['room_add','新增'],['room_edit','编辑/状态'],['room_delete','删除']] },
+    { g:'企业管理', items:[['tenant_add','新增'],['tenant_edit','编辑/设管理员'],['tenant_delete','删除']] },
+    { g:'企业员工', items:[['orgemp_add','新增'],['orgemp_edit','编辑'],['orgemp_delete','删除']] },
+    { g:'水电抄表', items:[['meter_add','录入'],['meter_edit','编辑'],['meter_delete','删除']] },
+    { g:'网络管理', items:[['netline_add','新增线路'],['netline_edit','编辑线路'],['netline_bandwidth','加兆/减兆'],['netline_status','停用/启用']] },
+    { g:'账单收费', items:[['bill_add','手动添加'],['bill_generate','生成'],['bill_delete','删除'],['bill_pay','收款']] },
+    { g:'报修管理', items:[['repair_add','登记'],['repair_handle','处理'],['repair_delete','删除']] },
+    { g:'投诉建议', items:[['complaint_add','登记'],['complaint_handle','处理'],['complaint_delete','删除']] }
   ]
 };
 const opLabel = (op) => {
-  const list = OP_DEFS[curMode()] || [];
-  const it = list.find(x => x[0] === op);
-  return it ? it[1] : op;
+  const groups = OP_DEFS[curMode()] || [];
+  for (const g of groups){
+    const it = g.items.find(x => x[0] === op);
+    if (it) return g.g + '：' + it[1];
+  }
+  return op;
 };
 /* 任一操作权限即显示对应操作列（管理员全 true） */
 const canAnyOp = (...ops) => ops.some(op => canOp(op));
@@ -3024,7 +3028,11 @@ async function editRole(id){
       fields.push({ name:'pages', label:'角色权限', type:'checklist', options: rolePageOpts,
         hint:'勾选后可访问对应页面；分配该角色的员工自动获得' });
     }
-    const roleOpOpts = (OP_DEFS[curMode()] || []).map(([value, label]) => ({ value, label }));
+    const roleOpOpts = [];
+    (OP_DEFS[curMode()] || []).forEach(g => {
+      roleOpOpts.push({ type:'group', label:g.g });
+      g.items.forEach(([value, label]) => roleOpOpts.push({ value, label }));
+    });
     if (roleOpOpts.length){
       fields.push({ name:'ops', label:'操作权限', type:'checklist', options: roleOpOpts,
         hint:'勾选后拥有对应页面的操作按钮（如新增、编辑、删除、收款）' });
