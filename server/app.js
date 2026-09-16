@@ -288,13 +288,13 @@ const authPerm = (req, res, next) => authMode(req, res, () => {
   if (req.level === 'super') return res.status(403).json({ error: '超级管理员不参与业务操作' });
   if (req.method !== 'GET') {
     if (req.level === 'company_admin') {
-      /* 企业管理员：本企业数据只读；写操作按角色 ops 白名单放行（宽带上报 / 网络报修），其余一律拒绝 */
-      const ops = req.ops || [];
+      /* 企业管理员：写操作按角色 ops 放行，且仅限带企业维度的数据（房产/抄表/宽带/账单/报修/投诉），
+       * 楼栋等主体级基础设施及租房/酒店业务一律不可写；数据范围在接口内按本企业校验 */
       const need = OP_ROUTES.find(r => (!r[2] || r[2] === req.method) && r[0].test(req.path));
-      const allowedWrite = need
-        && ['netline_bandwidth', 'repair_add'].includes(need[1])
-        && ops.includes(need[1]);
-      if (!allowedWrite) return res.status(403).json({ error: '企业管理员无此操作权限' });
+      const okRoute = /^\/(rooms|meters|netLines|netChanges|netRequests|bills|repairs|complaints)(\/|$)/.test(req.path);
+      if (!need || !okRoute || !(req.ops || []).includes(need[1])) {
+        return res.status(403).json({ error: '企业管理员无此操作权限' });
+      }
     } else if (req.level === 'staff') {
       /* 员工：写操作按角色操作权限（ops）放行 */
       const need = OP_ROUTES.find(r => (!r[2] || r[2] === req.method) && r[0].test(req.path));
@@ -307,6 +307,15 @@ const authPerm = (req, res, next) => authMode(req, res, () => {
   if (!checkPagePerm(req)) return res.status(403).json({ error: '无权访问该功能' });
   next();
 });
+
+/* 企业管理员写入：目标房产必须属于本企业（其他身份恒通过） */
+async function ownRoomCheck(req, roomId) {
+  if (!roomId || req.level !== 'company_admin') return true;
+  const [[rm]] = await pool.query(
+    'SELECT id FROM rooms WHERE id = ? AND org_id = ? AND owner_id = ?',
+    [roomId, req.orgId, req.companyId]);
+  return !!rm;
+}
 const auth = authPerm;
 
 const superOnly = (req, res, next) => {
@@ -1007,6 +1016,10 @@ router.post('/rooms', auth, h(async (req, res) => {
   roomRules(v, mode, false);
   v.ok();
   const d = roomPayload(B, mode);
+  /* 企业管理员只能为本企业创建房产 */
+  if (req.level === 'company_admin' && Number(d.owner_id) !== Number(req.companyId)) {
+    return res.status(403).json({ error: '仅可为本企业创建房产' });
+  }
   /* 水电单价：空值取本主体默认（仅租房/物业，且为新增时） */
   if (FEATURES[mode].settingsPrices) {
     const gp = await getOrgPrices();
@@ -1028,6 +1041,16 @@ router.put('/rooms/:id', auth, h(async (req, res) => {
   v.ok();
   const d = roomPayload(B, mode);
   delete d.org_id;
+  /* 企业管理员只能编辑本企业房产，且归属企业不可改到别家 */
+  if (req.level === 'company_admin') {
+    const [[oldRoom]] = await pool.query('SELECT owner_id FROM rooms WHERE id = ? AND org_id = ?', [req.params.id, req.orgId]);
+    if (!oldRoom || Number(oldRoom.owner_id) !== Number(req.companyId)) {
+      return res.status(403).json({ error: '仅可编辑本企业房产' });
+    }
+    if (d.owner_id !== undefined && Number(d.owner_id) !== Number(req.companyId)) {
+      return res.status(403).json({ error: '房产归属企业不可变更' });
+    }
+  }
   const sets = Object.keys(d).map(c => `${c} = ?`).join(', ');
   const [r] = await pool.query(
     `UPDATE rooms SET ${sets} WHERE id = ? AND org_id = ?`,
@@ -1040,6 +1063,7 @@ router.delete('/rooms/:id', auth, h(async (req, res) => {
   const [rows] = await pool.query('SELECT * FROM rooms WHERE id = ? AND org_id = ?', [req.params.id, req.orgId]);
   const room = rows[0];
   if (!room) return res.status(400).json({ error: '房间不存在' });
+  if (!(await ownRoomCheck(req, room.id))) return res.status(403).json({ error: '仅可删除本企业房产' });
   if (room.status === 'rented' || room.status === 'booked') {
     return res.status(400).json({ error: '房间正在使用中，无法删除' });
   }
@@ -1679,6 +1703,7 @@ router.post('/bills', auth, h(async (req, res) => {
   const amount = v.num('amount', { required: true, min: 0, max: 1e12 });
   const remark = v.str('remark', { max: 500 });
   v.ok();
+  if (!(await ownRoomCheck(req, room_id))) return res.status(403).json({ error: '仅可为本企业房产添加账单' });
   const [r] = await pool.query(
     `INSERT INTO bills (org_id, source, room_id, tenant_id, contract_id, order_id, period_start, period_end,
         due_date, amount, paid_amount, status, remark)
@@ -1699,6 +1724,7 @@ router.post('/bills/:id/pay', auth, h(async (req, res) => {
   const [rows] = await pool.query('SELECT * FROM bills WHERE id = ? AND org_id = ?', [req.params.id, req.orgId]);
   const b = rows[0];
   if (!b) return res.status(400).json({ error: '账单不存在' });
+  if (!(await ownRoomCheck(req, b.room_id))) return res.status(403).json({ error: '仅可操作本企业房产的账单' });
   const paid = Math.min(Number(b.amount), Number(b.paid_amount) + amt);
   const status = paid >= Number(b.amount) ? 'paid' : (paid > 0 ? 'partial' : 'unpaid');
   await pool.query(
@@ -1709,6 +1735,10 @@ router.post('/bills/:id/pay', auth, h(async (req, res) => {
   res.json(normBill(after[0]));
 }));
 router.delete('/bills/:id', auth, h(async (req, res) => {
+  const [rows] = await pool.query('SELECT * FROM bills WHERE id = ? AND org_id = ?', [req.params.id, req.orgId]);
+  const b = rows[0];
+  if (!b) return res.status(400).json({ error: '账单不存在' });
+  if (!(await ownRoomCheck(req, b.room_id))) return res.status(403).json({ error: '仅可删除本企业房产的账单' });
   await pool.query('DELETE FROM bills WHERE id = ? AND org_id = ?', [req.params.id, req.orgId]);
   res.json({ ok: true });
 }));
@@ -1770,6 +1800,7 @@ router.post('/meters', auth, h(async (req, res) => {
   const [rooms] = await pool.query('SELECT * FROM rooms WHERE id = ? AND org_id = ?', [room_id, req.orgId]);
   const room = rooms[0];
   if (!room) return res.status(400).json({ error: '房间不存在' });
+  if (!(await ownRoomCheck(req, room_id))) return res.status(403).json({ error: '仅可录入本企业房产的抄表' });
   const [[{ c }]] = await pool.query(
     'SELECT COUNT(*) AS c FROM meters WHERE room_id = ? AND org_id = ? AND month = ?',
     [room_id, req.orgId, month]);
@@ -1800,6 +1831,10 @@ router.put('/meters/:id', auth, h(async (req, res) => {
   const [rooms] = await pool.query('SELECT * FROM rooms WHERE id = ? AND org_id = ?', [room_id, req.orgId]);
   const room = rooms[0];
   if (!room) return res.status(400).json({ error: '房间不存在' });
+  if (!(await ownRoomCheck(req, room_id))) return res.status(403).json({ error: '仅可编辑本企业房产的抄表' });
+  const [[mOld]] = await pool.query('SELECT room_id FROM meters WHERE id = ? AND org_id = ?', [req.params.id, req.orgId]);
+  if (!mOld) return res.status(400).json({ error: '抄表记录不存在' });
+  if (!(await ownRoomCheck(req, mOld.room_id))) return res.status(403).json({ error: '仅可编辑本企业房产的抄表' });
   const [[{ c }]] = await pool.query(
     'SELECT COUNT(*) AS c FROM meters WHERE room_id = ? AND org_id = ? AND month = ? AND id <> ?',
     [room_id, req.orgId, month, req.params.id]);
@@ -1816,6 +1851,8 @@ router.put('/meters/:id', auth, h(async (req, res) => {
   res.json(normMeter(rows[0]));
 }));
 router.delete('/meters/:id', auth, h(async (req, res) => {
+  const [[mOld]] = await pool.query('SELECT room_id FROM meters WHERE id = ? AND org_id = ?', [req.params.id, req.orgId]);
+  if (mOld && !(await ownRoomCheck(req, mOld.room_id))) return res.status(403).json({ error: '仅可删除本企业房产的抄表' });
   await pool.query('DELETE FROM meters WHERE id = ? AND org_id = ?', [req.params.id, req.orgId]);
   res.json({ ok: true });
 }));
@@ -1847,6 +1884,7 @@ router.post('/netLines', auth, h(async (req, res) => {
   v.ok();
   const [rooms] = await pool.query('SELECT * FROM rooms WHERE id = ? AND org_id = ?', [room_id, req.orgId]);
   if (!rooms[0]) return res.status(400).json({ error: '房间不存在' });
+  if (!(await ownRoomCheck(req, room_id))) return res.status(403).json({ error: '仅可为本企业房产新增线路' });
   const [r] = await pool.query(
     `INSERT INTO room_net_lines (org_id, room_id, line_name, bandwidth, start_date, status, stop_date, remark, created_at)
      VALUES (?, ?, ?, ?, ?, 'active', NULL, ?, ?)`,
@@ -1863,6 +1901,7 @@ router.put('/netLines/:id', auth, h(async (req, res) => {
   const [rows] = await pool.query('SELECT * FROM room_net_lines WHERE id = ? AND org_id = ?', [req.params.id, req.orgId]);
   if (!rows[0]) return res.status(400).json({ error: '线路不存在' });
   const line = rows[0];
+  if (!(await ownRoomCheck(req, line.room_id))) return res.status(403).json({ error: '仅可编辑本企业房产的线路' });
   const sets = [];
   const params = [];
   if (line_name !== null) { sets.push('line_name = ?'); params.push(line_name || line.line_name); }
@@ -1881,6 +1920,7 @@ router.post('/netLines/:id/stop', auth, h(async (req, res) => {
   const [rows] = await pool.query('SELECT * FROM room_net_lines WHERE id = ? AND org_id = ?', [req.params.id, req.orgId]);
   const line = rows[0];
   if (!line) return res.status(400).json({ error: '线路不存在' });
+  if (!(await ownRoomCheck(req, line.room_id))) return res.status(403).json({ error: '仅可停用本企业房产的线路' });
   if (line.status === 'stopped') return res.status(400).json({ error: '线路已停用' });
   if (line.start_date && stopDate < String(line.start_date)) {
     return res.status(400).json({ error: '停用日期不能早于开通日' });
@@ -1898,6 +1938,7 @@ router.post('/netLines/:id/start', auth, h(async (req, res) => {
   const [rows] = await pool.query('SELECT * FROM room_net_lines WHERE id = ? AND org_id = ?', [req.params.id, req.orgId]);
   const line = rows[0];
   if (!line) return res.status(400).json({ error: '线路不存在' });
+  if (!(await ownRoomCheck(req, line.room_id))) return res.status(403).json({ error: '仅可启用本企业房产的线路' });
   if (line.status === 'active') return res.status(400).json({ error: '线路已启用' });
   await pool.query(
     "UPDATE room_net_lines SET status = 'active', start_date = ?, stop_date = NULL WHERE id = ? AND org_id = ?",
@@ -1941,6 +1982,7 @@ router.post('/netChanges', auth, h(async (req, res) => {
     'SELECT * FROM room_net_lines WHERE id = ? AND org_id = ? AND room_id = ?', [lineId, req.orgId, roomId]);
   const line = lines[0];
   if (!line) return res.status(400).json({ error: '宽带线路不存在' });
+  if (!(await ownRoomCheck(req, roomId))) return res.status(403).json({ error: '仅可变更本企业房产的带宽' });
   if (line.status !== 'active') return res.status(400).json({ error: '该线路已停用，不能变更带宽' });
   const oldBw = Number(line.bandwidth) || 0;
   const newBw = new_bandwidth;
@@ -1964,6 +2006,7 @@ router.post('/netChanges', auth, h(async (req, res) => {
 router.delete('/netChanges/:id', auth, h(async (req, res) => {
   const [rows] = await pool.query('SELECT * FROM net_changes WHERE id = ? AND org_id = ?', [req.params.id, req.orgId]);
   if (!rows.length) return res.status(400).json({ error: '记录不存在' });
+  if (!(await ownRoomCheck(req, rows[0].room_id))) return res.status(403).json({ error: '仅可删除本企业房产的带宽变更记录' });
   await pool.query('DELETE FROM net_changes WHERE id = ? AND org_id = ?', [req.params.id, req.orgId]);
   res.json({ ok: true,
     warn: '已删除变更记录。如该记录为最后一条，线路当前带宽未自动回滚，请到网络管理手动调整。' });
@@ -2196,14 +2239,18 @@ router.put('/repairs/:id', auth, h(async (req, res) => {
   const handler = v.str('handler', { max: 50 });
   const handle_note = v.str('handle_note', { max: 1000 });
   v.ok();
+  const [rp] = await pool.query('SELECT * FROM repairs WHERE id = ? AND org_id = ?', [req.params.id, req.orgId]);
+  if (!rp.length) return res.status(400).json({ error: '报修记录不存在' });
+  if (!(await ownRoomCheck(req, rp[0].room_id))) return res.status(403).json({ error: '仅可处理本企业房产的报修' });
   const [r] = await pool.query(
     'UPDATE repairs SET status = ?, handler = ?, handle_note = ? WHERE id = ? AND org_id = ?',
     [status || 'pending', handler || '', handle_note || '', req.params.id, req.orgId]);
-  if (!r.affectedRows) return res.status(400).json({ error: '报修记录不存在' });
   const [rows] = await pool.query('SELECT * FROM repairs WHERE id = ? AND org_id = ?', [req.params.id, req.orgId]);
   res.json(rows[0]);
 }));
 router.delete('/repairs/:id', auth, h(async (req, res) => {
+  const [rows] = await pool.query('SELECT * FROM repairs WHERE id = ? AND org_id = ?', [req.params.id, req.orgId]);
+  if (rows.length && !(await ownRoomCheck(req, rows[0].room_id))) return res.status(403).json({ error: '仅可删除本企业房产的报修' });
   await pool.query('DELETE FROM repairs WHERE id = ? AND org_id = ?', [req.params.id, req.orgId]);
   res.json({ ok: true });
 }));
@@ -2234,6 +2281,7 @@ router.post('/complaints', auth, h(async (req, res) => {
   const title = v.str('title', { required: true, max: 100 });
   const content = v.str('content', { max: 1000 });
   v.ok();
+  if (room_id && !(await ownRoomCheck(req, room_id))) return res.status(403).json({ error: '仅可投诉本企业房产' });
   const [r] = await pool.query(
     `INSERT INTO complaints (org_id, room_id, owner_id, type, title, content, status, handler, handle_note, created_at)
      VALUES (?, ?, ?, ?, ?, ?, 'pending', '', '', ?)`,
@@ -2249,14 +2297,18 @@ router.put('/complaints/:id', auth, h(async (req, res) => {
   const handler = v.str('handler', { max: 50 });
   const handle_note = v.str('handle_note', { max: 1000 });
   v.ok();
+  const [cp] = await pool.query('SELECT * FROM complaints WHERE id = ? AND org_id = ?', [req.params.id, req.orgId]);
+  if (!cp.length) return res.status(400).json({ error: '记录不存在' });
+  if (cp[0].room_id && !(await ownRoomCheck(req, cp[0].room_id))) return res.status(403).json({ error: '仅可处理本企业房产的投诉' });
   const [r] = await pool.query(
     'UPDATE complaints SET status = ?, handler = ?, handle_note = ? WHERE id = ? AND org_id = ?',
     [status || 'pending', handler || '', handle_note || '', req.params.id, req.orgId]);
-  if (!r.affectedRows) return res.status(400).json({ error: '记录不存在' });
   const [rows] = await pool.query('SELECT * FROM complaints WHERE id = ? AND org_id = ?', [req.params.id, req.orgId]);
   res.json(rows[0]);
 }));
 router.delete('/complaints/:id', auth, h(async (req, res) => {
+  const [rows] = await pool.query('SELECT * FROM complaints WHERE id = ? AND org_id = ?', [req.params.id, req.orgId]);
+  if (rows.length && rows[0].room_id && !(await ownRoomCheck(req, rows[0].room_id))) return res.status(403).json({ error: '仅可删除本企业房产的投诉' });
   await pool.query('DELETE FROM complaints WHERE id = ? AND org_id = ?', [req.params.id, req.orgId]);
   res.json({ ok: true });
 }));
