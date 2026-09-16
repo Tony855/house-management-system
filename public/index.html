@@ -2211,8 +2211,9 @@ async function renderNetwork(){
                 ? '<span class="badge bg-success">启用</span>'
                 : '<span class="badge bg-secondary">停用</span>'}
               <small class="text-muted">开通 ${esc(l.start_date || '-')}${l.status === 'stopped' ? ' · 停用 ' + esc(l.stop_date || '-') : ''}</small>
-              <span class="ms-auto small">${segTxt} 本月费 <b class="text-primary">${money(l.total)}</b></span>
-              <span>${ops}</span>
+              <span class="ms-auto d-flex align-items-center gap-2 flex-wrap">
+                ${segTxt ? segTxt + ' ' : ''}${ops}
+              </span>
             </div>
           </td></tr>`;
       }).join('');
@@ -2224,8 +2225,7 @@ async function renderNetwork(){
         <td><span class="badge bg-light text-dark">${activeCount}/${lines.length} 条</span></td>
         <td><span class="bw-tag">${r.month_start_bandwidth} 兆</span></td>
         <td><span class="bw-tag">${r.bandwidth} 兆</span></td>
-        <td><span class="text-muted">${money(r.price)}/兆</span>
-            <i class="bi bi-info-circle text-muted" title="统一取本经营主体系统设置的网费单价"></i></td>
+        <td><span class="text-muted" title="统一取本经营主体系统设置的网费单价">${money(r.price)}/兆</span></td>
         <td>${r.changes_in_month > 0
               ? `<span class="badge bg-warning text-dark">${r.changes_in_month} 次</span>`
               : '<span class="text-muted">-</span>'}</td>
