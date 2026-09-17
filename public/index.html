@@ -1048,7 +1048,7 @@ async function renderSettings(){
     </div>
     <p class="small text-muted mb-2">明细录入时输入商品名可联想带出型号与单价，也可在明细弹窗点「从商品库添加」批量生成；数据仅本经营主体可见。</p>
     <div class="table-responsive"><table class="table table-sm table-bordered align-middle mb-2">
-      <thead class="table-light"><tr><th style="width:8%">类别</th><th style="width:36%">商品</th><th style="width:30%">型号</th><th style="width:16%">单价(${currencySymbol()})</th><th style="width:48px"></th></tr></thead>
+      <thead class="table-light"><tr><th style="width:13%">类别</th><th style="width:33%">商品</th><th style="width:28%">型号</th><th style="width:16%">单价(${currencySymbol()})</th><th style="width:48px"></th></tr></thead>
       <tbody id="lib_tb"></tbody>
     </table></div>
     <button class="btn btn-sm btn-primary" onclick="saveItemLib()">保存商品库</button>
@@ -1073,7 +1073,7 @@ function libPaint(){
     return;
   }
   tb.innerHTML = _libDraft.map((it, i) => `<tr>
-    <td><select class="form-select form-select-sm" data-lib="cat" data-i="${i}">
+    <td style="min-width:90px"><select class="form-select form-select-sm" style="min-width:86px" data-lib="cat" data-i="${i}">
       <option value="net" ${it.cat === 'net' ? 'selected' : ''}>网络</option>
       <option value="util" ${it.cat === 'util' ? 'selected' : ''}>水电</option>
     </select></td>
