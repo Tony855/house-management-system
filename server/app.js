@@ -577,6 +577,8 @@ router.get('/settings', authMode, h(async (req, res) => {
     currency: base.currency, rate: Number(base.rate),
     net_price_per_mb: Number(base.net_price_per_mb),
     water_price: Number(base.water_price), elec_price: Number(base.elec_price),
+    remind_enable: Number(base.remind_enable === undefined ? 1 : base.remind_enable),
+    remind_days: Number(base.remind_days === undefined ? 3 : base.remind_days),
     prices: FEATURES[req.mode].settingsPrices,
     item_lib: lib
   });
@@ -589,6 +591,8 @@ router.put('/settings', authMode, orgAdminOnly, h(async (req, res) => {
   const currency = v.str('currency', { enum: ['CNY', 'USD'], def: s.currency });
   const rate = v.num('rate', { min: 0.01, max: 10000, def: Number(s.rate) });
   let net = Number(s.net_price_per_mb), water = Number(s.water_price), elec = Number(s.elec_price);
+  const remindEnable = v.num('remind_enable', { min: 0, max: 1, def: Number(s.remind_enable === undefined ? 1 : s.remind_enable) });
+  const remindDays = v.num('remind_days', { min: 0, max: 365, def: Number(s.remind_days === undefined ? 3 : s.remind_days) });
   if (FEATURES[req.mode].settingsPrices) {
     net = v.num('net_price_per_mb', { min: 0, max: 1e7, def: net });
     water = v.num('water_price', { min: 0, max: 1e7, def: water });
@@ -617,13 +621,14 @@ router.put('/settings', authMode, orgAdminOnly, h(async (req, res) => {
     }
   }
   await shared.query(
-    `INSERT INTO settings (org_id, currency, rate, net_price_per_mb, water_price, elec_price, item_lib)
-     VALUES (?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO settings (org_id, currency, rate, net_price_per_mb, water_price, elec_price, remind_enable, remind_days, item_lib)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON DUPLICATE KEY UPDATE currency = VALUES(currency), rate = VALUES(rate),
        net_price_per_mb = VALUES(net_price_per_mb), water_price = VALUES(water_price),
-       elec_price = VALUES(elec_price)${lib !== null ? ', item_lib = VALUES(item_lib)' : ''}`,
-    [req.orgId, currency, rate, net, water, elec, lib !== null ? JSON.stringify(lib) : null]);
+       elec_price = VALUES(elec_price), remind_enable = VALUES(remind_enable), remind_days = VALUES(remind_days)${lib !== null ? ', item_lib = VALUES(item_lib)' : ''}`,
+    [req.orgId, currency, rate, net, water, elec, remindEnable, remindDays, lib !== null ? JSON.stringify(lib) : null]);
   res.json({ currency, rate: Number(rate), net_price_per_mb: net, water_price: water, elec_price: elec,
+    remind_enable: remindEnable, remind_days: remindDays,
     prices: FEATURES[req.mode].settingsPrices, item_lib: lib !== null ? lib : (() => { try { return JSON.parse(s.item_lib || '[]'); } catch (e) { return []; } })() });
 }));
 
@@ -1759,12 +1764,56 @@ router.post('/bills/update-network', auth, h(async (req, res) => {
       `UPDATE bills SET amount = ?, remark = ?, period_end = ? WHERE id = ? AND org_id = ?`,
       [calc.total, `网费：${detail}（按 ${calc.daysInMonth} 天折算，单价 ${unitTxt}/兆）`, end, bill.id, oid]);
     await conn.commit(); conn.release();
-    return res.json({ msg: `已更新账单 #${bill.id}：金额由 ${bill.amount} 重算为 ${calc.total}`, amount: calc.total });
+    return res.json({ msg: `已更新账单 #${bill.id}：金额由 ${bill.amount} 重算为 ${calc.total}`,
+      bill_id: bill.id, old_amount: Number(bill.amount), new_amount: calc.total });
   } catch (e) {
     await conn.rollback();
     conn.release();
     throw e;
   }
+}));
+/* 账单到期提醒：未收款且应缴日 ≤ 今天+提前天数；开关关闭时返回 enabled:false */
+router.get('/bill-reminders', auth, h(async (req, res) => {
+  const oid = req.orgId;
+  const [st] = await shared.query(
+    'SELECT remind_enable, remind_days FROM settings WHERE org_id = ?', [oid]);
+  const enabled = Number(st[0] && st[0].remind_enable === undefined ? 1 : (st[0] && st[0].remind_enable));
+  const days = Number(st[0] && st[0].remind_days === undefined ? 3 : (st[0] && st[0].remind_days));
+  if (!enabled) return res.json({ enabled: false, list: [], total: 0, overdue: 0, due_soon: 0, amount: 0 });
+  const t = today();
+  const limit = addDays(t, Number.isFinite(days) ? days : 3);
+  let sql = `SELECT b.id, b.source, b.room_id, b.period_start, b.period_end, b.due_date,
+      b.amount, b.paid_amount, b.status,
+      r.building_id, r.room_no, t.name AS tenant_name
+    FROM bills b
+    JOIN rooms r ON r.id = b.room_id AND r.org_id = b.org_id
+    LEFT JOIN tenants t ON t.id = b.tenant_id
+    WHERE b.org_id = ? AND b.status != 'paid' AND b.paid_amount < b.amount
+      AND b.due_date IS NOT NULL AND b.due_date <= ?`;
+  const params = [oid, limit];
+  if (req.level === 'company_admin') {
+    sql += ' AND b.tenant_id = ?'; params.push(req.companyId);
+  }
+  sql += ' ORDER BY b.due_date ASC, b.id DESC LIMIT 200';
+  const [rows] = await pool.query(sql, params);
+  const list = [];
+  for (const b of rows) {
+    let bname = '';
+    if (b.building_id) {
+      const [bs] = await pool.query('SELECT name FROM buildings WHERE id = ? AND org_id = ?', [b.building_id, oid]);
+      bname = bs.length ? bs[0].name : '';
+    }
+    list.push({
+      id: b.id, source: b.source, room_no: b.room_no, building_name: bname,
+      tenant_name: b.tenant_name || '', period_start: b.period_start, period_end: b.period_end,
+      due_date: b.due_date, amount: Number(b.amount), paid_amount: Number(b.paid_amount || 0),
+      status: b.status
+    });
+  }
+  const overdue = list.filter(x => x.due_date < t).length;
+  const due_soon = list.length - overdue;
+  const amount = round2(list.reduce((s, x) => s + (x.amount - x.paid_amount), 0));
+  res.json({ enabled: true, list, total: list.length, overdue, due_soon, amount });
 }));
 /* 租房：某房间生效合同的租客 id */
 async function rentedTenant(conn, roomId, oid) {
