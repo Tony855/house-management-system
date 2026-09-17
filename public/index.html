@@ -35,6 +35,9 @@
   .op-group-title{font-weight:600;color:#6c757d;font-size:13px;border-top:1px dashed #dee2e6;padding:6px 0 2px}
   .op-group-title:first-child{border-top:0;padding-top:0}
   .op-item{flex:0 0 178px;margin-right:6px;margin-bottom:0}
+  .sug-drop{display:none;position:absolute;top:100%;left:0;right:0;z-index:1080;background:#fff;border:1px solid #dee2e6;border-radius:6px;max-height:220px;overflow:auto;box-shadow:0 4px 12px rgba(0,0,0,.12)}
+  .sug-drop .sug-item{padding:6px 10px;cursor:pointer;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .sug-drop .sug-item:hover{background:#f1f3f5}
 </style>
 </head>
 <body>
@@ -2124,15 +2127,32 @@ async function delOrder(id){
  * ================================================================== */
 let billFilter = { status:'', source:'', owner:'' };
 let billCompanies = [];
-/* 企业筛选：输入清空即恢复全部；选择/确认联想项后按企业过滤 */
+/* 企业筛选：输入关键字联想（只显示包含关键字的选项），选择后按企业过滤 */
 function billOwnerInput(el){
-  if (!el.value && billFilter.owner){ billFilter.owner = ''; renderBills(); }
+  const wrap = document.getElementById('billOwnerWrap');
+  if (!wrap) return;
+  if (!el.value){
+    if (billFilter.owner){ billFilter.owner = ''; renderBills(); }
+    wrap.style.display = 'none'; return;
+  }
+  const kw = el.value.trim();
+  const hits = (billCompanies || []).filter(c => c.name.includes(kw));
+  wrap.innerHTML = hits.slice(0, 8).map(c =>
+    `<div class="sug-item" data-id="${c.id}" data-name="${esc(c.name)}"
+        onmousedown="billOwnerPickItem(this)">${esc(c.name)}</div>`).join('')
+    || '<div class="sug-item text-muted">无匹配企业</div>';
+  wrap.style.display = 'block';
 }
-function billOwnerPick(){
-  const el = document.getElementById('billOwnerQ');
-  const hit = (billCompanies || []).find(c => c.name === el.value);
-  billFilter.owner = hit ? String(hit.id) : '';
+function billOwnerPickItem(el){
+  billFilter.owner = el.dataset.id;
+  const q = document.getElementById('billOwnerQ');
+  if (q) q.value = el.dataset.name;
+  const wrap = document.getElementById('billOwnerWrap');
+  if (wrap) wrap.style.display = 'none';
   renderBills();
+}
+function billOwnerBlur(){
+  setTimeout(() => { const w = document.getElementById('billOwnerWrap'); if (w) w.style.display = 'none'; }, 150);
 }
 
 async function renderBills(){
@@ -2154,13 +2174,11 @@ async function renderBills(){
     billCompanies = companies;
     const curName = billFilter.owner ? (companies.find(c => String(c.id) === String(billFilter.owner)) || {}).name || '' : '';
     ownerOpts = `
-      <div class="col-auto">
-        <input class="form-control form-control-sm" id="billOwnerQ" list="billOwnerList" placeholder="搜索企业"
+      <div class="col-auto" style="position:relative">
+        <input class="form-control form-control-sm" id="billOwnerQ" placeholder="搜索企业"
           value="${esc(curName)}" autocomplete="off"
-          oninput="billOwnerInput(this)" onchange="billOwnerPick()">
-        <datalist id="billOwnerList">
-          ${companies.map(c => `<option value="${esc(c.name)}">`).join('')}
-        </datalist>
+          oninput="billOwnerInput(this)" onfocus="billOwnerInput(this)" onblur="billOwnerBlur()">
+        <div id="billOwnerWrap" class="sug-drop"></div>
       </div>`;
   }
 
