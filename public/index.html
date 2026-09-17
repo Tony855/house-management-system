@@ -4147,7 +4147,8 @@ async function editFeeOrg(id){
       { value:'month', label:'按月' }, { value:'year', label:'按年' }, { value:'once', label:'一次性' } ] },
     { name:'fee_price', label:'单价（0=按系统默认）', type:'number', step:'0.01' },
     { name:'fee_start', label:'计费开始日', type:'date' },
-    { name:'fee_due', label:'当前到期日（留空=长期有效）', type:'date' },
+    { name:'fee_due', label:'当前到期日（留空=长期有效）', type:'date',
+      hint:'选择计费周期或计费开始日后，到期日自动按周期推算（一次性=长期有效），可手动修改' },
     { name:'fee_status', label:'状态', type:'select', options:[
       { value:'active', label:'正常' }, { value:'paused', label:'暂停（仅主管理员可登录）' },
       { value:'closed', label:'关闭（全部停用）' } ] }
@@ -4159,6 +4160,24 @@ async function editFeeOrg(id){
       });
       modal.hide(); renderFee();
     } catch(e){ alert(e.message); }
+  }, (el) => {
+    /* 日期联动：周期/开始日变化时自动推算到期日（一次性=长期有效）；
+     * 到期日已有值（编辑场景）或用户手动改过 → 不再自动覆盖，始终可手动修改 */
+    const cyc = el.querySelector('[name=fee_cycle]');
+    const start = el.querySelector('[name=fee_start]');
+    const due = el.querySelector('[name=fee_due]');
+    if (!cyc || !start || !due) return;
+    let manual = !!due.value; /* 已有到期日视为手动设定，不自动覆盖 */
+    const calc = () => {
+      const c = cyc.value;
+      if (c === 'once'){ due.value = ''; return; }
+      if (manual) return;
+      const base = start.value || today();
+      due.value = c === 'year' ? addMonths(base, 12) : addMonths(base, 1);
+    };
+    cyc.addEventListener('change', calc);
+    start.addEventListener('change', calc);
+    due.addEventListener('input', () => { manual = true; });
   });
 }
 async function delFeePay(id){
