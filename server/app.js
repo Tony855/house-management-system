@@ -85,9 +85,10 @@ function getCookie(req, name) {
   return '';
 }
 /* 使用费停用判定：付费模式下，超期（fee_due 早于今天）或超管手动关闭 → 除主管理员外一律禁止登录 */
+/* B2：主体设了到期日且已超期（或状态为已关闭）即拦截，不依赖全局收费开关；
+ * 到期日=今天当天宽限可用，次日（到期日 < 今天）停用 */
 async function feeBlocked(orgId, level) {
   if (!orgId || level === 'super' || level === 'admin') return null;
-  if (FEE_CFG.fee_mode !== 'paid') return null;
   const [[o]] = await shared.query('SELECT fee_due, fee_status FROM orgs WHERE id = ?', [orgId]);
   if (!o) return null;
   const overdue = o.fee_status === 'active' && o.fee_due && String(o.fee_due) < today();
@@ -95,9 +96,9 @@ async function feeBlocked(orgId, level) {
   if (overdue || closed) return '系统使用费已到期，请联系主管理员续费';
   return null;
 }
-/* 到期/超期提示（主管理员登录后横幅用；非付费模式返回 null） */
+/* 到期/超期提示（主管理员登录后横幅用；主体未设到期日返回 null，不依赖收费开关） */
 async function feeNotice(orgId) {
-  if (!orgId || FEE_CFG.fee_mode !== 'paid') return null;
+  if (!orgId) return null;
   const [[o]] = await shared.query('SELECT fee_due, fee_status FROM orgs WHERE id = ?', [orgId]);
   if (!o) return null;
   const due = o.fee_due ? String(o.fee_due) : null;

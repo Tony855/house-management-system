@@ -944,7 +944,8 @@ function renderApp(){
   </div>`;
   go(location.hash.slice(1) || firstAllowedPage(mode) || DEFAULT_PAGE[mode]);
   checkBillReminder();
-  checkFeeNotice();
+  if (ME.level === 'super') checkSuperFeeNotice();
+  else checkFeeNotice();
   startFeePolling();
 }
 
@@ -979,16 +980,49 @@ function checkFeeNotice(){
 }
 let _feePollingStarted = false;
 function startFeePolling(){
-  if (!ME || ME.level !== 'admin' || _feePollingStarted) return;
+  if (!ME || _feePollingStarted) return;
   _feePollingStarted = true;
   setInterval(async () => {
     try {
-      const me = await api('/api/me');
-      if (!me || !me.fee_notice) return;
-      ME.fee_notice = me.fee_notice;
-      checkFeeNotice();
+      if (ME.level === 'admin'){
+        const me = await api('/api/me');
+        if (me && me.fee_notice){ ME.fee_notice = me.fee_notice; checkFeeNotice(); }
+      } else if (ME.level === 'super'){
+        checkSuperFeeNotice();
+      }
     } catch(e){ /* 网络或会话异常时跳过本轮 */ }
   }, 5 * 60 * 1000);
+}
+/* 超管到期提醒：聚合所有经营主体，有超期/临期/已关闭时顶部横幅提醒 */
+let _superFeeKey = '';
+async function checkSuperFeeNotice(){
+  try {
+    if (!ME || ME.level !== 'super') return;
+    const [orgs, cfg] = await Promise.all([api('/api/fee-orgs'), api('/api/fee-config')]);
+    const t = today();
+    const ovd = orgs.filter(o => o.fee_status !== 'closed' && o.fee_due && o.fee_due < t);
+    const soon = orgs.filter(o => o.fee_status !== 'closed' && o.fee_due && o.fee_due >= t && daysBetween(o.fee_due, t) >= -cfg.remind_days);
+    const closed = orgs.filter(o => o.fee_status === 'closed');
+    const key = JSON.stringify([ovd.map(o=>o.id+':'+o.fee_due), soon.map(o=>o.id+':'+o.fee_due), closed.map(o=>o.id)]);
+    if (key === _superFeeKey) return;
+    if (!ovd.length && !soon.length && !closed.length){ _superFeeKey = key; return; }
+    _superFeeKey = key;
+    const parts = [];
+    if (ovd.length) parts.push(`<span class="text-danger fw-bold">${ovd.length}</span> 个经营主体已超期`);
+    if (soon.length) parts.push(`${soon.length} 个即将到期`);
+    if (closed.length) parts.push(`${closed.length} 个已关闭`);
+    const bar = document.createElement('div');
+    bar.className = 'fee-remind-bar alert alert-danger d-flex align-items-center rounded-0 mb-0';
+    bar.style.cssText = 'position:sticky;top:0;z-index:1050';
+    bar.innerHTML = `<div class="ms-2"><i class="bi bi-cash-stack"></i> <b>系统使用费</b>：${parts.join('、')}</div>
+      <div class="ms-auto d-flex gap-2">
+        <button class="btn btn-sm btn-outline-danger" onclick="go('#fee')">去查看</button>
+        <button class="btn btn-sm btn-outline-secondary" onclick="this.closest('.fee-remind-bar').remove()">知道了</button>
+      </div>`;
+    const main = document.querySelector('main');
+    if (main) main.prepend(bar);
+    else document.body.prepend(bar);
+  } catch(e){ /* 提醒失败不影响使用 */ }
 }
 
 /* 账单到期提醒横幅：主管理员开启后，存在符合条件的未收账单即提醒；
