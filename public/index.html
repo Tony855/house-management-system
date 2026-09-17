@@ -4033,6 +4033,7 @@ function feeBadge(o){
   if (o.fee_status === 'closed') return '<span class="badge bg-danger">已关闭</span>';
   if (o.fee_status === 'paused') return '<span class="badge bg-warning text-dark">已暂停</span>';
   if (o.fee_due && o.fee_due < today()) return '<span class="badge bg-danger">已超期</span>';
+  if (o.fee_due && o.fee_due === today()) return '<span class="badge bg-warning text-dark">今日到期</span>';
   return '<span class="badge bg-success">正常</span>';
 }
 async function renderFee(){
