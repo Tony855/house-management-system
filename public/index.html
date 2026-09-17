@@ -2116,7 +2116,7 @@ async function delOrder(id){
 /* ==================================================================
  * 14. 账单收费
  * ================================================================== */
-let billFilter = { status:'', source:'' };
+let billFilter = { status:'', source:'', owner:'' };
 
 async function renderBills(){
   const mode = curMode();
@@ -2128,6 +2128,20 @@ async function renderBills(){
                      .reduce((s, b) => s + (b.amount - (b.paid_amount || 0)), 0);
 
   const personCol = mode === 'hotel' ? '房客' : (mode === 'property' ? '企业' : '租客');
+
+  /* 物业：企业筛选下拉（企业管理员仅见本企业，无实际筛选意义但保持一致） */
+  let ownerOpts = '';
+  if (mode === 'property'){
+    let companies = [];
+    try { companies = await api('/api/tenants'); } catch(e){}
+    ownerOpts = `
+      <div class="col-auto">
+        <select class="form-select form-select-sm" onchange="billFilter.owner=this.value;renderBills()">
+          <option value="">全部企业</option>
+          ${companies.map(c => `<option value="${c.id}" ${billFilter.owner === String(c.id) ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}
+        </select>
+      </div>`;
+  }
 
   let genBtns = '';
   if (mode === 'rental' && canOp('bill_generate')){
@@ -2192,6 +2206,7 @@ async function renderBills(){
         </select>
       </div>
       ${srcOpts}
+      ${ownerOpts}
       <div class="col-auto">${genBtns}</div>
       <div class="col-auto">${canOp('bill_add') ? `<button class="btn btn-sm btn-outline-primary" onclick="editBill()">+ 手动添加</button>` : ''}</div>
       <div class="col-auto text-muted small">${ME.level === 'company_admin'

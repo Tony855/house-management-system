@@ -1619,11 +1619,12 @@ function parseBillItems(raw){
   return null;
 }
 router.get('/bills', auth, h(async (req, res) => {
-  const { status, source } = req.query;
+  const { status, source, owner } = req.query;
   const cond = ['b.org_id = ?'];
   const params = [req.orgId];
   if (status) { cond.push('b.status = ?'); params.push(status); }
   if (source) { cond.push('b.source = ?'); params.push(source); }
+  if (owner) { cond.push('r.owner_id = ?'); params.push(Number(owner)); }
   if (req.level === 'company_admin') { cond.push('r.owner_id = ?'); params.push(req.companyId); }
   const [rows] = await pool.query(
     `SELECT b.*, r.room_no, bd.name AS building_name, t.name AS tenant_name
