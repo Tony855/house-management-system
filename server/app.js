@@ -344,7 +344,8 @@ async function userPerms(userId) {
   if (u && u.role) {
     const [rps] = await shared.query(
       `SELECT rp.page FROM role_permissions rp JOIN roles r ON r.id = rp.role_id
-        WHERE r.code = ? AND r.org_id = ?`, [u.role, u.org_id]);
+        WHERE r.code = ? AND (r.org_id = ? OR (r.org_id IS NULL AND r.level IN ('staff', 'manager')))`,
+      [u.role, u.org_id]);
     for (const p of rps) {
       const v = String(p.page);
       if (v.startsWith('op:')) ops.push(v.slice(3));
@@ -2509,14 +2510,14 @@ router.get('/roles', authMode, adminLevel, h(async (req, res) => {
     const [rows] = await shared.query('SELECT * FROM roles WHERE org_id IS NULL ORDER BY id');
     return res.json(rows.map(r => ({ ...r, is_system: Number(r.is_system), user_count: 0, pages: [] })));
   }
-  /* 主管理员：内置 staff 角色 + 本主体自建角色 */
+  /* 主管理员：内置 staff/manager 角色 + 本主体自建角色 */
   const [rows] = await shared.query(
     `SELECT r.*, (SELECT COUNT(*) FROM users u WHERE u.role = r.code AND u.org_id = r.org_id) AS user_count
-       FROM roles r WHERE r.org_id = ? OR (r.org_id IS NULL AND r.level = 'staff')
+       FROM roles r WHERE r.org_id = ? OR (r.org_id IS NULL AND r.level IN ('staff', 'manager'))
       ORDER BY r.is_system DESC, r.id`, [req.orgId]);
   const [perms] = await shared.query(
     `SELECT rp.page, r.id AS role_id FROM role_permissions rp JOIN roles r ON r.id = rp.role_id
-      WHERE r.org_id = ?`, [req.orgId]);
+      WHERE r.org_id = ? OR (r.org_id IS NULL AND r.level IN ('staff', 'manager'))`, [req.orgId]);
   const byRole = {};
   for (const p of perms) (byRole[p.role_id] = byRole[p.role_id] || []).push(p.page);
   res.json(rows.map(r => {
@@ -2635,7 +2636,7 @@ router.get('/users', authMode, orgAdminOnly, h(async (req, res) => {
       WHERE u.org_id = ? ORDER BY u.id`, [req.orgId]);
   const [rolePerms] = await shared.query(
     `SELECT r.code, rp.page FROM role_permissions rp JOIN roles r ON r.id = rp.role_id
-      WHERE r.org_id = ?`, [req.orgId]);
+      WHERE r.org_id = ? OR (r.org_id IS NULL AND r.level IN ('staff', 'manager'))`, [req.orgId]);
   const byRole = {};
   for (const p of rolePerms) (byRole[p.code] = byRole[p.code] || []).push(p.page);
   res.json(rows.map(u => {
@@ -2659,7 +2660,7 @@ router.post('/users', authMode, orgAdminOnly, h(async (req, res) => {
   v.ok();
   if (password.length < 6) return res.status(400).json({ error: '密码至少 6 位' });
   const [meta] = await shared.query(
-    'SELECT * FROM roles WHERE code = ? AND (org_id = ? OR (org_id IS NULL AND level = "staff")) LIMIT 1',
+    'SELECT * FROM roles WHERE code = ? AND (org_id = ? OR (org_id IS NULL AND level IN ("staff", "manager"))) LIMIT 1',
     [role, req.orgId]);
   if (!meta.length) return res.status(400).json({ error: '角色不存在' });
   /* 账号名同系统内唯一（跨系统/跨主体可重名，按系统独立运营） */
@@ -2695,7 +2696,7 @@ router.put('/users/:id', authMode, orgAdminOnly, h(async (req, res) => {
   /* 未传 role 时保持原角色，避免误改 */
   const newRole = role !== null ? role : target.role;
   const [meta] = await shared.query(
-    'SELECT * FROM roles WHERE code = ? AND (org_id = ? OR (org_id IS NULL AND level = "staff")) LIMIT 1',
+    'SELECT * FROM roles WHERE code = ? AND (org_id = ? OR (org_id IS NULL AND level IN ("staff", "manager"))) LIMIT 1',
     [newRole, req.orgId]);
   if (!meta.length) return res.status(400).json({ error: '角色不存在' });
   await shared.query('UPDATE users SET real_name = ?, role = ? WHERE id = ?',

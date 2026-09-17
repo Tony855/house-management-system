@@ -194,7 +194,7 @@ const addDays = (n) => { const d = new Date(); d.setDate(d.getDate() + n); retur
     r = await call(B, 'GET', '/users');
     check('主体B 员工列表不含 A 的员工', !r.body.some(x => x.username === 'emp' + 'a' + ts), '');
     r = await call(A, 'GET', '/roles');
-    check('主管理员只见员工级角色(无 super/admin)', r.body.every(x => x.level === 'staff'), JSON.stringify(r.body.map(x => x.level)));
+    check('主管理员只见员工/管理员级角色(无 super/admin)', r.body.every(x => x.level === 'staff' || x.level === 'manager'), JSON.stringify(r.body.map(x => x.level)));
 
     console.log('== 6b. 员工账号名：同系统内唯一，跨系统可重名 ==');
     r = await call(A, 'POST', '/users', { username: 'xiao' + 'zhang', password: 'test123456', real_name: '张一', role: 'staff', pages: ['rooms'] });
