@@ -1655,7 +1655,7 @@ router.delete('/org-employees/:id', auth, h(async (req, res) => {
  * ================================================================== */
 router.get('/dorms', auth, h(async (req, res) => {
   if (req.mode !== 'property') return res.status(404).json({ error: '仅物业系统支持宿舍管理' });
-  const cond = ['r.org_id = ?', 'r.is_dorm = 1', 'r.owner_id IS NOT NULL'];
+  const cond = ['r.org_id = ?', 'r.is_dorm = 1'];
   const params = [req.orgId];
   if (req.level === 'company_admin') { cond.push('r.owner_id = ?'); params.push(req.companyId); }
   const [rooms] = await pool.query(
