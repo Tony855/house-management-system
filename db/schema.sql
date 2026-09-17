@@ -27,7 +27,7 @@ CREATE TABLE roles (
   code        VARCHAR(30) NOT NULL,
   name        VARCHAR(50) NOT NULL,
   description VARCHAR(255) NOT NULL DEFAULT '',
-  level       ENUM('super','admin','staff') NOT NULL DEFAULT 'staff',
+  level       ENUM('super','admin','staff','manager') NOT NULL DEFAULT 'staff',
   is_system   TINYINT(1) NOT NULL DEFAULT 0,
   created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE KEY uk_org_code (org_id, code)

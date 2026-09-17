@@ -719,7 +719,7 @@ async function doLogin(){
         item_lib: Array.isArray(st.item_lib) ? st.item_lib : []
       };
     } catch(e){ console.error('settings 加载失败', e); }
-    history.replaceState(null, '', '#' + (u.level === 'staff' ? 'home' : firstAllowedPage(u.mode) || DEFAULT_PAGE[u.mode]));
+    history.replaceState(null, '', '#' + ((u.level === 'staff' || u.level === 'manager') ? 'home' : firstAllowedPage(u.mode) || DEFAULT_PAGE[u.mode]));
     renderApp();
   } catch(e){ alert(e.message); }
 }
@@ -852,7 +852,7 @@ function curNav(){
     ['orgs','person-gear','主管理员管理'],
     ['appcfg','gear','系统设置']
   ];
-  if (ME.level === 'staff') return [['home','house','工作台'],
+  if (ME.level === 'staff' || ME.level === 'manager') return [['home','house','工作台'],
     ...NAV[curMode()].filter(n => pageAllowed(n[0]) && n[3] === undefined)];
   if (ME.level === 'company_admin') return NAV.property.filter(n =>
     pageAllowed(n[0]) && n[3] === undefined);
@@ -868,15 +868,16 @@ function renderApp(){
   const mode = curMode();
   const cur = getCurrency();
   const isSuper = ME.level === 'super';
-  const isStaff = ME.level === 'staff';
+  /* 员工/管理员（manager）统一走工作台分支，界面与权限配置一致 */
+  const isStaff = ME.level === 'staff' || ME.level === 'manager';
   /* 标签页标题只显示当前系统 */
-  document.title = '房屋管理系统 · ' + (isSuper ? '管理控制台' : isStaff ? MODE_NAME[mode] + '员工工作台' : MODE_NAME[mode] + '系统');
+  document.title = '房屋管理系统 · ' + (isSuper ? '管理控制台' : isStaff ? MODE_NAME[mode] + '工作台' : MODE_NAME[mode] + '系统');
   const nav = curNav();
   $('#root').innerHTML = `
   <div class="d-flex">
     <aside class="sidebar p-3">
       <h5 class="text-white mb-3"><i class="bi bi-${isSuper ? 'shield-lock' : isStaff ? 'person-badge' : 'buildings'}"></i>
-        ${isSuper ? '管理控制台' : isStaff ? '员工工作台' : MODE_NAME[mode] + '系统'}</h5>
+        ${isSuper ? '管理控制台' : isStaff ? '工作台' : MODE_NAME[mode] + '系统'}</h5>
       ${isSuper ? `
       <div class="mode-lock mb-1 text-white-50 small">
         <i class="bi bi-globe2"></i> 开通各系统主管理员（经营主体），并监控全系统运行
@@ -3470,7 +3471,7 @@ async function delBuilding(id){
 async function renderUsers(){
   const list = await api('/api/users');
   /* 主管理员仅管理本经营主体的员工 */
-  const rows = list.filter(u => u.level === 'staff');
+  const rows = list.filter(u => u.level === 'staff' || u.level === 'manager');
   const permCell = u => {
     const rp = u.role_pages || [], ro = u.role_ops || [];
     const pages = rp.length ? rp.map(p => pageName(p)).join('、') : '无';
@@ -3492,7 +3493,9 @@ async function renderUsers(){
     </tr></thead>
     <tbody>${rows.map(u => `<tr>
       <td>${u.id}</td><td><b>${esc(u.username)}</b></td><td>${esc(u.real_name || '-')}</td>
-      <td><span class="badge bg-secondary">${esc(u.role_name || u.role)}</span></td>
+      <td>${u.level === 'manager'
+        ? `<span class="badge bg-info text-dark">管理员</span> ${esc(u.role_name || u.role)}`
+        : `<span class="badge bg-secondary">${esc(u.role_name || u.role)}</span>`}</td>
       <td>${permCell(u)}</td>
       <td><small>${esc(u.created_at || '-')}</small></td>
       <td>
@@ -3521,8 +3524,8 @@ async function editUser(id){
   let data = { role:'staff' };
   if (id){ const list = await api('/api/users'); data = list.find(x => x.id === id) || data; }
   const roles = await api('/api/roles');
-  /* 主管理员只能分配员工级角色（内置 staff + 本主体自建角色） */
-  const roleOpts = roles.filter(r => r.level === 'staff');
+  /* 主管理员只能分配员工级/管理员级角色（内置 staff + 本主体自建角色） */
+  const roleOpts = roles.filter(r => r.level === 'staff' || r.level === 'manager');
   if (!roleOpts.length){ alert('暂无可用角色'); return; }
   if (!roleOpts.some(r => r.code === data.role)) data.role = roleOpts[0].code;
   const fields = [
@@ -3566,6 +3569,7 @@ async function delUser(id){
 async function renderRoles(){
   const roles = await api('/api/roles');
   const lvlBadge = l => l === 'admin' ? '<span class="badge bg-warning text-dark">主管理员</span>'
+    : l === 'manager' ? '<span class="badge bg-info text-dark">管理员</span>'
     : '<span class="badge bg-secondary">员工</span>';
   const permTxt = r => (r.pages && r.pages.length)
     ? `<small>${r.pages.map(p => pageName(p)).join('、')}</small>`
@@ -3622,6 +3626,11 @@ async function editRole(id){
     { name:'code', label:'角色编码', required:true, placeholder:'如：finance',
       hint: isSys ? '系统内置角色编码不可修改' : '仅字母/数字/下划线，以字母开头' }
   ];
+  if (!isSys){
+    fields.push({ name:'level', label:'角色等级', type:'select',
+      options:[{ value:'staff', label:'员工' }, { value:'manager', label:'管理员' }],
+      hint:'员工：普通业务操作；管理员：给企业管理员/物业管理员使用，权限同样按勾选' });
+  }
   fields.push({ name:'description', label:'说明', type:'textarea', placeholder:'该角色的职责说明（可选）' });
   if (!isSys){
     const rolePageOpts = pageOpts(curMode());
@@ -3640,7 +3649,7 @@ async function editRole(id){
     }
   }
   openForm(id ? '编辑角色' : '新增角色', fields, data, async (d, modal) => {
-    d.level = 'staff';
+    if (isSys) delete d.level;
     if (isSys) delete d.code;
     if (isSys) delete d.pages;
     if (isSys) delete d.ops;

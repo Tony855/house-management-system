@@ -256,6 +256,7 @@ const OP_ROUTES = [
   [/^\/contracts$/, 'contract_add', 'POST'],
   [/^\/contracts\/\d+$/, 'contract_edit', 'PUT'],
   [/^\/contracts\/\d+$/, 'contract_delete', 'DELETE'],
+  [/^\/contracts\/\d+\/terminate$/, 'contract_delete', 'POST'],
   [/^\/orders$/, 'order_add', 'POST'],
   [/^\/orders\/\d+$/, 'order_edit', 'PUT'],
   [/^\/orders\/\d+$/, 'order_delete', 'DELETE'],
@@ -292,11 +293,11 @@ const authPerm = (req, res, next) => authMode(req, res, () => {
       /* 企业管理员：写操作按角色 ops 放行，且仅限带企业维度的数据（房产/抄表/宽带/账单/报修/投诉），
        * 楼栋等主体级基础设施及租房/酒店业务一律不可写；数据范围在接口内按本企业校验 */
       const need = OP_ROUTES.find(r => (!r[2] || r[2] === req.method) && r[0].test(req.path));
-      const okRoute = /^\/(rooms|meters|netLines|netChanges|netRequests|bills|repairs|complaints)(\/|$)/.test(req.path);
+      const okRoute = /^\/(rooms|meters|netLines|netChanges|netRequests|bills|repairs|complaints|org-employees)(\/|$)/.test(req.path);
       if (!need || !okRoute || !(req.ops || []).includes(need[1])) {
         return res.status(403).json({ error: '企业管理员无此操作权限' });
       }
-    } else if (req.level === 'staff') {
+    } else if (req.level === 'staff' || req.level === 'manager') {
       /* 员工：写操作按角色操作权限（ops）放行 */
       const need = OP_ROUTES.find(r => (!r[2] || r[2] === req.method) && r[0].test(req.path));
       if (!need || !(req.ops || []).includes(need[1])) {
@@ -1273,7 +1274,7 @@ router.get('/org-employees', authMode, h(async (req, res) => {
     req.level === 'company_admin' ? [req.orgId, req.companyId] : [req.orgId]);
   res.json(rows);
 }));
-router.post('/org-employees', authMode, orgAdminOnly, h(async (req, res) => {
+router.post('/org-employees', auth, h(async (req, res) => {
   if (req.mode !== 'property') return res.status(404).json({ error: '仅物业系统支持企业员工' });
   const B = req.body || {};
   const v = V(B);
@@ -1290,8 +1291,15 @@ router.post('/org-employees', authMode, orgAdminOnly, h(async (req, res) => {
   const room_id = v.int('room_id', { min: 1, max: 1e7 });
   const owner_id = v.int('owner_id', { min: 1, max: 1e7 });
   v.ok();
-  /* 自动匹配/创建企业（企业业主）记录，实现与业主绑定 */
+  /* 自动匹配/创建企业（企业业主）记录，实现与业主绑定；
+   * 企业管理员只能为本企业添加，归属企业强制为本企业 */
   let ownerId = owner_id;
+  if (req.level === 'company_admin') {
+    if (ownerId && Number(ownerId) !== Number(req.companyId)) {
+      return res.status(403).json({ error: '企业管理员只能为本企业添加员工' });
+    }
+    ownerId = req.companyId;
+  }
   if (!ownerId) {
     const [match] = await pool.query(
       'SELECT * FROM tenants WHERE org_id = ? AND name = ? LIMIT 1', [req.orgId, company]);
@@ -1313,7 +1321,7 @@ router.post('/org-employees', authMode, orgAdminOnly, h(async (req, res) => {
       WHERE e.id = ?`, [r.insertId]);
   res.json(rows[0]);
 }));
-router.put('/org-employees/:id', authMode, orgAdminOnly, h(async (req, res) => {
+router.put('/org-employees/:id', auth, h(async (req, res) => {
   if (req.mode !== 'property') return res.status(404).json({ error: '仅物业系统支持企业员工' });
   const B = req.body || {};
   const v = V(B);
@@ -1330,7 +1338,11 @@ router.put('/org-employees/:id', authMode, orgAdminOnly, h(async (req, res) => {
   const room_id = v.int('room_id', { min: 1, max: 1e7 });
   const owner_id = v.int('owner_id', { min: 1, max: 1e7 });
   v.ok();
-  const [exist] = await pool.query('SELECT * FROM org_employees WHERE id = ? AND org_id = ?', [req.params.id, req.orgId]);
+  const ownerCond = req.level === 'company_admin' ? ' AND owner_id = ?' : '';
+  const ownerParams = req.level === 'company_admin' ? [req.companyId] : [];
+  const [exist] = await pool.query(
+    'SELECT * FROM org_employees WHERE id = ? AND org_id = ?' + ownerCond,
+    [req.params.id, req.orgId].concat(ownerParams));
   if (!exist.length) return res.status(400).json({ error: '记录不存在' });
   const [r] = await pool.query(
     `UPDATE org_employees SET company = ?, owner_id = ?, room_id = ?, name = ?, id_number = ?, phone = ?,
@@ -1348,15 +1360,24 @@ router.put('/org-employees/:id', authMode, orgAdminOnly, h(async (req, res) => {
       WHERE e.id = ?`, [req.params.id]);
   res.json(rows[0]);
 }));
-router.delete('/org-employees/:id', authMode, orgAdminOnly, h(async (req, res) => {
+router.delete('/org-employees/:id', auth, h(async (req, res) => {
   if (req.mode !== 'property') return res.status(404).json({ error: '仅物业系统支持企业员工' });
-  const [r] = await pool.query('DELETE FROM org_employees WHERE id = ? AND org_id = ?', [req.params.id, req.orgId]);
+  const ownerCond = req.level === 'company_admin' ? ' AND owner_id = ?' : '';
+  const ownerParams = req.level === 'company_admin' ? [req.companyId] : [];
+  const [r] = await pool.query(
+    'DELETE FROM org_employees WHERE id = ? AND org_id = ?' + ownerCond,
+    [req.params.id, req.orgId].concat(ownerParams));
   if (!r.affectedRows) return res.status(400).json({ error: '记录不存在' });
   res.json({ ok: true });
 }));
 
-/* 图片上传（仅主管理员）：base64 → uploads/org-<主体ID>/，jpg/png/webp ≤2MB */
-router.post('/upload', authMode, orgAdminOnly, h(async (req, res) => {
+/* 图片上传（主管理员恒可用；企业管理员可用；员工需角色勾选「企业员工 新增/编辑」）：
+   base64 → uploads/org-<主体ID>/，jpg/png/webp ≤2MB */
+router.post('/upload', authMode, h(async (req, res) => {
+  if (req.level !== 'admin' && req.level !== 'company_admin'
+      && !(req.ops || []).some(o => o === 'orgemp_add' || o === 'orgemp_edit')) {
+    return res.status(403).json({ error: '无此操作权限' });
+  }
   const data = (req.body || {}).data;
   if (!data || typeof data !== 'string') return res.status(400).json({ error: '缺少图片数据' });
   const m = /^data:image\/(jpeg|png|webp);base64,(.+)$/.exec(data);
@@ -2523,7 +2544,7 @@ router.post('/roles', authMode, h(async (req, res) => {
   const ops = v.arr('ops', { max: 60, itemMax: 40 });
   v.ok();
   if (req.level === 'super') {
-    const level = ['super', 'admin', 'staff'].includes(B.level) ? B.level : 'staff';
+    const level = ['super', 'admin', 'staff', 'manager'].includes(B.level) ? B.level : 'staff';
     const [[dup]] = await shared.query('SELECT COUNT(*) AS c FROM roles WHERE org_id IS NULL AND code = ?', [code]);
     if (Number(dup.c) > 0) return res.status(400).json({ error: '角色编码已存在' });
     const [r] = await shared.query(
@@ -2532,13 +2553,14 @@ router.post('/roles', authMode, h(async (req, res) => {
     const [rows] = await shared.query('SELECT * FROM roles WHERE id = ?', [r.insertId]);
     return res.json({ ...rows[0], pages: [] });
   }
-  /* 主管理员只能在本主体建 staff 角色 */
+  /* 主管理员只能在本主体建 staff/manager 角色 */
   const orgId = req.orgId;
+  const level = ['staff', 'manager'].includes(B.level) ? B.level : 'staff';
   const [[dup]] = await shared.query('SELECT COUNT(*) AS c FROM roles WHERE org_id = ? AND code = ?', [orgId, code]);
   if (Number(dup.c) > 0) return res.status(400).json({ error: '角色编码已存在' });
   const [r] = await shared.query(
-    'INSERT INTO roles (org_id, code, name, description, level) VALUES (?, ?, ?, ?, "staff")',
-    [orgId, code, name, description || '']);
+    'INSERT INTO roles (org_id, code, name, description, level) VALUES (?, ?, ?, ?, ?)',
+    [orgId, code, name, description || '', level]);
   await setRolePerms(r.insertId, pages, ops);
   const [rows] = await shared.query('SELECT * FROM roles WHERE id = ?', [r.insertId]);
   res.json({ ...rows[0],
