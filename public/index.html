@@ -201,8 +201,10 @@ async function safeApi(path, method, data){
 function openForm(title, fields, values, onSubmit, onMount){
   values = values || {};
   const mid = 'fm' + Date.now();
+  /* 含明细清单的弹窗自动加宽，避免商品/型号等字段显示不完整（固定宽度，不随视口退化） */
+  const wide = fields.some(f => f.type === 'items') ? ' style="max-width:920px"' : '';
   let html = `<div class="modal fade" id="${mid}" tabindex="-1">
-    <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-dialog modal-dialog-centered"${wide}>
       <div class="modal-content">
         <div class="modal-header"><h5 class="modal-title">${esc(title)}</h5>
           <button class="btn-close" data-bs-dismiss="modal"></button></div>
@@ -245,14 +247,14 @@ function openForm(title, fields, values, onSubmit, onMount){
         ? `<button type="button" class="btn btn-sm btn-outline-primary" onclick="openLibPicker('${mid}_${f.name}')"><i class="bi bi-journal-text"></i> 从商品库添加</button>` : '';
       html += `<div class="item-wrap" data-cat="${esc(f.cat || '')}">
         <div class="table-responsive"><table class="table table-sm table-bordered align-middle mb-1">
-          <thead class="table-light"><tr>
-            <th style="min-width:140px">商品</th>
-            <th style="min-width:110px">型号</th>
-            <th style="width:74px">数量</th>
-            <th style="width:104px">单价(${currencySymbol()})</th>
-            <th style="width:90px">金额</th>
-            <th style="width:52px">说明</th>
-            <th style="width:70px"></th></tr></thead>
+          <thead class="table-light text-center"><tr>
+            <th style="min-width:150px">商品</th>
+            <th style="min-width:120px">型号</th>
+            <th style="width:80px">数量</th>
+            <th style="width:110px">单价(${currencySymbol()})</th>
+            <th style="width:96px">金额</th>
+            <th style="width:56px">说明</th>
+            <th style="width:76px"></th></tr></thead>
           <tbody id="${mid}_${f.name}_tb"></tbody>
         </table></div>
         <div class="d-flex justify-content-between align-items-center">
