@@ -3493,9 +3493,7 @@ async function renderUsers(){
     </tr></thead>
     <tbody>${rows.map(u => `<tr>
       <td>${u.id}</td><td><b>${esc(u.username)}</b></td><td>${esc(u.real_name || '-')}</td>
-      <td>${u.level === 'manager'
-        ? `<span class="badge bg-info text-dark">管理员</span> ${esc(u.role_name || u.role)}`
-        : `<span class="badge bg-secondary">${esc(u.role_name || u.role)}</span>`}</td>
+      <td><span class="badge bg-secondary">${esc(u.role_name || u.role)}</span></td>
       <td>${permCell(u)}</td>
       <td><small>${esc(u.created_at || '-')}</small></td>
       <td>
