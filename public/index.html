@@ -4172,8 +4172,8 @@ async function editFeeOrg(id){
       const c = cyc.value;
       if (c === 'once'){ due.value = ''; return; }
       if (manual) return;
-      const base = start.value || today();
-      due.value = c === 'year' ? addMonths(base, 12) : addMonths(base, 1);
+      if (!start.value) start.value = today(); /* 开始日未填时自动填今天 */
+      due.value = c === 'year' ? addMonths(start.value, 12) : addMonths(start.value, 1);
     };
     cyc.addEventListener('change', calc);
     start.addEventListener('change', calc);
