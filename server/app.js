@@ -215,7 +215,8 @@ const ROUTE_PAGES = [
   [/^\/netfee/, ['network']],
   [/^\/netRequests/, ['network']],
   [/^\/repairs/, ['repairs']],
-  [/^\/complaints/, ['complaints']]
+  [/^\/complaints/, ['complaints']],
+  [/^\/dorms/, ['dorm']]
 ];
 /* 路由 → 所需系统能力（不属于本系统的接口直接拒绝） */
 const ROUTE_FEATURE = [
@@ -283,7 +284,9 @@ const OP_ROUTES = [
   [/^\/repairs\/\d+$/, 'repair_delete', 'DELETE'],
   [/^\/complaints$/, 'complaint_add', 'POST'],
   [/^\/complaints\/\d+$/, 'complaint_handle', 'PUT'],
-  [/^\/complaints\/\d+$/, 'complaint_delete', 'DELETE']
+  [/^\/complaints\/\d+$/, 'complaint_delete', 'DELETE'],
+  [/^\/dorms\/assign$/, 'dorm_assign', 'PUT'],
+  [/^\/dorms\/remove$/, 'dorm_assign', 'PUT']
 ];
 const authPerm = (req, res, next) => authMode(req, res, () => {
   /* 超级管理员只负责开通主体与系统监控，不参与任何业务数据读写 */
@@ -293,7 +296,7 @@ const authPerm = (req, res, next) => authMode(req, res, () => {
       /* 企业管理员：写操作按角色 ops 放行，且仅限带企业维度的数据（房产/抄表/宽带/账单/报修/投诉），
        * 楼栋等主体级基础设施及租房/酒店业务一律不可写；数据范围在接口内按本企业校验 */
       const need = OP_ROUTES.find(r => (!r[2] || r[2] === req.method) && r[0].test(req.path));
-      const okRoute = /^\/(rooms|meters|netLines|netChanges|netRequests|bills|repairs|complaints|org-employees)(\/|$)/.test(req.path);
+      const okRoute = /^\/(rooms|meters|netLines|netChanges|netRequests|bills|repairs|complaints|org-employees|dorms)(\/|$)/.test(req.path);
       if (!need || !okRoute || !(req.ops || []).includes(need[1])) {
         return res.status(403).json({ error: '企业管理员无此操作权限' });
       }
@@ -343,7 +346,7 @@ const router = express.Router();
 const MODE_PAGES = {
   rental:   ['dashboard', 'rooms', 'tenants', 'contracts', 'meters', 'network', 'bills', 'repairs', 'buildings'],
   hotel:    ['dashboard', 'roommap', 'orders', 'rooms', 'tenants', 'bills', 'repairs', 'buildings'],
-  property: ['dashboard', 'buildings', 'properties', 'owners', 'meters', 'network', 'bills', 'complaints', 'repairs', 'orgemp']
+  property: ['dashboard', 'buildings', 'properties', 'owners', 'meters', 'network', 'bills', 'complaints', 'repairs', 'orgemp', 'dorm']
 };
 const fitPages = (mode, pages) => {
   if (mode === 'super') return pages;
@@ -1043,6 +1046,11 @@ function roomPayload(B, mode) {
     if (k === 'room_no' || k === 'room_type' || k === 'status' || k === 'remark') continue;
     d[k] = NUM_ROOM_FIELDS.includes(k) ? num(B[k]) : clean(B[k]);
   }
+  /* 宿舍标记/容量：仅物业落库（0/1 与正数），其他系统忽略 */
+  if (mode === 'property') {
+    d.is_dorm = B.is_dorm ? 1 : 0;
+    d.capacity = Math.max(0, Number(B.capacity) || 0);
+  }
   return d;
 }
 const ROOM_STATUS = ['vacant', 'rented', 'booked', 'cleaning', 'maintenance'];
@@ -1063,9 +1071,13 @@ function roomRules(v, mode, partial) {
     v.num('water_price', { min: 0, max: 1e6 });
     v.num('elec_price', { min: 0, max: 1e6 });
   }
+  v.int('is_dorm', { min: 0, max: 1 });
+  v.int('capacity', { min: 0, max: 100000 });
 }
+
 router.post('/rooms', auth, h(async (req, res) => {
   const B = req.body || {};
+  if ('is_dorm' in B) B.is_dorm = (B.is_dorm === 'on' || B.is_dorm === '1' || B.is_dorm === 1) ? 1 : 0;
   const mode = req.mode;
   const v = V(B);
   roomRules(v, mode, false);
@@ -1090,6 +1102,7 @@ router.post('/rooms', auth, h(async (req, res) => {
 }));
 router.put('/rooms/:id', auth, h(async (req, res) => {
   const B = req.body || {};
+  if ('is_dorm' in B) B.is_dorm = (B.is_dorm === 'on' || B.is_dorm === '1' || B.is_dorm === 1) ? 1 : 0;
   const mode = req.mode;
   const v = V(B);
   roomRules(v, mode, true);
@@ -1392,6 +1405,80 @@ router.delete('/org-employees/:id', auth, h(async (req, res) => {
   if (!r.affectedRows) return res.status(400).json({ error: '记录不存在' });
   res.json({ ok: true });
 }));
+
+/* ==================================================================
+ * 宿舍管理（仅物业：标记为宿舍的房产 + 员工入住关联）
+ * 企业管理员仅操作本企业；物业员工按 dorm 页面权限 + dorm_assign 操作权限
+ * ================================================================== */
+router.get('/dorms', auth, h(async (req, res) => {
+  if (req.mode !== 'property') return res.status(404).json({ error: '仅物业系统支持宿舍管理' });
+  const cond = ['r.org_id = ?', 'r.is_dorm = 1', 'r.owner_id IS NOT NULL'];
+  const params = [req.orgId];
+  if (req.level === 'company_admin') { cond.push('r.owner_id = ?'); params.push(req.companyId); }
+  const [rooms] = await pool.query(
+    `SELECT r.id, r.room_no, r.building_id, r.capacity, r.owner_id, r.status, b.name AS building_name,
+            t.name AS owner_name
+       FROM rooms r LEFT JOIN buildings b ON b.id = r.building_id
+       LEFT JOIN tenants t ON t.id = r.owner_id
+      WHERE ${cond.join(' AND ')} ORDER BY b.id, r.id`, params);
+  const [emps] = await pool.query(
+    `SELECT e.id, e.name, e.department, e.position, e.phone, e.room_id, e.owner_id
+       FROM org_employees e WHERE e.org_id = ? AND e.room_id IS NOT NULL
+      ${req.level === 'company_admin' ? 'AND e.owner_id = ?' : ''}`, req.level === 'company_admin' ? [req.orgId, req.companyId] : [req.orgId]);
+  const byRoom = {};
+  for (const e of emps) (byRoom[e.room_id] = byRoom[e.room_id] || []).push(e);
+  res.json(rooms.map(r => {
+    const list = byRoom[r.id] || [];
+    const cap = Number(r.capacity) || 0;
+    return { ...r, capacity: cap, count: list.length, over: cap > 0 && list.length > cap, employees: list };
+  }));
+}));
+router.put('/dorms/assign', auth, h(async (req, res) => {
+  if (req.mode !== 'property') return res.status(404).json({ error: '仅物业系统支持宿舍管理' });
+  const B = req.body || {};
+  const v = V(B);
+  const employee_id = v.int('employee_id', { required: true, min: 1, max: 1e7 });
+  const room_id = v.int('room_id', { required: true, min: 1, max: 1e7 });
+  v.ok();
+  const ownerCond = req.level === 'company_admin' ? ' AND owner_id = ?' : '';
+  const ownerParams = req.level === 'company_admin' ? [req.companyId] : [];
+  const [eps] = await pool.query(
+    'SELECT id, room_id FROM org_employees WHERE id = ? AND org_id = ?' + ownerCond,
+    [employee_id, req.orgId].concat(ownerParams));
+  if (!eps.length) return res.status(400).json({ error: '员工不存在' });
+  const [rms] = await pool.query(
+    'SELECT * FROM rooms WHERE id = ? AND org_id = ? AND is_dorm = 1' + ownerCond,
+    [room_id, req.orgId].concat(ownerParams));
+  if (!rms.length) return res.status(403).json({ error: '宿舍不存在或不属于本企业' });
+  const room = rms[0];
+  const [[{ c }]] = await pool.query(
+    'SELECT COUNT(*) AS c FROM org_employees WHERE org_id = ? AND room_id = ? AND id <> ?',
+    [req.orgId, room.id, employee_id]);
+  const cap = Number(room.capacity) || 0;
+  if (cap > 0 && Number(c) >= cap) {
+    return res.status(400).json({ error: `该宿舍已满员（容量 ${cap} 人）` });
+  }
+  await pool.query('UPDATE org_employees SET room_id = ? WHERE id = ? AND org_id = ?',
+    [room.id, employee_id, req.orgId]);
+  res.json({ ok: true, room_id: room.id, capacity: cap, count: Number(c) + 1 });
+}));
+router.put('/dorms/remove', auth, h(async (req, res) => {
+  if (req.mode !== 'property') return res.status(404).json({ error: '仅物业系统支持宿舍管理' });
+  const B = req.body || {};
+  const v = V(B);
+  const employee_id = v.int('employee_id', { required: true, min: 1, max: 1e7 });
+  v.ok();
+  const ownerCond = req.level === 'company_admin' ? ' AND owner_id = ?' : '';
+  const ownerParams = req.level === 'company_admin' ? [req.companyId] : [];
+  const [eps] = await pool.query(
+    'SELECT id FROM org_employees WHERE id = ? AND org_id = ?' + ownerCond,
+    [employee_id, req.orgId].concat(ownerParams));
+  if (!eps.length) return res.status(400).json({ error: '员工不存在' });
+  await pool.query('UPDATE org_employees SET room_id = NULL WHERE id = ? AND org_id = ?',
+    [employee_id, req.orgId]);
+  res.json({ ok: true });
+}));
+
 
 /* 图片上传（主管理员恒可用；企业管理员可用；员工需角色勾选「企业员工 新增/编辑」）：
    base64 → uploads/org-<主体ID>/，jpg/png/webp ≤2MB */

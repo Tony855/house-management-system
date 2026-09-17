@@ -273,6 +273,8 @@ function openForm(title, fields, values, onSubmit, onMount){
       html += `<input type="hidden" name="${f.name}" id="${mid}_${f.name}" value="${esc(v)}">`;
       html += `<img id="${mid}_${f.name}_img" src="${esc(v)}" class="mt-1 rounded border"
                 style="max-height:90px;max-width:140px;object-fit:cover;${v ? '' : 'display:none'}">`;
+    } else if (f.type === 'checkbox'){
+      html += `<input class="form-check-input" type="checkbox" name="${f.name}" value="1" ${v ? 'checked' : ''}>`;
     } else {
       html += `<input class="form-control" type="${f.type || 'text'}" name="${f.name}"
         value="${esc(v)}" ${f.required ? 'required' : ''}
@@ -773,6 +775,7 @@ const NAV = {
     ['buildings','building','楼栋管理'],
     ['properties','houses','房产管理'],
     ['owners','building','企业管理'],
+    ['dorm','house-heart','宿舍管理'],
     ['meters','lightning-charge','水电抄表'],
     ['network','ethernet','网络管理'],
     ['bills','cash-coin','账单收费'],
@@ -832,6 +835,7 @@ const OP_DEFS = {
     { g:'房产管理', items:[['room_add','新增'],['room_edit','编辑/状态'],['room_delete','删除']] },
     { g:'企业管理', items:[['tenant_add','新增'],['tenant_edit','编辑/设管理员'],['tenant_delete','删除']] },
     { g:'企业员工', items:[['orgemp_add','新增'],['orgemp_edit','编辑'],['orgemp_delete','删除']] },
+    { g:'宿舍管理', items:[['dorm_assign','分配/调宿/退宿']] },
     { g:'水电抄表', items:[['meter_add','录入'],['meter_edit','编辑'],['meter_delete','删除']] },
     { g:'网络管理', items:[['netline_add','新增线路'],['netline_edit','编辑线路'],['netline_bandwidth','加兆/减兆'],['netline_status','停用/启用']] },
     { g:'账单收费', items:[['bill_add','手动添加'],['bill_generate','生成'],['bill_delete','删除'],['bill_pay','收款'],['bill_print','打印账单'],['bill_remind','账单提醒']] },
@@ -1548,6 +1552,8 @@ async function editRoom(id){
     fields.push({ name:'property_fee', label:'物业费(/月)', type:'number', required:true, money:true });
     fields.push({ name:'water_price', label:'水费单价(/吨)', type:'number', step:'0.01', money:true });
     fields.push({ name:'elec_price', label:'电费单价(/度)', type:'number', step:'0.01', money:true });
+    fields.push({ name:'is_dorm', label:'作为宿舍', type:'checkbox', hint:'勾选后该房间作为宿舍，可在宿舍管理中分配员工入住' });
+    fields.push({ name:'capacity', label:'宿舍容量(人)', type:'number', hint:'0 表示不限制；仅作为宿舍时生效' });
     fields.push({ name:'status', label:'房屋状态', type:'select', options:[
       { value:'vacant', label:'空置' }, { value:'rented', label:'已入住' },
       { value:'maintenance', label:'维修中' }] });
@@ -3452,6 +3458,99 @@ async function delComplaint(id){
 }
 
 /* ==================================================================
+ * 18.5 宿舍管理（物业）：标记为宿舍的房产 + 员工入住关联
+ * 企业管理员仅本企业；物业员工/管理员按 dorm 页面权限 + dorm_assign 操作权限
+ * ================================================================== */
+let dormFilter = { owner:'', q:'', status:'' };
+async function renderDorms(){
+  if (curMode() !== 'property') return;
+  const [list, companies] = await Promise.all([
+    api('/api/dorms'),
+    ME.level === 'admin' ? api('/api/tenants') : Promise.resolve([])
+  ]);
+  const canAssign = canOp('dorm_assign');
+  let rows = list.slice();
+  if (dormFilter.owner) rows = rows.filter(r => r.owner_id === Number(dormFilter.owner));
+  if (dormFilter.status === 'in') rows = rows.filter(r => r.count > 0);
+  if (dormFilter.status === 'empty') rows = rows.filter(r => r.count === 0);
+  if (dormFilter.q) rows = rows.filter(r =>
+    r.room_no.includes(dormFilter.q) || (r.employees || []).some(e => e.name.includes(dormFilter.q)));
+  const occupied = list.filter(r => r.count > 0).length;
+  const rate = list.length ? Math.round(occupied / list.length * 100) : 0;
+  $('#pageTitle').textContent = '宿舍管理';
+  $('#page').innerHTML = `
+  <div class="card mb-3"><div class="card-body py-2">
+    <div class="row g-2 align-items-center">
+      <div class="col-auto"><span class="text-muted small">共 ${list.length} 间宿舍 · 已入住 ${occupied} · 空置 ${list.length - occupied} · 入住率 ${rate}%</span></div>
+      ${ME.level === 'admin' ? `<div class="col-auto"><select class="form-select form-select-sm" onchange="dormFilter.owner=this.value;renderDorms()">
+        <option value="">全部企业</option>${companies.map(c => `<option value="${c.id}" ${dormFilter.owner === String(c.id) ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}
+      </select></div>` : ''}
+      <div class="col-auto"><select class="form-select form-select-sm" onchange="dormFilter.status=this.value;renderDorms()">
+        <option value="">全部状态</option><option value="in" ${dormFilter.status === 'in' ? 'selected' : ''}>已入住</option>
+        <option value="empty" ${dormFilter.status === 'empty' ? 'selected' : ''}>空置</option></select></div>
+      <div class="col-auto"><input class="form-control form-control-sm" placeholder="搜索房间号 / 员工姓名" value="${esc(dormFilter.q)}"
+        oninput="dormFilter.q=this.value;renderDorms()" style="width:220px"></div>
+    </div>
+  </div></div>
+  <div class="card"><div class="card-body p-0"><table class="table table-hover mb-0 align-middle"><thead class="table-light"><tr>
+    <th style="width:8%">楼栋</th><th style="width:9%">房间号</th><th style="width:7%">容量</th><th style="width:8%">入住</th>
+    <th>入住员工</th><th style="width:16%">操作</th>
+  </tr></thead><tbody>
+  ${rows.map(r => {
+    const cap = r.capacity ? (r.capacity + ' 人') : '不限';
+    const over = r.over ? ' <span class="badge bg-danger">超员</span>' : '';
+    const empCells = r.employees.length
+      ? r.employees.map(e => `<span class="badge bg-light text-dark border me-1 mb-1">${esc(e.name)}${e.department ? '<span class="text-muted"> · ' + esc(e.department) + '</span>' : ''}</span>`).join('')
+      : '<span class="text-muted small">空置</span>';
+    const ops = canAssign
+      ? `<button class="btn btn-sm btn-outline-primary" onclick="assignDorm(${r.id})">分配</button>
+         ${r.count ? `<button class="btn btn-sm btn-outline-warning ms-1" onclick="moveDorm(${r.id})">调宿</button>
+         <button class="btn btn-sm btn-outline-danger ms-1" onclick="removeDormFrom(${r.id})">退宿</button>` : ''}`
+      : '<span class="text-muted small">无权限</span>';
+    return `<tr>
+      <td>${esc(r.building_name || '-')}</td><td>${esc(r.room_no)}</td><td>${cap}</td>
+      <td>${r.count}${over}</td><td>${empCells}</td><td>${ops}</td></tr>`;
+  }).join('') || '<tr><td colspan="6" class="text-center text-muted py-4">暂无宿舍（请在房产管理中将房间标记为宿舍）</td></tr>'}
+  </tbody></table></div></div>`;
+}
+async function assignDorm(roomId){
+  const [list, emps] = await Promise.all([api('/api/dorms'), api('/api/org-employees')]);
+  const free = emps.filter(e => !e.room_id);
+  if (!free.length){ alert('暂无未分配宿舍的员工，请先在「企业管理-企业员工」添加员工'); return; }
+  openForm('分配员工入住', [
+    { name:'employee_id', label:'选择员工', type:'select', options: free.map(e => ({ value: e.id, label: `${e.name}（${e.company || '未绑定企业'}）` })) },
+    { name:'room_id', label:'目标宿舍', type:'select', options: list.map(r => ({ value: r.id, label: `${r.building_name || ''} ${r.room_no}（${r.count}/${r.capacity || '不限'}）` })) }
+  ], { room_id: roomId }, async (d, modal) => {
+    await api('/api/dorms/assign', 'PUT', d);
+    modal.hide(); renderDorms();
+  });
+}
+async function moveDorm(roomId){
+  const [list, emps] = await Promise.all([api('/api/dorms'), api('/api/org-employees')]);
+  const cur = (list.find(r => r.id === roomId) || {}).employees || [];
+  if (!cur.length) return;
+  const others = list.filter(r => r.id !== roomId);
+  openForm('调宿', [
+    { name:'employee_id', label:'选择员工', type:'select', options: cur.map(e => ({ value: e.id, label: `${e.name}（${e.department || ''}）` })) },
+    { name:'room_id', label:'目标宿舍', type:'select', options: others.map(r => ({ value: r.id, label: `${r.building_name || ''} ${r.room_no}（${r.count}/${r.capacity || '不限'}）` })) }
+  ], {}, async (d, modal) => {
+    await api('/api/dorms/assign', 'PUT', d);
+    modal.hide(); renderDorms();
+  });
+}
+async function removeDormFrom(roomId){
+  const [list, emps] = await Promise.all([api('/api/dorms'), api('/api/org-employees')]);
+  const cur = (list.find(r => r.id === roomId) || {}).employees || [];
+  if (!cur.length) return;
+  openForm('退宿', [
+    { name:'employee_id', label:'选择员工', type:'select', options: cur.map(e => ({ value: e.id, label: `${e.name}（${e.department || ''}）` })) }
+  ], {}, async (d, modal) => {
+    await api('/api/dorms/remove', 'PUT', d);
+    modal.hide(); renderDorms();
+  });
+}
+
+/* ==================================================================
  * 19. 楼栋管理
  * ================================================================== */
 async function renderBuildings(){
@@ -3970,6 +4069,7 @@ const PAGES = {
   network:     { render: renderNetwork },
   repairs:     { render: renderRepairs },
   complaints:  { render: renderComplaints },
+  dorm:        { render: renderDorms },
   buildings:   { render: renderBuildings },
   users:       { render: renderUsers },
   roles:       { render: renderRoles },

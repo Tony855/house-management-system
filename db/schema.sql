@@ -124,6 +124,8 @@ CREATE TABLE rooms (
   deposit          DECIMAL(10,2) NOT NULL DEFAULT 0,   -- 押金
   status           ENUM('vacant','rented','maintenance') NOT NULL DEFAULT 'vacant',
   room_type        VARCHAR(50) NOT NULL DEFAULT '',
+  is_dorm          TINYINT NOT NULL DEFAULT 0,     -- 标记为宿舍（物业）
+  capacity         INT NOT NULL DEFAULT 0,          -- 宿舍容量（0=不限制）
   water_price      DECIMAL(10,2) NOT NULL DEFAULT 0,
   elec_price       DECIMAL(10,2) NOT NULL DEFAULT 0,
   remark           VARCHAR(200) NOT NULL DEFAULT '',
@@ -293,6 +295,8 @@ CREATE TABLE rooms (
   deposit    DECIMAL(10,2) NOT NULL DEFAULT 0,
   status     ENUM('vacant','rented','booked','cleaning','maintenance') NOT NULL DEFAULT 'vacant',
   room_type  VARCHAR(50) NOT NULL DEFAULT '',
+  is_dorm    TINYINT NOT NULL DEFAULT 0,
+  capacity   INT NOT NULL DEFAULT 0,
   remark     VARCHAR(200) NOT NULL DEFAULT '',
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   INDEX idx_org (org_id), INDEX idx_rooms_building (building_id)
@@ -394,6 +398,8 @@ CREATE TABLE rooms (
   room_type        VARCHAR(50) NOT NULL DEFAULT '',
   owner_id         INT NULL,
   property_fee     DECIMAL(10,2) NOT NULL DEFAULT 0,  -- 物业费/月
+  is_dorm          TINYINT NOT NULL DEFAULT 0,         -- 标记为宿舍
+  capacity         INT NOT NULL DEFAULT 0,              -- 宿舍容量（0=不限制）
   water_price      DECIMAL(10,2) NOT NULL DEFAULT 0,
   elec_price       DECIMAL(10,2) NOT NULL DEFAULT 0,
   remark           VARCHAR(200) NOT NULL DEFAULT '',
