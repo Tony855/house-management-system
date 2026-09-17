@@ -565,14 +565,19 @@ async function getOrgSettings(orgId) {
   return rows[0] || null;
 }
 router.get('/settings', authMode, h(async (req, res) => {
-  if (!req.orgId) return res.json({ mode: req.mode, ...DEF_SETTINGS, prices: false });
+  if (!req.orgId) return res.json({ mode: req.mode, ...DEF_SETTINGS, prices: false, item_lib: [] });
   const s = await getOrgSettings(req.orgId);
   const base = s || { org_id: req.orgId, ...DEF_SETTINGS };
+  let lib = [];
+  if (base.item_lib) {
+    try { const raw = typeof base.item_lib === 'string' ? JSON.parse(base.item_lib) : base.item_lib; if (Array.isArray(raw)) lib = raw; } catch (e) { /* 忽略损坏数据 */ }
+  }
   res.json({
     currency: base.currency, rate: Number(base.rate),
     net_price_per_mb: Number(base.net_price_per_mb),
     water_price: Number(base.water_price), elec_price: Number(base.elec_price),
-    prices: FEATURES[req.mode].settingsPrices
+    prices: FEATURES[req.mode].settingsPrices,
+    item_lib: lib
   });
 }));
 
@@ -589,15 +594,35 @@ router.put('/settings', authMode, orgAdminOnly, h(async (req, res) => {
     elec = v.num('elec_price', { min: 0, max: 1e7, def: elec });
   }
   v.ok();
+  /* 常用商品库：{name, model, price} 数组，≤200 条，仅主管理员可写 */
+  let lib = null;
+  if (B.item_lib !== undefined) {
+    if (!Array.isArray(B.item_lib) || B.item_lib.length > 200) {
+      return res.status(400).json({ error: '商品库须为不超过 200 条的数组' });
+    }
+    lib = [];
+    for (const it of B.item_lib) {
+      const name = String(it.name || '').trim();
+      if (!name) return res.status(400).json({ error: '商品名称不能为空' });
+      if (name.length > 100) return res.status(400).json({ error: '商品名称不能超过 100 字' });
+      const model = it.model === undefined || it.model === null ? '' : String(it.model).trim();
+      if (model.length > 100) return res.status(400).json({ error: '商品型号不能超过 100 字' });
+      const price = Number(it.price);
+      if (!Number.isFinite(price) || price < 0 || price > 1e7) {
+        return res.status(400).json({ error: '商品单价不合法' });
+      }
+      lib.push({ name, model, price: Math.round(price * 100) / 100 });
+    }
+  }
   await shared.query(
-    `INSERT INTO settings (org_id, currency, rate, net_price_per_mb, water_price, elec_price)
-     VALUES (?, ?, ?, ?, ?, ?)
+    `INSERT INTO settings (org_id, currency, rate, net_price_per_mb, water_price, elec_price, item_lib)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
      ON DUPLICATE KEY UPDATE currency = VALUES(currency), rate = VALUES(rate),
        net_price_per_mb = VALUES(net_price_per_mb), water_price = VALUES(water_price),
-       elec_price = VALUES(elec_price)`,
-    [req.orgId, currency, rate, net, water, elec]);
+       elec_price = VALUES(elec_price)${lib !== null ? ', item_lib = VALUES(item_lib)' : ''}`,
+    [req.orgId, currency, rate, net, water, elec, lib !== null ? JSON.stringify(lib) : null]);
   res.json({ currency, rate: Number(rate), net_price_per_mb: net, water_price: water, elec_price: elec,
-    prices: FEATURES[req.mode].settingsPrices });
+    prices: FEATURES[req.mode].settingsPrices, item_lib: lib !== null ? lib : (() => { try { return JSON.parse(s.item_lib || '[]'); } catch (e) { return []; } })() });
 }));
 
 /* ==================================================================

@@ -41,6 +41,7 @@ function V(body) {
     num(name, { required, min, max, def } = {}) {
       let v = body[name];
       if (v === undefined || v === null || v === '') {
+        if (v === undefined && def !== undefined) return def;
         if (required) push(name, '不能为空');
         return v === undefined ? null : v;
       }

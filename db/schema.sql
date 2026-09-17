@@ -55,7 +55,8 @@ CREATE TABLE settings (
   rate             DECIMAL(10,4) NOT NULL DEFAULT 7.2000,  -- 1 美元 = ? 人民币
   net_price_per_mb DECIMAL(10,2) NOT NULL DEFAULT 1.00,    -- 网费单价（元/兆/月）
   water_price      DECIMAL(10,2) NOT NULL DEFAULT 4.50,    -- 水价（元/吨）
-  elec_price       DECIMAL(10,2) NOT NULL DEFAULT 1.00     -- 电价（元/度）
+  elec_price       DECIMAL(10,2) NOT NULL DEFAULT 1.00,    -- 电价（元/度）
+  item_lib         LONGTEXT NULL                            -- 常用商品库 JSON：[{name,model,price}]
 ) ENGINE=InnoDB;
 
 -- ---------- 登录会话 ----------

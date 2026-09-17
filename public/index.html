@@ -249,11 +249,14 @@ function openForm(title, fields, values, onSubmit, onMount){
             <th style="width:104px">单价</th>
             <th style="width:90px">金额</th>
             <th style="width:52px">说明</th>
-            <th style="width:36px"></th></tr></thead>
+            <th style="width:70px"></th></tr></thead>
           <tbody id="${mid}_${f.name}_tb"></tbody>
         </table></div>
         <div class="d-flex justify-content-between align-items-center">
-          <button type="button" class="btn btn-sm btn-outline-secondary" onclick="addItemRow('${mid}_${f.name}')">+ 添加明细行</button>
+          <div class="d-flex gap-2">
+            <button type="button" class="btn btn-sm btn-outline-secondary" onclick="addItemRow('${mid}_${f.name}')">+ 添加明细行</button>
+            <button type="button" class="btn btn-sm btn-outline-primary" onclick="openLibPicker('${mid}_${f.name}')"><i class="bi bi-journal-text"></i> 从商品库添加</button>
+          </div>
           <span class="fw-bold item-sum">合计：${currencySymbol()}0.00</span>
         </div>
         ${f.hint ? `<div class="form-text">${esc(f.hint)}</div>` : ''}
@@ -327,13 +330,15 @@ function addItemRow(id){
   if (tb.children.length >= 50){ alert('明细最多 50 行'); return; }
   const tr = document.createElement('tr');
   tr.innerHTML = `
-    <td><input class="form-control form-control-sm" data-f="name" placeholder="商品名称"></td>
+    <td><input class="form-control form-control-sm" data-f="name" placeholder="商品名称" oninput="libSuggest(this)" onfocus="libSuggest(this)"></td>
     <td><input class="form-control form-control-sm" data-f="model" placeholder="型号"></td>
     <td><input class="form-control form-control-sm" data-f="qty" type="number" min="1" step="1" placeholder="数量"></td>
     <td><input class="form-control form-control-sm" data-f="price" type="number" min="0" step="0.01" placeholder="单价"></td>
     <td class="text-end item-amt text-muted">-</td>
     <td class="text-center"><input type="checkbox" class="form-check-input" data-f="free" title="说明行：只记说明不计金额" onchange="toggleItemFree(this)"></td>
-    <td class="text-center"><button type="button" class="btn btn-sm btn-outline-secondary py-0 px-1" title="删除该行" onclick="delItemRow(this)">×</button></td>`;
+    <td class="text-center text-nowrap">
+      <button type="button" class="btn btn-sm btn-outline-secondary py-0 px-1" title="复制上一行" onclick="copyPrevRow(this)">⧉</button>
+      <button type="button" class="btn btn-sm btn-outline-secondary py-0 px-1" title="删除该行" onclick="delItemRow(this)">×</button></td>`;
   tb.appendChild(tr);
   tr.querySelectorAll('input[data-f]').forEach(inp => {
     inp.addEventListener('input', () => updateItemRow(tb));
@@ -352,6 +357,121 @@ function delItemRow(btn){
   btn.closest('tr').remove();
   updateItemRow(tb);
 }
+/* ===== 常用商品库：联想 / 复制上一行 / 从商品库批量添加（按经营主体隔离） ===== */
+let _libSuggest = null;
+function itemLib(){ return (DB.data.settings && DB.data.settings.item_lib) || []; }
+function hideLibSuggest(){ if (_libSuggest){ _libSuggest.remove(); _libSuggest = null; } }
+function libSuggest(inp){
+  hideLibSuggest();
+  const kw = (inp.value || '').trim();
+  const lib = itemLib();
+  if (!kw || !lib.length) return;
+  const list = lib.filter(it => it.name.includes(kw) || ((it.model || '') && it.model.includes(kw))).slice(0, 8);
+  if (!list.length) return;
+  const r = inp.getBoundingClientRect();
+  const div = document.createElement('div');
+  div.className = 'lib-suggest';
+  div.style.cssText = `position:fixed;z-index:2000;background:#fff;border:1px solid #d0d7de;border-radius:6px;box-shadow:0 4px 14px rgba(0,0,0,.15);max-height:260px;overflow:auto;min-width:${Math.max(r.width, 280)}px;top:${r.bottom + 4}px;left:${r.left}px;`;
+  list.forEach(it => {
+    const row = document.createElement('div');
+    row.style.cssText = 'cursor:pointer;display:flex;justify-content:space-between;gap:10px;align-items:center;padding:6px 10px;font-size:13px;';
+    row.innerHTML = `<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(it.name)}${it.model ? '<span class="text-muted"> · ' + esc(it.model) + '</span>' : ''}</span><span class="text-muted text-nowrap">${money(it.price)}</span>`;
+    row.onmouseenter = () => row.style.background = '#f1f5f9';
+    row.onmouseleave = () => row.style.background = '';
+    row.onmousedown = (e) => { e.preventDefault(); pickLibItem(inp, it); };
+    div.appendChild(row);
+  });
+  document.body.appendChild(div);
+  _libSuggest = div;
+}
+function pickLibItem(inp, it){
+  hideLibSuggest();
+  const tr = inp.closest('tr');
+  const nameInp = tr.querySelector('[data-f="name"]');
+  nameInp.value = it.name;
+  const m = tr.querySelector('[data-f="model"]'); if (m) m.value = it.model || '';
+  const p = tr.querySelector('[data-f="price"]');
+  if (p){ p.value = toDisplayMoney(it.price); p.dispatchEvent(new Event('input', { bubbles:true })); }
+  nameInp.dispatchEvent(new Event('input', { bubbles:true }));
+  updateItemRow(tr.closest('tbody'));
+}
+function copyPrevRow(btn){
+  const tr = btn.closest('tr');
+  const tb = tr.closest('tbody');
+  const idx = [...tb.rows].indexOf(tr);
+  if (idx < 1) return;
+  const prev = tb.rows[idx - 1];
+  const pv = n => (prev.querySelector('[data-f="' + n + '"]') || {}).value || '';
+  const qv = n => (prev.querySelector('[data-f="' + n + '"]') || {}).disabled;
+  tr.querySelector('[data-f="name"]').value = pv('name');
+  const m = tr.querySelector('[data-f="model"]'); if (m) m.value = pv('model');
+  const q = tr.querySelector('[data-f="qty"]'), p = tr.querySelector('[data-f="price"]');
+  q.value = ''; q.disabled = qv('qty');
+  p.value = pv('price'); p.disabled = qv('price');
+  const cb = tr.querySelector('[data-f="free"]');
+  if (cb) cb.checked = !!(prev.querySelector('[data-f="free"]') || {}).checked;
+  q.dispatchEvent(new Event('input', { bubbles:true }));
+  p.dispatchEvent(new Event('input', { bubbles:true }));
+  updateItemRow(tb);
+}
+function openLibPicker(id){
+  const lib = itemLib();
+  if (!lib.length){ alert('商品库暂无数据，请主管理员在「系统设置」中先添加常用商品'); return; }
+  hideLibSuggest();
+  const host = document.getElementById('modalHost') || document.body;
+  const mid = 'libpk' + Date.now();
+  const html = `
+    <div class="modal fade" id="${mid}" tabindex="-1">
+      <div class="modal-dialog modal-dialog-centered modal-lg"><div class="modal-content">
+        <div class="modal-header py-2"><h6 class="modal-title">从商品库添加</h6>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+        <div class="modal-body p-2">
+          <div class="table-responsive" style="max-height:420px"><table class="table table-sm table-hover align-middle mb-0">
+            <thead class="table-light"><tr><th style="width:40px"></th><th>商品</th><th style="width:150px">型号</th><th style="width:110px">单价</th></tr></thead>
+            <tbody>
+              ${lib.map((it, i) => `<tr>
+                <td class="text-center"><input type="checkbox" class="form-check-input lib-chk" data-idx="${i}"></td>
+                <td style="word-break:break-all">${esc(it.name)}</td>
+                <td class="text-muted" style="word-break:break-all">${esc(it.model || '-')}</td>
+                <td>${money(it.price)}</td></tr>`).join('')}
+            </tbody></table></div>
+          <div class="form-text mt-1">勾选后点击「添加所选」自动生成明细行，型号与单价自动带出，数量请自行填写。</div>
+        </div>
+        <div class="modal-footer py-2">
+          <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">取消</button>
+          <button type="button" class="btn btn-primary btn-sm" onclick="libPickConfirm('${mid}','${id}')">添加所选</button>
+        </div>
+      </div></div></div>`;
+  host.insertAdjacentHTML('beforeend', html);
+  const el = document.getElementById(mid);
+  el.addEventListener('hidden.bs.modal', () => el.remove());
+  bootstrap.Modal.getOrCreateInstance(el).show();
+}
+function libPickConfirm(mid, id){
+  const lib = itemLib();
+  const sel = [...document.querySelectorAll('#' + mid + ' .lib-chk')].filter(c => c.checked)
+    .map(c => lib[Number(c.dataset.idx)]);
+  if (!sel.length){ alert('请先勾选商品'); return; }
+  const tb = document.getElementById(id + '_tb');
+  const tr0 = tb.rows[0];
+  if (tr0 && !(tr0.querySelector('[data-f="name"]').value.trim())) tb.rows[0].remove();
+  sel.forEach(it => {
+    addItemRow(id);
+    const tr = tb.rows[tb.rows.length - 1];
+    tr.querySelector('[data-f="name"]').value = it.name;
+    const m = tr.querySelector('[data-f="model"]'); if (m) m.value = it.model || '';
+    const p = tr.querySelector('[data-f="price"]');
+    if (p){ p.value = toDisplayMoney(it.price); p.dispatchEvent(new Event('input', { bubbles:true })); }
+    tr.querySelector('[data-f="qty"]').dispatchEvent(new Event('input', { bubbles:true }));
+  });
+  const inst = bootstrap.Modal.getInstance(document.getElementById(mid));
+  if (inst) inst.hide();
+  updateItemRow(tb);
+}
+/* 点击页面其它处关闭联想 */
+document.addEventListener('click', e => {
+  if (!e.target.closest('.lib-suggest')) hideLibSuggest();
+});
 function updateItemRow(tb){
   if (!tb) return;
   let sum = 0;
@@ -399,14 +519,14 @@ function fmtItems(items){
   const rows = items.map(it => {
     const model = it.model ? `<div class="text-muted" style="font-size:12px">型号：${esc(it.model)}</div>` : '';
     if (it.qty == null && it.price == null){
-      return `<tr class="text-muted"><td colspan="3">${esc(it.name)}${model}</td><td class="text-end">说明</td></tr>`;
+      return `<tr class="text-muted"><td colspan="3" style="word-break:break-all">${esc(it.name)}${model}</td><td class="text-end">说明</td></tr>`;
     }
-    return `<tr><td>${esc(it.name)}${model}</td><td>${it.qty}</td><td>${money(it.price)}</td>
-      <td class="text-end">${money((Number(it.qty) || 0) * (Number(it.price) || 0))}</td></tr>`;
+    return `<tr><td style="word-break:break-all">${esc(it.name)}${model}</td><td class="text-nowrap">${it.qty}</td><td class="text-nowrap">${money(it.price)}</td>
+      <td class="text-end text-nowrap">${money((Number(it.qty) || 0) * (Number(it.price) || 0))}</td></tr>`;
   }).join('');
   const total = items.reduce((s, it) => s + ((Number(it.qty) || 0) * (Number(it.price) || 0)), 0);
-  return `<table class="table table-sm table-bordered mt-1 mb-1" style="max-width:420px">
-    <thead class="table-light"><tr><th>商品</th><th>数量</th><th>单价</th><th class="text-end">金额</th></tr></thead>
+  return `<table class="table table-sm table-bordered mt-1 mb-1" style="max-width:100%">
+    <thead class="table-light"><tr><th style="min-width:120px">商品</th><th style="width:60px">数量</th><th style="width:96px">单价</th><th class="text-end" style="width:96px">金额</th></tr></thead>
     <tbody>${rows}</tbody>
     <tfoot><tr class="fw-bold"><td colspan="3">合计</td><td class="text-end">${money(total)}</td></tr></tfoot>
     </table>`;
@@ -571,7 +691,8 @@ async function doLogin(){
         water_price: (st.water_price !== undefined && st.water_price !== null)
           ? Number(st.water_price) : 4.5,
         elec_price: (st.elec_price !== undefined && st.elec_price !== null)
-          ? Number(st.elec_price) : 1
+          ? Number(st.elec_price) : 1,
+        item_lib: Array.isArray(st.item_lib) ? st.item_lib : []
       };
     } catch(e){ console.error('settings 加载失败', e); }
     history.replaceState(null, '', '#' + (u.level === 'staff' ? 'home' : firstAllowedPage(u.mode) || DEFAULT_PAGE[u.mode]));
@@ -819,7 +940,8 @@ function editSettings(){
       DB.data.settings = {
         mode, currency: saved.currency, rate: Number(saved.rate),
         net_price_per_mb: saved.net_price_per_mb, water_price: saved.water_price,
-        elec_price: saved.elec_price, prices: saved.prices
+        elec_price: saved.elec_price, prices: saved.prices,
+        item_lib: (DB.data.settings && DB.data.settings.item_lib) || []
       };
       modal.hide();
       renderApp();
@@ -829,7 +951,7 @@ function editSettings(){
 async function renderSettings(){
   const mode = curMode();
   $('#page').innerHTML = `
-  <div class="card"><div class="card-body" style="max-width:640px">
+  <div class="card"><div class="card-body" style="max-width:720px">
     <h5><i class="bi bi-gear text-primary"></i> 系统设置</h5>
     <p class="text-muted mb-2">配置本经营主体（<b>${esc(ME.org_name || '')}</b>）的记账币种与汇率${mode === 'hotel' ? '' : '、网费及水电单价'}。</p>
     <ul class="small text-muted ps-3 mb-3">
@@ -838,7 +960,66 @@ async function renderSettings(){
         : '<li>网费/水电单价作为新增房间的默认值，已建房间单价不受影响。</li>'}
     </ul>
     <button class="btn btn-primary" onclick="editSettings()"><i class="bi bi-sliders"></i> 打开设置</button>
+  </div></div>
+  <div class="card mt-3"><div class="card-body" style="max-width:720px">
+    <div class="d-flex justify-content-between align-items-center mb-1">
+      <h6 class="mb-0"><i class="bi bi-journal-text text-primary"></i> 常用商品库</h6>
+      <button class="btn btn-sm btn-outline-secondary" onclick="libAddRow()"><i class="bi bi-plus-lg"></i> 添加</button>
+    </div>
+    <p class="small text-muted mb-2">明细录入时输入商品名可联想带出型号与单价，也可在明细弹窗点「从商品库添加」批量生成；数据仅本经营主体可见。</p>
+    <div class="table-responsive"><table class="table table-sm table-bordered align-middle mb-2">
+      <thead class="table-light"><tr><th style="width:42%">商品</th><th style="width:34%">型号</th><th style="width:20%">单价</th><th style="width:48px"></th></tr></thead>
+      <tbody id="lib_tb"></tbody>
+    </table></div>
+    <button class="btn btn-sm btn-primary" onclick="saveItemLib()">保存商品库</button>
+    <span id="lib_save_msg" class="small text-success ms-2"></span>
   </div></div>`;
+  libRender();
+}
+/* ===== 常用商品库维护（系统设置页，仅主管理员可见） ===== */
+let _libDraft = [];
+function libRender(){
+  _libDraft = (DB.data.settings.item_lib || []).map(it => ({
+    name: it.name, model: it.model || '', price: toDisplayMoney(it.price)
+  }));
+  libPaint();
+}
+function libPaint(){
+  const tb = document.getElementById('lib_tb');
+  if (!tb) return;
+  if (!_libDraft.length){
+    tb.innerHTML = '<tr><td colspan="4" class="text-center text-muted py-3">暂无商品，点击右上角「添加」录入</td></tr>';
+    return;
+  }
+  tb.innerHTML = _libDraft.map((it, i) => `<tr>
+    <td><input class="form-control form-control-sm" data-lib="name" data-i="${i}" value="${esc(it.name)}"></td>
+    <td><input class="form-control form-control-sm" data-lib="model" data-i="${i}" value="${esc(it.model)}"></td>
+    <td><input class="form-control form-control-sm" data-lib="price" data-i="${i}" type="number" min="0" step="0.01" value="${esc(it.price)}"></td>
+    <td class="text-center"><button type="button" class="btn btn-sm btn-outline-danger py-0 px-1" title="删除" onclick="libDel(${i})">×</button></td>
+  </tr>`).join('');
+}
+function libAddRow(){ _libDraft.push({ name:'', model:'', price:'' }); libPaint(); }
+function libDel(i){ _libDraft.splice(i, 1); libPaint(); }
+async function saveItemLib(){
+  const tb = document.getElementById('lib_tb');
+  if (!tb) return;
+  const arr = [];
+  for (const tr of tb.rows){
+    const name = (tr.querySelector('[data-lib="name"]').value || '').trim();
+    if (!name) continue;
+    const model = (tr.querySelector('[data-lib="model"]').value || '').trim();
+    const price = Number(tr.querySelector('[data-lib="price"]').value);
+    if (!Number.isFinite(price) || price < 0){ alert('商品「' + name + '」单价不合法'); return; }
+    arr.push({ name, model, price: Math.round(fromDisplayMoney(price) * 100) / 100 });
+  }
+  try {
+    const saved = await api('/api/settings', 'PUT', { item_lib: arr });
+    DB.data.settings.item_lib = saved.item_lib || [];
+    _libDraft = (saved.item_lib || []).map(it => ({ name: it.name, model: it.model || '', price: toDisplayMoney(it.price) }));
+    libPaint();
+    const msg = document.getElementById('lib_save_msg');
+    if (msg){ msg.textContent = '已保存 ' + saved.item_lib.length + ' 条'; setTimeout(() => msg.textContent = '', 2500); }
+  } catch(e){ alert(e.message); }
 }
 
 async function go(page){
