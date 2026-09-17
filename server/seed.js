@@ -33,14 +33,32 @@ async function seedShared() {
       await conn.query('INSERT INTO roles (org_id, code, name, description, level, is_system) VALUES (NULL, ?, ?, ?, ?, ?)',
         [code, name, desc, level, isSys]);
     }
-    /* 内置「管理」「财务」角色默认页面权限（与线上一致） */
-    const [[mgr]] = await conn.query('SELECT id FROM roles WHERE code = ? AND org_id IS NULL', ['manager']);
-    for (const page of ['bills', 'network', 'repairs']) {
-      await conn.query('INSERT INTO role_permissions (role_id, page) VALUES (?, ?)', [mgr.id, page]);
-    }
-    const [[fin]] = await conn.query('SELECT id FROM roles WHERE code = ? AND org_id IS NULL', ['finance']);
-    for (const page of ['bills', 'network', 'repairs']) {
-      await conn.query('INSERT INTO role_permissions (role_id, page) VALUES (?, ?)', [fin.id, page]);
+    /* 内置角色默认权限（与线上一致）：
+       管理：全业务页面只读 + 楼栋/合同/抄表/商品库可操作
+       财务：仪表盘/账单/网络/报修 + 账单操作（开单/收款/打印/提醒）
+       员工：仪表盘/报修 + 报修登记 */
+    const BUILTIN_PERMS = {
+      manager: {
+        pages: ['dashboard', 'buildings', 'rooms', 'properties', 'tenants', 'owners', 'contracts', 'orders', 'meters', 'network', 'bills', 'repairs', 'complaints', 'org-employees'],
+        ops: ['building_add', 'building_edit', 'building_delete', 'contract_add', 'contract_edit', 'contract_delete', 'meter_add', 'meter_edit', 'meter_delete', 'itemlib_use']
+      },
+      finance: {
+        pages: ['dashboard', 'bills', 'network', 'repairs'],
+        ops: ['bill_add', 'bill_generate', 'bill_pay', 'bill_print', 'bill_remind']
+      },
+      staff: {
+        pages: ['dashboard', 'repairs'],
+        ops: ['repair_add']
+      }
+    };
+    for (const [code, cfg] of Object.entries(BUILTIN_PERMS)) {
+      const [[r]] = await conn.query('SELECT id FROM roles WHERE code = ? AND org_id IS NULL', [code]);
+      for (const page of cfg.pages) {
+        await conn.query('INSERT INTO role_permissions (role_id, page) VALUES (?, ?)', [r.id, page]);
+      }
+      for (const op of cfg.ops) {
+        await conn.query('INSERT INTO role_permissions (role_id, page) VALUES (?, ?)', [r.id, 'op:' + op]);
+      }
     }
 
     /* 三个默认经营主体（每系统各一个） */
