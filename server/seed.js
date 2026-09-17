@@ -25,11 +25,17 @@ async function seedShared() {
     const roles = [
       ['super', '超级管理员', '全局：开通经营主体、监控系统', 'super', 1],
       ['admin', '主管理员', '经营主体负责人：管理本主体全部业务与员工', 'admin', 1],
-      ['staff', '员工', '普通员工：按授予的页面权限访问', 'staff', 1]
+      ['staff', '员工', '普通员工：按授予的页面权限访问', 'staff', 1],
+      ['manager', '管理', '管理员：按授予的页面/操作权限访问', 'manager', 1]
     ];
     for (const [code, name, desc, level, isSys] of roles) {
       await conn.query('INSERT INTO roles (org_id, code, name, description, level, is_system) VALUES (NULL, ?, ?, ?, ?, ?)',
         [code, name, desc, level, isSys]);
+    }
+    /* 内置「管理」角色默认页面权限（与线上一致） */
+    const [[mgr]] = await conn.query('SELECT id FROM roles WHERE code = ? AND org_id IS NULL', ['manager']);
+    for (const page of ['bills', 'network', 'repairs']) {
+      await conn.query('INSERT INTO role_permissions (role_id, page) VALUES (?, ?)', [mgr.id, page]);
     }
 
     /* 三个默认经营主体（每系统各一个） */
