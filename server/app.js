@@ -594,7 +594,7 @@ router.put('/settings', authMode, orgAdminOnly, h(async (req, res) => {
     elec = v.num('elec_price', { min: 0, max: 1e7, def: elec });
   }
   v.ok();
-  /* 常用商品库：{name, model, price} 数组，≤200 条，仅主管理员可写 */
+  /* 常用商品库：{name, model, price, cat} 数组，≤200 条，仅主管理员可写 */
   let lib = null;
   if (B.item_lib !== undefined) {
     if (!Array.isArray(B.item_lib) || B.item_lib.length > 200) {
@@ -611,7 +611,8 @@ router.put('/settings', authMode, orgAdminOnly, h(async (req, res) => {
       if (!Number.isFinite(price) || price < 0 || price > 1e7) {
         return res.status(400).json({ error: '商品单价不合法' });
       }
-      lib.push({ name, model, price: Math.round(price * 100) / 100 });
+      const cat = it.cat === 'util' ? 'util' : 'net';
+      lib.push({ name, model, price: Math.round(price * 100) / 100, cat });
     }
   }
   await shared.query(
@@ -1594,7 +1595,7 @@ router.post('/bills/generate', auth, h(async (req, res) => {
   const oid = req.orgId;
   const t = today(), ym = t.slice(0, 7);
   const start = monthStart(t), end = addDays(addMonths(start, 1), -1);
-  let n = 0, skipped = 0;
+  let n = 0, skipped = 0, skippedReasons = [];
   const conn = await pool.getConnection();
   try {
     await conn.beginTransaction();
@@ -1674,9 +1675,9 @@ router.post('/bills/generate', auth, h(async (req, res) => {
         const [[{ c }]] = await conn.query(
           "SELECT COUNT(*) AS c FROM bills WHERE org_id = ? AND source = 'network' AND room_id = ? AND period_start LIKE ?",
           [oid, r.id, ym + '%']);
-        if (Number(c) > 0) { skipped++; continue; }
+        if (Number(c) > 0) { skippedReasons.push({ room: '房间 ' + (r.room_no || r.id), reason: '已有账单' }); skipped++; continue; }
         const calc = await calcNetFee(conn, r.id, ym);
-        if (calc.total <= 0) { skipped++; continue; }
+        if (calc.total <= 0) { skippedReasons.push({ room: '房间 ' + (r.room_no || r.id), reason: '带宽为 0 无网费' }); skipped++; continue; }
         const detail = calc.lines.map(l => {
           const segTxt = l.segments.map(s =>
             `${s.bandwidth}兆×${s.days}天`).join(' + ');
@@ -1707,8 +1708,11 @@ router.post('/bills/generate', auth, h(async (req, res) => {
   }
 
   const label = { all: '全部', rental: '租金', hotel: '酒店', property: '物业', utility: '水电', network: '网费' }[kind] || kind;
-  if (!n) return res.json({ msg: `没有需要生成的账单${skipped ? `（${skipped} 项已存在或不满足条件）` : ''}` });
-  return res.json({ msg: `本次共生成 ${n} 条${label}账单${skipped ? `，跳过 ${skipped} 项` : ''}` });
+  if (!n) return res.json({
+    msg: `没有需要生成的账单${skipped ? `（${skipped} 项已存在或不满足条件）` : ''}`,
+    detail: skippedReasons
+  });
+  return res.json({ msg: `本次共生成 ${n} 条${label}账单${skipped ? `，跳过 ${skipped} 项` : ''}`, detail: skippedReasons });
 }));
 /* 租房：某房间生效合同的租客 id */
 async function rentedTenant(conn, roomId, oid) {

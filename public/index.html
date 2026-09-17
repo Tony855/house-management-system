@@ -239,8 +239,11 @@ function openForm(title, fields, values, onSubmit, onMount){
       });
       html += `</div>`;
     } else if (f.type === 'items'){
-      /* 明细清单：动态行（项目名称/数量/单价），金额自动合计；勾选说明行则不计金额 */
-      html += `<div class="item-wrap">
+      /* 明细清单：动态行（商品/型号/数量/单价），金额自动合计；勾选说明行则不计金额
+         cat: ''=全部类别 | 'net'=网络商品 | 'util'=水电商品（按入口过滤商品库） */
+      const libBtn = (typeof canOp === 'function' && canOp('itemlib_use'))
+        ? `<button type="button" class="btn btn-sm btn-outline-primary" onclick="openLibPicker('${mid}_${f.name}')"><i class="bi bi-journal-text"></i> 从商品库添加</button>` : '';
+      html += `<div class="item-wrap" data-cat="${esc(f.cat || '')}">
         <div class="table-responsive"><table class="table table-sm table-bordered align-middle mb-1">
           <thead class="table-light"><tr>
             <th style="min-width:140px">商品</th>
@@ -255,7 +258,7 @@ function openForm(title, fields, values, onSubmit, onMount){
         <div class="d-flex justify-content-between align-items-center">
           <div class="d-flex gap-2">
             <button type="button" class="btn btn-sm btn-outline-secondary" onclick="addItemRow('${mid}_${f.name}')">+ 添加明细行</button>
-            <button type="button" class="btn btn-sm btn-outline-primary" onclick="openLibPicker('${mid}_${f.name}')"><i class="bi bi-journal-text"></i> 从商品库添加</button>
+            ${libBtn}
           </div>
           <span class="fw-bold item-sum">合计：${currencySymbol()}0.00</span>
         </div>
@@ -329,8 +332,10 @@ function addItemRow(id){
   if (!tb) return;
   if (tb.children.length >= 50){ alert('明细最多 50 行'); return; }
   const tr = document.createElement('tr');
+  const suggestAttr = (typeof canOp === 'function' && canOp('itemlib_use'))
+    ? 'oninput="libSuggest(this)" onfocus="libSuggest(this)"' : '';
   tr.innerHTML = `
-    <td><input class="form-control form-control-sm" data-f="name" placeholder="商品名称" oninput="libSuggest(this)" onfocus="libSuggest(this)"></td>
+    <td><input class="form-control form-control-sm" data-f="name" placeholder="商品名称" ${suggestAttr}></td>
     <td><input class="form-control form-control-sm" data-f="model" placeholder="型号"></td>
     <td><input class="form-control form-control-sm" data-f="qty" type="number" min="1" step="1" placeholder="数量"></td>
     <td><input class="form-control form-control-sm" data-f="price" type="number" min="0" step="0.01" placeholder="单价"></td>
@@ -360,11 +365,24 @@ function delItemRow(btn){
 /* ===== 常用商品库：联想 / 复制上一行 / 从商品库批量添加（按经营主体隔离） ===== */
 let _libSuggest = null;
 function itemLib(){ return (DB.data.settings && DB.data.settings.item_lib) || []; }
+/* 当前明细弹窗允许的商品库类别：''=全部 | 'net' | 'util'（从 .item-wrap data-cat 读取） */
+function libCat(inp){
+  const wrap = inp ? inp.closest('.item-wrap') : null;
+  return (wrap && wrap.getAttribute('data-cat')) || '';
+}
+function libFiltered(cat){
+  const lib = itemLib();
+  if (!cat) return lib;                          /* 全部入口：网络+水电两类都显示 */
+  if (cat === 'util') return lib.filter(it => it.cat === 'util');
+  /* 网络入口：网络商品 + 历史未分类商品（默认归网络） */
+  return lib.filter(it => it.cat !== 'util');
+}
 function hideLibSuggest(){ if (_libSuggest){ _libSuggest.remove(); _libSuggest = null; } }
 function libSuggest(inp){
   hideLibSuggest();
   const kw = (inp.value || '').trim();
-  const lib = itemLib();
+  const cat = libCat(inp);
+  const lib = libFiltered(cat);
   if (!kw || !lib.length) return;
   const list = lib.filter(it => it.name.includes(kw) || ((it.model || '') && it.model.includes(kw))).slice(0, 8);
   if (!list.length) return;
@@ -415,15 +433,19 @@ function copyPrevRow(btn){
   updateItemRow(tb);
 }
 function openLibPicker(id){
-  const lib = itemLib();
-  if (!lib.length){ alert('商品库暂无数据，请主管理员在「系统设置」中先添加常用商品'); return; }
+  const tb = document.getElementById(id + '_tb');
+  const wrap = tb && tb.closest('.item-wrap');
+  const cat = (wrap && wrap.getAttribute('data-cat')) || '';
+  const lib = libFiltered(cat);
+  if (!lib.length){ alert(cat === 'net' ? '网络商品库暂无数据，请主管理员在「系统设置」中添加' : cat === 'util' ? '水电商品库暂无数据，请主管理员在「系统设置」中添加' : '商品库暂无数据，请主管理员在「系统设置」中先添加常用商品'); return; }
   hideLibSuggest();
   const host = document.getElementById('modalHost') || document.body;
   const mid = 'libpk' + Date.now();
+  const catTxt = cat === 'net' ? '（网络商品）' : cat === 'util' ? '（水电商品）' : '';
   const html = `
     <div class="modal fade" id="${mid}" tabindex="-1">
       <div class="modal-dialog modal-dialog-centered modal-lg"><div class="modal-content">
-        <div class="modal-header py-2"><h6 class="modal-title">从商品库添加</h6>
+        <div class="modal-header py-2"><h6 class="modal-title">从商品库添加${catTxt}</h6>
           <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
         <div class="modal-body p-2">
           <div class="table-responsive" style="max-height:420px"><table class="table table-sm table-hover align-middle mb-0">
@@ -785,7 +807,8 @@ const OP_DEFS = {
     { g:'水电抄表', items:[['meter_add','录入'],['meter_edit','编辑'],['meter_delete','删除']] },
     { g:'网络管理', items:[['netline_add','新增线路'],['netline_edit','编辑线路'],['netline_bandwidth','加兆/减兆'],['netline_status','停用/启用']] },
     { g:'账单收费', items:[['bill_add','手动添加'],['bill_generate','生成'],['bill_delete','删除'],['bill_pay','收款']] },
-    { g:'报修管理', items:[['repair_add','登记'],['repair_handle','处理'],['repair_delete','删除']] }
+    { g:'报修管理', items:[['repair_add','登记'],['repair_handle','处理'],['repair_delete','删除']] },
+    { g:'商品库', items:[['itemlib_use','使用商品库（联想/批量添加）']] }
   ],
   hotel: [
     { g:'楼栋管理', items:[['building_add','新增'],['building_edit','编辑'],['building_delete','删除']] },
@@ -804,7 +827,8 @@ const OP_DEFS = {
     { g:'网络管理', items:[['netline_add','新增线路'],['netline_edit','编辑线路'],['netline_bandwidth','加兆/减兆'],['netline_status','停用/启用']] },
     { g:'账单收费', items:[['bill_add','手动添加'],['bill_generate','生成'],['bill_delete','删除'],['bill_pay','收款']] },
     { g:'报修管理', items:[['repair_add','登记'],['repair_handle','处理'],['repair_delete','删除']] },
-    { g:'投诉建议', items:[['complaint_add','登记'],['complaint_handle','处理'],['complaint_delete','删除']] }
+    { g:'投诉建议', items:[['complaint_add','登记'],['complaint_handle','处理'],['complaint_delete','删除']] },
+    { g:'商品库', items:[['itemlib_use','使用商品库（联想/批量添加）']] }
   ]
 };
 const opLabel = (op) => {
@@ -968,7 +992,7 @@ async function renderSettings(){
     </div>
     <p class="small text-muted mb-2">明细录入时输入商品名可联想带出型号与单价，也可在明细弹窗点「从商品库添加」批量生成；数据仅本经营主体可见。</p>
     <div class="table-responsive"><table class="table table-sm table-bordered align-middle mb-2">
-      <thead class="table-light"><tr><th style="width:42%">商品</th><th style="width:34%">型号</th><th style="width:20%">单价</th><th style="width:48px"></th></tr></thead>
+      <thead class="table-light"><tr><th style="width:8%">类别</th><th style="width:36%">商品</th><th style="width:30%">型号</th><th style="width:16%">单价</th><th style="width:48px"></th></tr></thead>
       <tbody id="lib_tb"></tbody>
     </table></div>
     <button class="btn btn-sm btn-primary" onclick="saveItemLib()">保存商品库</button>
@@ -980,6 +1004,7 @@ async function renderSettings(){
 let _libDraft = [];
 function libRender(){
   _libDraft = (DB.data.settings.item_lib || []).map(it => ({
+    cat: it.cat === 'util' ? 'util' : 'net',
     name: it.name, model: it.model || '', price: toDisplayMoney(it.price)
   }));
   libPaint();
@@ -988,17 +1013,21 @@ function libPaint(){
   const tb = document.getElementById('lib_tb');
   if (!tb) return;
   if (!_libDraft.length){
-    tb.innerHTML = '<tr><td colspan="4" class="text-center text-muted py-3">暂无商品，点击右上角「添加」录入</td></tr>';
+    tb.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-3">暂无商品，点击右上角「添加」录入</td></tr>';
     return;
   }
   tb.innerHTML = _libDraft.map((it, i) => `<tr>
+    <td><select class="form-select form-select-sm" data-lib="cat" data-i="${i}">
+      <option value="net" ${it.cat === 'net' ? 'selected' : ''}>网络</option>
+      <option value="util" ${it.cat === 'util' ? 'selected' : ''}>水电</option>
+    </select></td>
     <td><input class="form-control form-control-sm" data-lib="name" data-i="${i}" value="${esc(it.name)}"></td>
     <td><input class="form-control form-control-sm" data-lib="model" data-i="${i}" value="${esc(it.model)}"></td>
     <td><input class="form-control form-control-sm" data-lib="price" data-i="${i}" type="number" min="0" step="0.01" value="${esc(it.price)}"></td>
     <td class="text-center"><button type="button" class="btn btn-sm btn-outline-danger py-0 px-1" title="删除" onclick="libDel(${i})">×</button></td>
   </tr>`).join('');
 }
-function libAddRow(){ _libDraft.push({ name:'', model:'', price:'' }); libPaint(); }
+function libAddRow(){ _libDraft.push({ cat:'net', name:'', model:'', price:'' }); libPaint(); }
 function libDel(i){ _libDraft.splice(i, 1); libPaint(); }
 async function saveItemLib(){
   const tb = document.getElementById('lib_tb');
@@ -1010,12 +1039,13 @@ async function saveItemLib(){
     const model = (tr.querySelector('[data-lib="model"]').value || '').trim();
     const price = Number(tr.querySelector('[data-lib="price"]').value);
     if (!Number.isFinite(price) || price < 0){ alert('商品「' + name + '」单价不合法'); return; }
-    arr.push({ name, model, price: Math.round(fromDisplayMoney(price) * 100) / 100 });
+    const cat = tr.querySelector('[data-lib="cat"]').value === 'util' ? 'util' : 'net';
+    arr.push({ cat, name, model, price: Math.round(fromDisplayMoney(price) * 100) / 100 });
   }
   try {
     const saved = await api('/api/settings', 'PUT', { item_lib: arr });
     DB.data.settings.item_lib = saved.item_lib || [];
-    _libDraft = (saved.item_lib || []).map(it => ({ name: it.name, model: it.model || '', price: toDisplayMoney(it.price) }));
+    _libDraft = (saved.item_lib || []).map(it => ({ cat: it.cat === 'util' ? 'util' : 'net', name: it.name, model: it.model || '', price: toDisplayMoney(it.price) }));
     libPaint();
     const msg = document.getElementById('lib_save_msg');
     if (msg){ msg.textContent = '已保存 ' + saved.item_lib.length + ' 条'; setTimeout(() => msg.textContent = '', 2500); }
@@ -2152,7 +2182,9 @@ async function generateBills(kind){
   if (!confirm(tips[kind] || '确定生成账单？')) return;
   try {
     const r = await api('/api/bills/generate', 'POST', { kind });
-    alert(r.msg);
+    const extra = (r.detail && r.detail.length)
+      ? '\n\n跳过明细：\n' + r.detail.map(d => '· ' + d.room + ' — ' + d.reason).join('\n') : '';
+    alert(r.msg + extra);
     renderBills();
   } catch(e){ alert(e.message); }
 }
@@ -2402,7 +2434,7 @@ async function addMeterBill(){
       default: addDays(addMonths(ym + '-01', 1), -1) },
     { name:'due_date',     label:'应缴日期', type:'date', required:true, default: ym + '-10' },
     { name:'amount',       label:'金额', type:'number', required:true, step:'0.01', money:true },
-    { name:'items', label:'明细清单', type:'items', hint:'维修费/其它维修可录入明细行，合计自动填入金额' },
+    { name:'items', label:'明细清单', type:'items', hint:'维修费/其它维修可录入明细行，合计自动填入金额', cat:'util' },
     { name:'remark', label:'备注', type:'textarea' }
   ], { bill_type:'repair' }, async (d, modal) => {
     await api('/api/bills', 'POST', {
@@ -2566,7 +2598,9 @@ async function renderNetwork(){
       const bill = billByRoom[r.room_id];
       const billBtns = canOp('bill_delete') ? (bill
         ? `<button class="btn btn-sm btn-outline-danger" onclick="delRoomNetBill(${bill.id})">删除账单</button>`
-        : (canOp('bill_generate') ? `<button class="btn btn-sm btn-outline-warning" onclick="genRoomNetBill(${r.room_id}, '${esc(netFilter.month)}')">生成账单</button>` : '')) : '';
+        : ((r.bandwidth || 0) <= 0
+          ? '<span class="text-muted small">无带宽</span>'
+          : (canOp('bill_generate') ? `<button class="btn btn-sm btn-outline-warning" onclick="genRoomNetBill(${r.room_id}, '${esc(netFilter.month)}')">生成账单</button>` : ''))) : '';
       const lines = r.lines || [];
       const activeCount = lines.filter(l => l.status === 'active').length;
       const lineRows = lines.map(l => {
@@ -2836,7 +2870,7 @@ async function editNetBill(){
     { name:'period_end',   label:'费用截止日', type:'date', required:true, default:pEnd },
     { name:'due_date',     label:'应缴日期', type:'date', required:true, default:ym + '-10' },
     { name:'amount',       label:'金额', type:'number', required:true, step:'0.01', money:true },
-    { name:'items', label:'明细清单', type:'items', hint:'网维修费/设备安装费可录入明细行，合计自动填入金额' },
+    { name:'items', label:'明细清单', type:'items', hint:'网维修费/设备安装费可录入明细行，合计自动填入金额', cat:'net' },
     { name:'remark', label:'备注', type:'textarea' }
   ], { bill_type:'network' }, async (d, modal) => {
     await api('/api/bills', 'POST', {
@@ -2885,7 +2919,9 @@ async function genRoomNetBill(roomId, month){
   if (!confirm(`为该房产生成 ${month} 网费账单？\n（若当月已有网费账单将跳过）`)) return;
   try {
     const r = await api('/api/bills/generate', 'POST', { kind:'network', room_id: roomId });
-    alert(r.msg);
+    const extra = (r.detail && r.detail.length)
+      ? '\n\n跳过原因：\n' + r.detail.map(d => '· ' + d.room + ' — ' + d.reason).join('\n') : '';
+    alert(r.msg + extra);
     renderNetwork();
   } catch(e){ alert(e.message); }
 }
