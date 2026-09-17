@@ -238,6 +238,25 @@ function openForm(title, fields, values, onSubmit, onMount){
           <span class="form-check-label">${esc(o.label)}</span></label>`;
       });
       html += `</div>`;
+    } else if (f.type === 'items'){
+      /* 明细清单：动态行（项目名称/数量/单价），金额自动合计；勾选说明行则不计金额 */
+      html += `<div class="item-wrap">
+        <div class="table-responsive"><table class="table table-sm table-bordered align-middle mb-1">
+          <thead class="table-light"><tr>
+            <th style="min-width:150px">项目名称</th>
+            <th style="width:80px">数量</th>
+            <th style="width:110px">单价</th>
+            <th style="width:90px">金额</th>
+            <th style="width:52px">说明</th>
+            <th style="width:36px"></th></tr></thead>
+          <tbody id="${mid}_${f.name}_tb"></tbody>
+        </table></div>
+        <div class="d-flex justify-content-between align-items-center">
+          <button type="button" class="btn btn-sm btn-outline-secondary" onclick="addItemRow('${mid}_${f.name}')">+ 添加明细行</button>
+          <span class="fw-bold item-sum">合计：${currencySymbol()}0.00</span>
+        </div>
+        ${f.hint ? `<div class="form-text">${esc(f.hint)}</div>` : ''}
+      </div>`;
     } else if (f.type === 'file'){
       /* 图片上传：选文件后转 base64 上传，URL 存入 hidden 随表单提交 */
       html += `<input class="form-control" type="file" accept="image/jpeg,image/png,image/webp"
@@ -276,6 +295,10 @@ function openForm(title, fields, values, onSubmit, onMount){
         data[f.name] = [...el.querySelectorAll(`input[name="${f.name}"]:checked`)].map(i => i.value);
         return;
       }
+      if (f.type === 'items'){
+        data[f.name] = collectItems(el.querySelector(`#${mid}_${f.name}_tb`));
+        return;
+      }
       if (data[f.name] === null) return;
       if (f.type === 'number') data[f.name] = Number(data[f.name]);
       if (f.money) data[f.name] = fromDisplayMoney(data[f.name]);
@@ -285,8 +308,101 @@ function openForm(title, fields, values, onSubmit, onMount){
   };
 
   el.addEventListener('hidden.bs.modal', () => el.remove());
+  /* 明细控件初始空行 */
+  fields.forEach(f => {
+    if (f.type === 'items'){
+      const tb = el.querySelector(`#${mid}_${f.name}_tb`);
+      if (tb && !tb.children.length) addItemRow(`${mid}_${f.name}`);
+    }
+  });
   modal.show();
   if (onMount) onMount(el);
+}
+
+/* ===== 账单明细清单（维修/安装/其它类） ===== */
+function addItemRow(id){
+  const tb = document.getElementById(id + '_tb');
+  if (!tb) return;
+  if (tb.children.length >= 50){ alert('明细最多 50 行'); return; }
+  const tr = document.createElement('tr');
+  tr.innerHTML = `
+    <td><input class="form-control form-control-sm" data-f="name" placeholder="项目名称"></td>
+    <td><input class="form-control form-control-sm" data-f="qty" type="number" min="1" step="1" placeholder="数量"></td>
+    <td><input class="form-control form-control-sm" data-f="price" type="number" min="0" step="0.01" placeholder="单价"></td>
+    <td class="text-end item-amt text-muted">-</td>
+    <td class="text-center"><input type="checkbox" class="form-check-input" data-f="free" title="说明行：只记说明不计金额" onchange="toggleItemFree(this)"></td>
+    <td class="text-center"><button type="button" class="btn btn-sm btn-outline-secondary py-0 px-1" title="删除该行" onclick="delItemRow(this)">×</button></td>`;
+  tb.appendChild(tr);
+  tr.querySelectorAll('input[data-f]').forEach(inp => {
+    inp.addEventListener('input', () => updateItemRow(tb));
+  });
+  updateItemRow(tb);
+}
+function toggleItemFree(cb){
+  const tr = cb.closest('tr');
+  const qInp = tr.querySelector('[data-f="qty"]'), pInp = tr.querySelector('[data-f="price"]');
+  qInp.disabled = cb.checked; pInp.disabled = cb.checked;
+  if (cb.checked){ qInp.value = ''; pInp.value = ''; }
+  updateItemRow(tr.closest('tbody'));
+}
+function delItemRow(btn){
+  const tb = btn.closest('tbody');
+  btn.closest('tr').remove();
+  updateItemRow(tb);
+}
+function updateItemRow(tb){
+  if (!tb) return;
+  let sum = 0;
+  [...tb.rows].forEach(tr => {
+    const qInp = tr.querySelector('[data-f="qty"]'), pInp = tr.querySelector('[data-f="price"]');
+    const aTd = tr.querySelector('.item-amt');
+    if (!qInp || !pInp || !aTd) return;
+    const q = qInp.disabled ? 0 : (Number(qInp.value) || 0);
+    const p = pInp.disabled ? 0 : (Number(pInp.value) || 0);
+    const row = q * p;
+    aTd.textContent = row ? currencySymbol() + row.toFixed(2) : '-';
+    sum += row;
+  });
+  const wrap = tb.closest('.item-wrap');
+  const sumEl = wrap && wrap.querySelector('.item-sum');
+  if (sumEl) sumEl.textContent = '合计：' + currencySymbol() + sum.toFixed(2);
+  const amt = tb.closest('form') && tb.closest('form').querySelector('[name="amount"]');
+  if (amt){
+    amt.value = sum ? sum.toFixed(2) : '';
+    amt.readOnly = tb.rows.length > 0;
+  }
+}
+function collectItems(tb){
+  if (!tb) return null;
+  const arr = [];
+  [...tb.rows].forEach(tr => {
+    const nameInp = tr.querySelector('[data-f="name"]');
+    const name = (nameInp && nameInp.value || '').trim();
+    if (!name) return;
+    const free = (tr.querySelector('[data-f="free"]') || {}).checked;
+    if (free){ arr.push({ name }); return; }
+    const q = Number(tr.querySelector('[data-f="qty"]').value) || 0;
+    const p = Number(tr.querySelector('[data-f="price"]').value) || 0;
+    if (q <= 0 || p <= 0) return; /* 缺数量或单价的行不入明细 */
+    arr.push({ name, qty: q, price: Math.round(fromDisplayMoney(p) * 100) / 100 });
+  });
+  return arr.length ? arr : null;
+}
+function fmtItems(items){
+  if (!Array.isArray(items) || !items.length) return '';
+  const rows = items.map(it => {
+    if (it.qty == null && it.price == null){
+      return `<tr class="text-muted"><td colspan="3">${esc(it.name)}</td><td class="text-end">说明</td></tr>`;
+    }
+    return `<tr><td>${esc(it.name)}</td><td>${it.qty}</td><td>${money(it.price)}</td>
+      <td class="text-end">${money((Number(it.qty) || 0) * (Number(it.price) || 0))}</td></tr>`;
+  }).join('');
+  const total = items.reduce((s, it) => s + ((Number(it.qty) || 0) * (Number(it.price) || 0)), 0);
+  return `<table class="table table-sm table-bordered mt-1 mb-1" style="max-width:420px">
+    <thead class="table-light"><tr><th>项目</th><th>数量</th><th>单价</th><th class="text-end">金额</th></tr></thead>
+    <tbody>${rows}</tbody>
+    <tfoot><tr class="fw-bold"><td colspan="3">合计</td><td class="text-end">${money(total)}</td></tr></tfoot>
+    </table>`;
 }
 
 /* 图片上传：转 base64 → /api/upload（jpg/png/webp ≤2MB）→ 回填 hidden 并预览 */
@@ -1817,7 +1933,8 @@ async function renderBills(){
       <td><b>${esc(b.building_name || '')} ${esc(b.room_no || '-')}</b></td>
       <td>${esc(b.tenant_name || '-')}</td>
       <td><small>${b.period_start} ~ ${b.period_end}</small>
-          ${b.remark ? `<div class="text-muted" style="font-size:12px">${esc(b.remark)}</div>` : ''}</td>
+          ${b.remark ? `<div class="text-muted" style="font-size:12px">${esc(b.remark)}</div>` : ''}
+          ${fmtItems(b.items)}</td>
       <td>${b.due_date}</td>
       <td>${money(b.amount)}</td>
       <td>${money(b.paid_amount)}</td>
@@ -1924,6 +2041,7 @@ async function editBill(){
       default: addDays(addMonths(monthStart(t), 1), -1) },
     { name:'due_date',     label:'应缴日期', type:'date', required:true, default: ym + '-10' },
     { name:'amount',       label:'金额', type:'number', required:true, step:'0.01', money:true, default:0 },
+    { name:'items', label:'明细清单', type:'items', hint:'维修/安装/其它类可录入明细行，合计自动填入金额' },
     { name:'remark', label:'备注', type:'textarea' }
   ], { source:'property' }, async (d, modal) => {
     if (d.source === 'other' && !(d.remark || '').trim()){ alert('选择「其它」来源时请填写备注说明'); return; }
@@ -1932,6 +2050,18 @@ async function editBill(){
       ...d, room_id: r.id, tenant_id: r.owner_id
     });
     modal.hide(); renderBills();
+  }, (el) => {
+    /* 明细清单仅对维修/安装/其它类来源显示 */
+    const $ = n => el.querySelector(`[name="${n}"]`);
+    const src = $('source'), wrap = el.querySelector('.item-wrap'), amt = $('amount');
+    if (!wrap) return;
+    const sync = () => {
+      const show = ['net_repair','install','repair','other'].includes(src.value);
+      wrap.style.display = show ? '' : 'none';
+      if (!show){ amt.readOnly = false; amt.value = ''; }
+    };
+    src.addEventListener('change', sync);
+    sync();
   });
 }
 
@@ -2084,12 +2214,13 @@ async function addMeterBill(){
       default: addDays(addMonths(ym + '-01', 1), -1) },
     { name:'due_date',     label:'应缴日期', type:'date', required:true, default: ym + '-10' },
     { name:'amount',       label:'金额', type:'number', required:true, step:'0.01', money:true },
+    { name:'items', label:'明细清单', type:'items', hint:'维修费/其它维修可录入明细行，合计自动填入金额' },
     { name:'remark', label:'备注', type:'textarea' }
   ], { bill_type:'repair' }, async (d, modal) => {
     await api('/api/bills', 'POST', {
       source: d.bill_type, room_id: Number(d.room_id),
       period_start:d.period_start, period_end:d.period_end, due_date:d.due_date,
-      amount:d.amount, remark:d.remark || ''
+      amount:d.amount, remark:d.remark || '', items:d.items
     });
     modal.hide(); renderMeters();
   });
@@ -2517,12 +2648,13 @@ async function editNetBill(){
     { name:'period_end',   label:'费用截止日', type:'date', required:true, default:pEnd },
     { name:'due_date',     label:'应缴日期', type:'date', required:true, default:ym + '-10' },
     { name:'amount',       label:'金额', type:'number', required:true, step:'0.01', money:true },
+    { name:'items', label:'明细清单', type:'items', hint:'网维修费/设备安装费可录入明细行，合计自动填入金额' },
     { name:'remark', label:'备注', type:'textarea' }
   ], { bill_type:'network' }, async (d, modal) => {
     await api('/api/bills', 'POST', {
       source:d.bill_type, room_id:Number(d.room_id), tenant_id:resolveTenant(Number(d.room_id)) || null,
       period_start:d.period_start, period_end:d.period_end, due_date:d.due_date,
-      amount:d.amount, remark:d.remark
+      amount:d.amount, remark:d.remark, items:d.items
     });
     modal.hide(); renderNetwork();
   }, (el) => {
@@ -2530,7 +2662,8 @@ async function editNetBill(){
     const typeSel = $('bill_type'), roomSel = $('room_id'), bwInput = $('net_bandwidth'),
           priceRow = $('net_price').closest('.mb-3'), bwRow = $('net_bandwidth').closest('.mb-3'),
           amtLabel = $('amount').closest('.mb-3').querySelector('.form-label'),
-          ps = $('period_start'), pe = $('period_end'), amt = $('amount');
+          ps = $('period_start'), pe = $('period_end'), amt = $('amount'),
+          itemWrap = el.querySelector('.item-wrap');
     const recalc = () => {
       const bw = Number(bwInput.value) || 0;
       const s = ps.value, e = pe.value;
@@ -2543,8 +2676,9 @@ async function editNetBill(){
       const isNet = typeSel.value === 'network';
       bwRow.style.display = isNet ? '' : 'none';
       priceRow.style.display = isNet ? '' : 'none';
+      if (itemWrap) itemWrap.style.display = isNet ? 'none' : '';
       amtLabel.innerHTML = (isNet ? '金额' : '金额') + ' <span class="text-danger">*</span>';
-      if (isNet) recalc();
+      if (isNet){ amt.readOnly = false; recalc(); }
     };
     typeSel.addEventListener('change', sync);
     roomSel.addEventListener('change', () => {

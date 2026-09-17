@@ -242,6 +242,7 @@ CREATE TABLE bills (
   pay_method   VARCHAR(20) NOT NULL DEFAULT '',
   pay_date     DATE NULL,
   remark       VARCHAR(500) NOT NULL DEFAULT '',
+  items        JSON NULL,
   created_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   INDEX idx_org (org_id), INDEX idx_bills_room (room_id)
 ) ENGINE=InnoDB;
@@ -342,6 +343,7 @@ CREATE TABLE bills (
   pay_method   VARCHAR(20) NOT NULL DEFAULT '',
   pay_date     DATE NULL,
   remark       VARCHAR(500) NOT NULL DEFAULT '',
+  items        JSON NULL,
   created_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   INDEX idx_org (org_id), INDEX idx_bills_room (room_id)
 ) ENGINE=InnoDB;
@@ -493,6 +495,7 @@ CREATE TABLE bills (
   pay_method   VARCHAR(20) NOT NULL DEFAULT '',
   pay_date     DATE NULL,
   remark       VARCHAR(500) NOT NULL DEFAULT '',
+  items        JSON NULL,
   created_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   INDEX idx_org (org_id), INDEX idx_bills_room (room_id)
 ) ENGINE=InnoDB;

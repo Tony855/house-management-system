@@ -1536,7 +1536,13 @@ router.delete('/orders/:id', auth, h(async (req, res) => {
 /* ==================================================================
  * 账单
  * ================================================================== */
-const normBill = b => ({ ...b, amount: Number(b.amount), paid_amount: Number(b.paid_amount) });
+const normBill = b => ({ ...b, amount: Number(b.amount), paid_amount: Number(b.paid_amount),
+  items: b.items ? parseBillItems(b.items) : null });
+function parseBillItems(raw){
+  if (Array.isArray(raw)) return raw;
+  if (typeof raw === 'string'){ try { const a = JSON.parse(raw); return Array.isArray(a) ? a : null; } catch { return null; } }
+  return null;
+}
 router.get('/bills', auth, h(async (req, res) => {
   const { status, source } = req.query;
   const cond = ['b.org_id = ?'];
@@ -1704,13 +1710,40 @@ router.post('/bills', auth, h(async (req, res) => {
   const remark = v.str('remark', { max: 500 });
   v.ok();
   if (!(await ownRoomCheck(req, room_id))) return res.status(403).json({ error: '仅可为本企业房产添加账单' });
+  /* 维修/安装类账单明细：{name, qty, price}，qty/price 同时为空表示说明行（不计金额）；
+   * 提供明细时账单金额以后端按 数量×单价 合计为准，防止手算误差 */
+  let items = null;
+  if (B.items !== undefined && B.items !== null) {
+    if (!Array.isArray(B.items)) return res.status(400).json({ error: '明细格式不正确' });
+    if (B.items.length > 50) return res.status(400).json({ error: '明细不能超过 50 行' });
+    items = [];
+    for (const it of B.items) {
+      if (!it || typeof it !== 'object' || typeof it.name !== 'string' || !it.name.trim()) {
+        return res.status(400).json({ error: '明细项目名称不能为空' });
+      }
+      if (it.name.trim().length > 100) return res.status(400).json({ error: '明细项目名称不能超过 100 字' });
+      const qty = (it.qty === null || it.qty === undefined || it.qty === '') ? null : Number(it.qty);
+      const price = (it.price === null || it.price === undefined || it.price === '') ? null : Number(it.price);
+      if (qty !== null && (!Number.isInteger(qty) || qty < 1 || qty > 999999)) {
+        return res.status(400).json({ error: '明细数量必须为正整数' });
+      }
+      if (price !== null && (!Number.isFinite(price) || price < 0 || price > 999999.99)) {
+        return res.status(400).json({ error: '明细单价不正确' });
+      }
+      if (qty === null && price !== null) return res.status(400).json({ error: '明细数量不能为空' });
+      if (qty !== null && price === null) return res.status(400).json({ error: '明细单价不能为空' });
+      items.push({ name: it.name.trim(), qty, price });
+    }
+  }
+  const total = items ? round2(items.reduce((s, it) => s + ((Number(it.qty) || 0) * (Number(it.price) || 0)), 0)) : amount;
   const [r] = await pool.query(
     `INSERT INTO bills (org_id, source, room_id, tenant_id, contract_id, order_id, period_start, period_end,
-        due_date, amount, paid_amount, status, remark)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'unpaid', ?)`,
+        due_date, amount, paid_amount, status, remark, items)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'unpaid', ?, ?)`,
     [req.orgId, source, room_id || null, tenant_id || null,
      contract_id || null, order_id || null,
-     period_start, period_end, due_date || today(), amount, remark || '手动添加']);
+     period_start, period_end, due_date || today(), total, remark || '手动添加',
+     items ? JSON.stringify(items) : null]);
   const [rows] = await pool.query('SELECT * FROM bills WHERE id = ? AND org_id = ?', [r.insertId, req.orgId]);
   res.json(normBill(rows[0]));
 }));
