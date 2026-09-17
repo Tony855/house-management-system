@@ -3621,8 +3621,10 @@ async function editRole(id){
     data = roles.find(x => x.id === id) || data;
   }
   const isSys = id && Number(data.is_system);
+  const isSuperEdit = ME.level === 'super';
   const fields = [
-    { name:'name', label:'角色名称', required:true, placeholder:'如：财务' },
+    { name:'name', label:'角色名称', required:true, placeholder:'如：财务',
+      hint: isSys && !isSuperEdit ? '内置角色名称为系统共享，仅超管可修改；本次仅保存本经营主体的权限配置' : undefined },
     { name:'code', label:'角色编码', required:true, placeholder:'如：finance',
       hint: isSys ? '系统内置角色编码不可修改' : '仅字母/数字/下划线，以字母开头' }
   ];
@@ -3631,12 +3633,14 @@ async function editRole(id){
       options:[{ value:'staff', label:'员工' }, { value:'manager', label:'管理员' }],
       hint:'员工：普通业务操作；管理员：给企业管理员/物业管理员使用，权限同样按勾选' });
   }
-  fields.push({ name:'description', label:'说明', type:'textarea', placeholder:'该角色的职责说明（可选）' });
-  if (!isSys){
+  fields.push({ name:'description', label:'说明', type:'textarea', placeholder:'该角色的职责说明（可选）',
+    hint: isSys && !isSuperEdit ? '说明为系统共享，仅超管可修改' : undefined });
+  {
     const rolePageOpts = pageOpts(curMode());
     if (rolePageOpts.length){
       fields.push({ name:'pages', label:'角色权限', type:'checklist', options: rolePageOpts,
-        hint:'勾选后可访问对应页面；分配该角色的员工自动获得' });
+        hint: (isSys && !isSuperEdit ? '系统内置：仅修改本经营主体配置（不影响其他主体）。' : '')
+          + '勾选后可访问对应页面；分配该角色的员工自动获得' });
     }
     const roleOpOpts = [];
     (OP_DEFS[curMode()] || []).forEach(g => {
@@ -3645,14 +3649,13 @@ async function editRole(id){
     });
     if (roleOpOpts.length){
       fields.push({ name:'ops', label:'操作权限', type:'checklist', options: roleOpOpts,
-        hint:'勾选后拥有对应页面的操作按钮（如新增、编辑、删除、收款）' });
+        hint: '勾选后拥有对应页面的操作按钮（如新增、编辑、删除、收款）' });
     }
   }
   openForm(id ? '编辑角色' : '新增角色', fields, data, async (d, modal) => {
     if (isSys) delete d.level;
     if (isSys) delete d.code;
-    if (isSys) delete d.pages;
-    if (isSys) delete d.ops;
+    if (isSys && !isSuperEdit){ delete d.name; delete d.description; }
     await api(id ? '/api/roles/' + id : '/api/roles', id ? 'PUT' : 'POST', d);
     modal.hide(); renderRoles();
   }, (el) => {

@@ -90,8 +90,9 @@ CREATE TABLE app_config (
 CREATE TABLE role_permissions (
   id      INT AUTO_INCREMENT PRIMARY KEY,
   role_id INT NOT NULL,
+  org_id  INT NOT NULL DEFAULT 0 COMMENT '0=全局默认模板；>0=该经营主体覆盖配置',
   page    VARCHAR(30) NOT NULL,
-  UNIQUE KEY uk_role_page (role_id, page)
+  UNIQUE KEY uk_role_page_org (role_id, page, org_id)
 ) ENGINE=InnoDB;
 
 -- ==================================================================

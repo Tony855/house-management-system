@@ -342,10 +342,16 @@ async function userPerms(userId) {
   const [[u]] = await shared.query('SELECT role, org_id FROM users WHERE id = ?', [userId]);
   const pages = [], ops = [];
   if (u && u.role) {
-    const [rps] = await shared.query(
+    const [def] = await shared.query(
       `SELECT rp.page FROM role_permissions rp JOIN roles r ON r.id = rp.role_id
-        WHERE r.code = ? AND (r.org_id = ? OR (r.org_id IS NULL AND r.level IN ('staff', 'manager')))`,
+        WHERE r.code = ? AND (r.org_id = ? OR (r.org_id IS NULL AND r.level IN ('staff', 'manager'))) AND rp.org_id = 0`,
       [u.role, u.org_id]);
+    const [cov] = await shared.query(
+      `SELECT rp.page FROM role_permissions rp JOIN roles r ON r.id = rp.role_id
+        WHERE r.code = ? AND (r.org_id = ? OR (r.org_id IS NULL AND r.level IN ('staff', 'manager'))) AND rp.org_id = ?`,
+      [u.role, u.org_id, u.org_id]);
+    /* 该主体编辑过内置角色时用覆盖配置，否则用全局默认模板 */
+    const rps = cov.length ? cov : def;
     for (const p of rps) {
       const v = String(p.page);
       if (v.startsWith('op:')) ops.push(v.slice(3));
@@ -354,19 +360,21 @@ async function userPerms(userId) {
   }
   return { pages: [...new Set(pages)], ops: [...new Set(ops)] };
 }
-/* 覆盖写角色权限（主管理员自建角色；内置/全局角色不设权限）：pages 存裸名，ops 存 op: 前缀 */
-async function setRolePerms(roleId, pages, ops) {
-  await shared.query('DELETE FROM role_permissions WHERE role_id = ?', [roleId]);
+/* 覆盖写角色权限：pages 存裸名，ops 存 op: 前缀；orgId=0 写全局默认，>0 写该主体覆盖 */
+async function setRolePerms(roleId, pages, ops, orgId = 0) {
+  await shared.query('DELETE FROM role_permissions WHERE role_id = ? AND org_id = ?', [roleId, orgId]);
   const items = [];
-  if (Array.isArray(pages)) for (const p of new Set(pages)) items.push([roleId, p]);
-  if (Array.isArray(ops)) for (const o of new Set(ops)) items.push([roleId, 'op:' + o]);
+  if (Array.isArray(pages)) for (const p of new Set(pages)) items.push([roleId, orgId, p]);
+  if (Array.isArray(ops)) for (const o of new Set(ops)) items.push([roleId, orgId, 'op:' + o]);
   for (const it of items) {
-    await shared.query('INSERT IGNORE INTO role_permissions (role_id, page) VALUES (?, ?)', it);
+    await shared.query('INSERT IGNORE INTO role_permissions (role_id, org_id, page) VALUES (?, ?, ?)', it);
   }
 }
-/* 读取角色权限：返回 { pages, ops } */
-async function rolePerms(roleId) {
-  const [rps] = await shared.query('SELECT page FROM role_permissions WHERE role_id = ?', [roleId]);
+/* 读取角色权限：该主体有覆盖配置时优先，否则用全局默认模板；返回 { pages, ops } */
+async function rolePerms(roleId, orgId) {
+  const [def] = await shared.query('SELECT page FROM role_permissions WHERE role_id = ? AND org_id = 0', [roleId]);
+  const [cov] = orgId ? await shared.query('SELECT page FROM role_permissions WHERE role_id = ? AND org_id = ?', [roleId, orgId]) : [[], null];
+  const rps = cov && cov.length ? cov : def;
   const pages = [], ops = [];
   for (const p of rps) {
     const v = String(p.page);
@@ -2508,18 +2516,39 @@ router.delete('/complaints/:id', auth, h(async (req, res) => {
 router.get('/roles', authMode, adminLevel, h(async (req, res) => {
   if (req.level === 'super') {
     const [rows] = await shared.query('SELECT * FROM roles WHERE org_id IS NULL ORDER BY id');
-    return res.json(rows.map(r => ({ ...r, is_system: Number(r.is_system), user_count: 0, pages: [] })));
+    const [defPerms] = await shared.query(
+      'SELECT rp.page, rp.role_id FROM role_permissions rp WHERE rp.org_id = 0');
+    const byRole = {};
+    for (const p of defPerms) (byRole[p.role_id] = byRole[p.role_id] || []).push(p.page);
+    return res.json(rows.map(r => {
+      const items = byRole[r.id] || [];
+      const pages = [], ops = [];
+      for (const it of items) {
+        const v = String(it);
+        if (v.startsWith('op:')) ops.push(v.slice(3));
+        else pages.push(v);
+      }
+      return { ...r, is_system: Number(r.is_system), user_count: 0, pages, ops };
+    }));
   }
   /* 主管理员：内置 staff/manager 角色 + 本主体自建角色 */
   const [rows] = await shared.query(
     `SELECT r.*, (SELECT COUNT(*) FROM users u WHERE u.role = r.code AND u.org_id = r.org_id) AS user_count
        FROM roles r WHERE r.org_id = ? OR (r.org_id IS NULL AND r.level IN ('staff', 'manager'))
       ORDER BY r.is_system DESC, r.id`, [req.orgId]);
-  const [perms] = await shared.query(
+  const [defPerms] = await shared.query(
     `SELECT rp.page, r.id AS role_id FROM role_permissions rp JOIN roles r ON r.id = rp.role_id
-      WHERE r.org_id = ? OR (r.org_id IS NULL AND r.level IN ('staff', 'manager'))`, [req.orgId]);
+      WHERE (r.org_id = ? OR (r.org_id IS NULL AND r.level IN ('staff', 'manager'))) AND rp.org_id = 0`,
+    [req.orgId]);
+  const [covPerms] = await shared.query(
+    `SELECT rp.page, r.id AS role_id FROM role_permissions rp JOIN roles r ON r.id = rp.role_id
+      WHERE (r.org_id = ? OR (r.org_id IS NULL AND r.level IN ('staff', 'manager'))) AND rp.org_id = ?`,
+    [req.orgId, req.orgId]);
   const byRole = {};
-  for (const p of perms) (byRole[p.role_id] = byRole[p.role_id] || []).push(p.page);
+  /* 该主体编辑过内置角色时用覆盖配置（完整替换），否则用全局默认模板 */
+  const covRoles = new Set(covPerms.map(p => p.role_id));
+  for (const p of defPerms) if (!covRoles.has(p.role_id)) (byRole[p.role_id] = byRole[p.role_id] || []).push(p.page);
+  for (const p of covPerms) (byRole[p.role_id] = byRole[p.role_id] || []).push(p.page);
   res.json(rows.map(r => {
     const items = byRole[r.id] || [];
     const pages = [], ops = [];
@@ -2562,7 +2591,7 @@ router.post('/roles', authMode, h(async (req, res) => {
   const [r] = await shared.query(
     'INSERT INTO roles (org_id, code, name, description, level) VALUES (?, ?, ?, ?, ?)',
     [orgId, code, name, description || '', level]);
-  await setRolePerms(r.insertId, pages, ops);
+  await setRolePerms(r.insertId, pages, ops, orgId);
   const [rows] = await shared.query('SELECT * FROM roles WHERE id = ?', [r.insertId]);
   res.json({ ...rows[0],
     pages: [...new Set(pages)],
@@ -2581,12 +2610,22 @@ router.put('/roles/:id', authMode, h(async (req, res) => {
   const [rs] = await shared.query('SELECT * FROM roles WHERE id = ?', [req.params.id]);
   if (!rs.length) return res.status(400).json({ error: '角色不存在' });
   const role = rs[0];
-  /* 主管理员只能改本主体自建角色 */
-  if (req.level !== 'super' && role.org_id !== req.orgId) {
+  /* 主管理员只能改本主体自建角色或系统内置角色（全局自定义角色仅超管） */
+  if (req.level !== 'super' && role.org_id !== req.orgId && !Number(role.is_system)) {
     return res.status(403).json({ error: '只能管理本系统角色' });
   }
   if (!name) return res.status(400).json({ error: '角色名称不能为空' });
-  if (Number(role.is_system) || (req.level !== 'super' && role.org_id === null)) {
+  if (Number(role.is_system)) {
+    /* 内置角色：超管可改名称/描述与全局默认权限；主管理员只配置本主体权限覆盖（不改全局、不互相影响） */
+    if (req.level === 'super') {
+      await shared.query('UPDATE roles SET name = ?, description = ? WHERE id = ?',
+        [name, description || '', req.params.id]);
+      if (pages !== undefined || ops !== undefined) await setRolePerms(req.params.id, pages, ops, 0);
+    } else if (pages !== undefined || ops !== undefined) {
+      await setRolePerms(req.params.id, pages, ops, req.orgId);
+    }
+  } else if (req.level !== 'super' && role.org_id === null) {
+    /* 超管建的全局自定义角色：主管理员只能改名称/描述 */
     await shared.query('UPDATE roles SET name = ?, description = ? WHERE id = ?',
       [name, description || '', req.params.id]);
   } else {
@@ -2597,19 +2636,18 @@ router.put('/roles/:id', authMode, h(async (req, res) => {
     if (Number(dup.c) > 0) return res.status(400).json({ error: '角色编码已存在' });
     await shared.query('UPDATE roles SET code = ?, name = ?, description = ? WHERE id = ?',
       [code, name, description || '', req.params.id]);
-    /* 自建角色可配置页面与操作权限（内置/全局角色不设） */
-    if (role.org_id !== null) await setRolePerms(req.params.id, pages, ops);
+    /* 自建角色可配置页面与操作权限 */
+    if (role.org_id !== null) await setRolePerms(req.params.id, pages, ops, role.org_id);
   }
   const [rows] = await shared.query('SELECT * FROM roles WHERE id = ?', [req.params.id]);
-  const rp = role.org_id !== null && !Number(role.is_system)
-    ? await rolePerms(req.params.id) : { pages: [], ops: [] };
+  const rp = await rolePerms(req.params.id, req.level === 'super' ? 0 : req.orgId);
   res.json({ ...rows[0], pages: rp.pages, ops: rp.ops });
 }));
 router.delete('/roles/:id', authMode, h(async (req, res) => {
   const [rs] = await shared.query('SELECT * FROM roles WHERE id = ?', [req.params.id]);
   if (!rs.length) return res.status(400).json({ error: '角色不存在' });
   const role = rs[0];
-  if (req.level !== 'super' && role.org_id !== req.orgId) {
+  if (req.level !== 'super' && role.org_id !== req.orgId && !Number(role.is_system)) {
     return res.status(403).json({ error: '只能管理本系统角色' });
   }
   if (Number(role.is_system) || role.org_id === null) {
@@ -2634,11 +2672,18 @@ router.get('/users', authMode, orgAdminOnly, h(async (req, res) => {
        LEFT JOIN roles rc ON rc.code = u.role AND rc.org_id = u.org_id
        LEFT JOIN roles rb ON rb.code = u.role AND rb.org_id IS NULL
       WHERE u.org_id = ? ORDER BY u.id`, [req.orgId]);
-  const [rolePerms] = await shared.query(
+  const [defRolePerms] = await shared.query(
     `SELECT r.code, rp.page FROM role_permissions rp JOIN roles r ON r.id = rp.role_id
-      WHERE r.org_id = ? OR (r.org_id IS NULL AND r.level IN ('staff', 'manager'))`, [req.orgId]);
+      WHERE (r.org_id = ? OR (r.org_id IS NULL AND r.level IN ('staff', 'manager'))) AND rp.org_id = 0`,
+    [req.orgId]);
+  const [covRolePerms] = await shared.query(
+    `SELECT r.code, rp.page FROM role_permissions rp JOIN roles r ON r.id = rp.role_id
+      WHERE (r.org_id = ? OR (r.org_id IS NULL AND r.level IN ('staff', 'manager'))) AND rp.org_id = ?`,
+    [req.orgId, req.orgId]);
   const byRole = {};
-  for (const p of rolePerms) (byRole[p.code] = byRole[p.code] || []).push(p.page);
+  const covCodes = new Set(covRolePerms.map(p => p.code));
+  for (const p of defRolePerms) if (!covCodes.has(p.code)) (byRole[p.code] = byRole[p.code] || []).push(p.page);
+  for (const p of covRolePerms) (byRole[p.code] = byRole[p.code] || []).push(p.page);
   res.json(rows.map(u => {
     const items = byRole[u.role] || [];
     const pages = [], ops = [];

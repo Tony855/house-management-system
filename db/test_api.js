@@ -447,7 +447,10 @@ const addDays = (n) => { const d = new Date(); d.setDate(d.getDate() + n); retur
     r = await call(CA2, 'POST', '/netRequests', { type: 'install', room_id: roomC, bandwidth: 10, reason: '办公报装' });
     check('未分配角色：企业管理员宽带上报被拒 403', r.status === 403, JSON.stringify(r.body));
     r = await call(CA2, 'POST', '/repairs', { room_id: roomC, title: '网络报修：断网', content: '测试' });
-    check('未分配角色：企业管理员报修被拒 403', r.status === 403, JSON.stringify(r.body));
+    check('未分配角色：企业管理员报修按员工基础权限放行(内置员工角色含报修登记)', r.status === 200, JSON.stringify(r.body));
+    const orphanRep = r.body.id;
+    r = await call(PROP, 'DELETE', '/repairs/' + orphanRep);
+    check('清理未分配角色报修记录', r.status === 200, JSON.stringify(r.body));
     /* 主管理员建角色（宽带上报 + 网络报修）并分配给企业管理员 */
     r = await call(PROP, 'POST', '/roles', { code: 'ca' + ts, name: '企业上报',
       pages: ['dashboard', 'properties', 'owners', 'meters', 'network', 'bills', 'complaints', 'repairs'],
