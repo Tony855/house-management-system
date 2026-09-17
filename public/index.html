@@ -249,7 +249,7 @@ function openForm(title, fields, values, onSubmit, onMount){
             <th style="min-width:140px">商品</th>
             <th style="min-width:110px">型号</th>
             <th style="width:74px">数量</th>
-            <th style="width:104px">单价</th>
+            <th style="width:104px">单价(${currencySymbol()})</th>
             <th style="width:90px">金额</th>
             <th style="width:52px">说明</th>
             <th style="width:70px"></th></tr></thead>
@@ -449,7 +449,7 @@ function openLibPicker(id){
           <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
         <div class="modal-body p-2">
           <div class="table-responsive" style="max-height:420px"><table class="table table-sm table-hover align-middle mb-0">
-            <thead class="table-light"><tr><th style="width:40px"></th><th>商品</th><th style="width:150px">型号</th><th style="width:110px">单价</th></tr></thead>
+            <thead class="table-light"><tr><th style="width:40px"></th><th>商品</th><th style="width:150px">型号</th><th style="width:110px">单价(${currencySymbol()})</th></tr></thead>
             <tbody>
               ${lib.map((it, i) => `<tr>
                 <td class="text-center"><input type="checkbox" class="form-check-input lib-chk" data-idx="${i}"></td>
@@ -548,7 +548,7 @@ function fmtItems(items){
   }).join('');
   const total = items.reduce((s, it) => s + ((Number(it.qty) || 0) * (Number(it.price) || 0)), 0);
   return `<table class="table table-sm table-bordered mt-1 mb-1" style="max-width:100%">
-    <thead class="table-light"><tr><th style="min-width:120px">商品</th><th style="width:60px">数量</th><th style="width:96px">单价</th><th class="text-end" style="width:96px">金额</th></tr></thead>
+    <thead class="table-light"><tr><th style="min-width:120px">商品</th><th style="width:60px">数量</th><th style="width:96px">单价(${currencySymbol()})</th><th class="text-end" style="width:96px">金额</th></tr></thead>
     <tbody>${rows}</tbody>
     <tfoot><tr class="fw-bold"><td colspan="3">合计</td><td class="text-end">${money(total)}</td></tr></tfoot>
     </table>`;
@@ -992,7 +992,7 @@ async function renderSettings(){
     </div>
     <p class="small text-muted mb-2">明细录入时输入商品名可联想带出型号与单价，也可在明细弹窗点「从商品库添加」批量生成；数据仅本经营主体可见。</p>
     <div class="table-responsive"><table class="table table-sm table-bordered align-middle mb-2">
-      <thead class="table-light"><tr><th style="width:8%">类别</th><th style="width:36%">商品</th><th style="width:30%">型号</th><th style="width:16%">单价</th><th style="width:48px"></th></tr></thead>
+      <thead class="table-light"><tr><th style="width:8%">类别</th><th style="width:36%">商品</th><th style="width:30%">型号</th><th style="width:16%">单价(${currencySymbol()})</th><th style="width:48px"></th></tr></thead>
       <tbody id="lib_tb"></tbody>
     </table></div>
     <button class="btn btn-sm btn-primary" onclick="saveItemLib()">保存商品库</button>
@@ -1468,13 +1468,13 @@ async function editRoom(id){
   if (mode === 'rental'){
     fields.push({ name:'rent', label:'月租金', type:'number', required:true, money:true });
     fields.push({ name:'deposit', label:'押金', type:'number', money:true });
-    fields.push({ name:'water_price', label:'水费单价(元/吨)', type:'number', step:'0.01', money:true });
-    fields.push({ name:'elec_price', label:'电费单价(元/度)', type:'number', step:'0.01', money:true });
+    fields.push({ name:'water_price', label:'水费单价(/吨)', type:'number', step:'0.01', money:true });
+    fields.push({ name:'elec_price', label:'电费单价(/度)', type:'number', step:'0.01', money:true });
     fields.push({ name:'status', label:'房间状态', type:'select', options:[
       { value:'vacant', label:'空置' }, { value:'rented', label:'已出租' },
       { value:'maintenance', label:'维修中' }] });
   } else if (mode === 'hotel'){
-    fields.push({ name:'day_price', label:'日房价(元/天)', type:'number', required:true, money:true });
+    fields.push({ name:'day_price', label:'日房价(/天)', type:'number', required:true, money:true });
     fields.push({ name:'status', label:'房间状态', type:'select', options:[
       { value:'vacant', label:'空闲' }, { value:'rented', label:'已入住' },
       { value:'booked', label:'已预订' }, { value:'cleaning', label:'待清洁' },
@@ -1482,9 +1482,9 @@ async function editRoom(id){
   } else {
     fields.push({ name:'owner_id', label:'绑定企业', type:'select',
       options: tenants.map(t => ({ value:t.id, label:`${t.name} ${t.phone || ''}` })) });
-    fields.push({ name:'property_fee', label:'物业费(元/月)', type:'number', required:true, money:true });
-    fields.push({ name:'water_price', label:'水费单价(元/吨)', type:'number', step:'0.01', money:true });
-    fields.push({ name:'elec_price', label:'电费单价(元/度)', type:'number', step:'0.01', money:true });
+    fields.push({ name:'property_fee', label:'物业费(/月)', type:'number', required:true, money:true });
+    fields.push({ name:'water_price', label:'水费单价(/吨)', type:'number', step:'0.01', money:true });
+    fields.push({ name:'elec_price', label:'电费单价(/度)', type:'number', step:'0.01', money:true });
     fields.push({ name:'status', label:'房屋状态', type:'select', options:[
       { value:'vacant', label:'空置' }, { value:'rented', label:'已入住' },
       { value:'maintenance', label:'维修中' }] });
@@ -2016,7 +2016,7 @@ async function editOrder(id, presetRoomId){
       options: guests.map(g => ({ value:g.id, label:`${g.name} ${g.phone || ''}` })) },
     { name:'check_in_date', label:'入住日期', type:'date', required:true },
     { name:'check_out_date', label:'退房日期', type:'date', required:true },
-    { name:'day_price', label:'房价(元/天)', type:'number', required:true, step:'0.01', money:true },
+    { name:'day_price', label:'房价(/天)', type:'number', required:true, step:'0.01', money:true },
     { name:'deposit', label:'押金', type:'number', step:'0.01', money:true },
     { name:'remark', label:'备注', type:'textarea' }
   ], data, async (d, modal) => {
