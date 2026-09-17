@@ -20,8 +20,34 @@ const { V, clean } = require('./validate');
 const app = express();
 app.use(express.json({ limit: '256kb' }));
 app.use(express.static(path.join(__dirname, '..', 'public')));
-/* 上传图片静态访问（uploads/org-<主体ID>/，按主体隔离） */
-app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads')));
+/* 上传图片静态访问（uploads/org-<主体ID>/，按主体隔离；必须登录，Token 走 Bearer 或 httpOnly Cookie）
+ * 付费模式下主体超期/关闭：除主管理员外的旧会话同样禁止读取（含身份证/护照照片） */
+app.use('/uploads', async (req, res, next) => {
+  const header = req.headers.authorization || '';
+  const token = header.startsWith('Bearer ') ? header.slice(7) : getCookie(req, 'house_token');
+  if (!token) return res.status(401).json({ error: '未登录' });
+  try {
+    const [rows] = await shared.query(
+      `SELECT s.org_id, u.company_id, COALESCE(rc.level, rb.level) AS level
+         FROM sessions s
+         JOIN users u ON u.id = s.user_id
+         LEFT JOIN roles rc ON rc.code = u.role AND rc.org_id = u.org_id
+         LEFT JOIN roles rb ON rb.code = u.role AND rb.org_id IS NULL
+        WHERE s.token = ? AND s.created_at > DATE_SUB(NOW(), INTERVAL ? DAY)`,
+      [token, FEE_CFG.session_days]);
+    if (!rows.length) return res.status(401).json({ error: '登录已过期' });
+    const r = rows[0];
+    const lvl = r.company_id ? 'company_admin' : (r.level || 'staff');
+    if (FEE_CFG.fee_mode === 'paid' && r.org_id && lvl !== 'admin') {
+      const [[o]] = await shared.query('SELECT fee_due, fee_status FROM orgs WHERE id = ?', [r.org_id]);
+      const overdue = o && o.fee_status === 'active' && o.fee_due && String(o.fee_due) < today();
+      if (o && (o.fee_status === 'closed' || overdue)) {
+        return res.status(403).json({ error: '系统使用费已到期，请联系主管理员续费' });
+      }
+    }
+  } catch (e) { return res.status(500).json({ error: '服务错误' }); }
+  next();
+}, express.static(path.join(__dirname, '..', 'uploads')));
 
 /* ---------- 辅助 ---------- */
 const h = fn => (req, res) => fn(req, res).catch(e => {
@@ -33,6 +59,56 @@ const round2 = n => Math.round((Number(n) || 0) * 100) / 100;
 
 /* 登录限流：同 IP 1 分钟最多 30 次尝试（防脚本爆破，兼顾正常使用与自动化测试） */
 const loginHits = new Map();
+/* 登录失败锁定：同账号 5 次失败锁定 15 分钟（防口令爆破） */
+const loginFails = new Map();
+
+/* ---------- 使用费全局配置（超管级；含会话有效期等安全参数） ---------- */
+let FEE_CFG = { fee_mode: 'free', cycle: 'month', remind_days: 7, session_days: 7,
+  rental_price: 0, hotel_price: 0, property_price: 0, currency: 'USD' };
+async function loadFeeCfg() {
+  try {
+    const [[c]] = await shared.query('SELECT * FROM usage_fee_config WHERE id = 1');
+    if (c) FEE_CFG = {
+      fee_mode: c.fee_mode, cycle: c.cycle, remind_days: Math.max(0, Number(c.remind_days) || 7),
+      session_days: Math.max(1, Number(c.session_days) || 7),
+      rental_price: Number(c.rental_price) || 0, hotel_price: Number(c.hotel_price) || 0,
+      property_price: Number(c.property_price) || 0, currency: c.currency || 'USD'
+    };
+  } catch (e) { console.error('loadFeeCfg:', e.message); }
+}
+function getCookie(req, name) {
+  const c = req.headers.cookie || '';
+  for (const part of c.split(';')) {
+    const i = part.indexOf('=');
+    if (i > 0 && part.slice(0, i).trim() === name) return decodeURIComponent(part.slice(i + 1).trim());
+  }
+  return '';
+}
+/* 使用费停用判定：付费模式下，超期（fee_due 早于今天）或超管手动关闭 → 除主管理员外一律禁止登录 */
+async function feeBlocked(orgId, level) {
+  if (!orgId || level === 'super' || level === 'admin') return null;
+  if (FEE_CFG.fee_mode !== 'paid') return null;
+  const [[o]] = await shared.query('SELECT fee_due, fee_status FROM orgs WHERE id = ?', [orgId]);
+  if (!o) return null;
+  const overdue = o.fee_status === 'active' && o.fee_due && String(o.fee_due) < today();
+  const closed = o.fee_status === 'closed';
+  if (overdue || closed) return '系统使用费已到期，请联系主管理员续费';
+  return null;
+}
+/* 到期/超期提示（主管理员登录后横幅用；非付费模式返回 null） */
+async function feeNotice(orgId) {
+  if (!orgId || FEE_CFG.fee_mode !== 'paid') return null;
+  const [[o]] = await shared.query('SELECT fee_due, fee_status FROM orgs WHERE id = ?', [orgId]);
+  if (!o) return null;
+  const due = o.fee_due ? String(o.fee_due) : null;
+  if (o.fee_status === 'closed') return { status: 'closed', due };
+  if (due) {
+    const over = daysBetween(due, today());
+    if (over > 0) return { status: 'overdue', days: over, due };
+    if (over >= -FEE_CFG.remind_days) return { status: 'soon', days: -over, due };
+  }
+  return null;
+}
 
 /* ---------- 三系统能力矩阵 ---------- */
 const FEATURES = {
@@ -180,7 +256,8 @@ async function authenticate(req, res, next) {
        LEFT JOIN roles rc ON rc.code = u.role AND rc.org_id = u.org_id
        LEFT JOIN roles rb ON rb.code = u.role AND rb.org_id IS NULL
        LEFT JOIN orgs o ON o.id = u.org_id
-      WHERE s.token = ?`, [token]);
+      WHERE s.token = ? AND s.created_at > DATE_SUB(NOW(), INTERVAL ? DAY)`,
+    [token, FEE_CFG.session_days]);
   if (!rows.length) return res.status(401).json({ error: '登录已过期' });
   const u = rows[0];
   req.user = {
@@ -196,6 +273,9 @@ async function authenticate(req, res, next) {
   const [perms] = [await userPerms(u.id)];
   req.pages = perms.pages;
   req.ops = perms.ops;
+  /* 系统使用费：超期/关闭时除主管理员外一律禁止访问（超管不受影响） */
+  const blocked = await feeBlocked(req.orgId, req.level);
+  if (blocked) return res.status(403).json({ error: blocked });
   next();
 }
 const wrap = (req, res, next) => withMode(req.mode, req.orgId, next);
@@ -214,6 +294,8 @@ const ROUTE_PAGES = [
   [/^\/netChanges/, ['network']],
   [/^\/netfee/, ['network']],
   [/^\/netRequests/, ['network']],
+  [/^\/netLines/, ['network']],
+  [/^\/bill-reminders/, ['bills']],
   [/^\/repairs/, ['repairs']],
   [/^\/complaints/, ['complaints']],
   [/^\/dorms/, ['dorm']]
@@ -416,6 +498,12 @@ router.post('/login', h(async (req, res) => {
   const username = v.str('username', { required: true, max: 50 });
   const password = v.str('password', { required: true, max: 100, clean: false });
   v.ok();
+  /* 登录失败锁定：同账号 5 次失败锁 15 分钟（防口令爆破） */
+  const failKey = (B.mode || '?') + ':' + (username || '');
+  const fail = loginFails.get(failKey);
+  if (fail && fail.until > nowT) {
+    return res.status(429).json({ error: `尝试次数过多，请 ${Math.ceil((fail.until - nowT) / 60000)} 分钟后再试` });
+  }
   /* 入口强绑定：账号必须从所属系统窗口登录（超管=super 窗口；业务账号=对应系统窗口）。
    * 跨系统信息一律不外泄——查不到/不匹配统一返回「用户名或密码错误」。 */
   const modeQ = B.mode === 'super' ? 'AND u.mode IS NULL'
@@ -431,10 +519,20 @@ router.post('/login', h(async (req, res) => {
       WHERE u.username = ? ${modeQ}`, params);
   const u = rows[0];
   if (!u || !verifyPassword(password, u.password)) {
+    const f = loginFails.get(failKey) || { n: 0, until: 0 };
+    f.n++;
+    if (f.n >= 5) { f.n = 0; f.until = nowT + 15 * 60000; }
+    loginFails.set(failKey, f);
     return res.status(400).json({ error: '用户名或密码错误' });
   }
+  loginFails.delete(failKey);
   const mode = u.mode || 'rental';
   const isCompanyAdmin = !!u.company_id;
+  /* 系统使用费：超期/关闭时，主管理员可登录（用于续费/查看），其余账号禁止登录 */
+  if (u.mode) {
+    const blocked = await feeBlocked(u.org_id, isCompanyAdmin ? 'company_admin' : (u.level || 'staff'));
+    if (blocked) return res.status(403).json({ error: blocked });
+  }
   /* 企业管理员附加企业名（tenants 在业务库，登录后单独查） */
   let company_name = null;
   if (u.company_id) {
@@ -445,7 +543,11 @@ router.post('/login', h(async (req, res) => {
   const token = crypto.randomBytes(32).toString('hex');
   await shared.query('INSERT INTO sessions (token, user_id, mode, org_id) VALUES (?, ?, ?, ?)',
     [token, u.id, mode, u.org_id || null]);
+  /* 会话 Cookie（httpOnly）：供 /uploads 等静态资源鉴权，接口仍走 Bearer */
+  res.setHeader('Set-Cookie',
+    `house_token=${token}; HttpOnly; Path=/; SameSite=Lax; Max-Age=${Math.max(1, FEE_CFG.session_days) * 86400}`);
   const pages = await userPerms(u.id);
+  const notice = u.mode ? await feeNotice(u.org_id) : null;
   res.json({
     id: u.id, username: u.username, name: u.real_name,
     role: u.role, role_name: u.role_name,
@@ -453,7 +555,7 @@ router.post('/login', h(async (req, res) => {
     company_id: u.company_id || null,
     mode, org_id: u.org_id || null, org_name: u.org_name || null,
     company_name,
-    pages: pages.pages, ops: pages.ops, token
+    pages: pages.pages, ops: pages.ops, token, fee_notice: notice
   });
 }));
 
@@ -469,12 +571,13 @@ router.get('/me', authMode, h(async (req, res) => {
     role: req.user.role, role_name: req.user.role_name,
     level: req.level, mode: req.mode, org_id: req.orgId, org_name: req.orgName,
     company_id: req.companyId || null, company_name,
-    pages: perms.pages, ops: perms.ops
+    pages: perms.pages, ops: perms.ops, fee_notice: await feeNotice(req.orgId)
   });
 }));
 
 router.post('/logout', authMode, h(async (req, res) => {
   await shared.query('DELETE FROM sessions WHERE token = ?', [req.token]);
+  res.setHeader('Set-Cookie', 'house_token=; HttpOnly; Path=/; SameSite=Lax; Max-Age=0');
   res.json({ ok: true });
 }));
 
@@ -579,7 +682,132 @@ router.delete('/orgs/:id', authMode, superOnly, h(async (req, res) => {
   await shared.query('DELETE FROM settings WHERE org_id = ?', [o.id]);
   await shared.query('DELETE FROM roles WHERE org_id = ?', [o.id]);
   await shared.query('DELETE FROM sessions WHERE org_id = ?', [o.id]);
+  await shared.query('DELETE FROM usage_fee_payments WHERE org_id = ?', [o.id]);
   await shared.query('DELETE FROM orgs WHERE id = ?', [o.id]);
+  res.json({ ok: true });
+}));
+
+/* ==================================================================
+ * 系统使用费（超级管理员：收费模式/单价/周期/提醒/会话有效期/收款流水/主体计费）
+ * 超期或关闭 → 除主管理员外所有登录停用（见 feeBlocked / 登录拦截）
+ * ================================================================== */
+const FEE_KEYS = ['fee_mode', 'cycle', 'remind_days', 'session_days', 'rental_price', 'hotel_price', 'property_price', 'currency'];
+router.get('/fee-config', authMode, superOnly, h(async (req, res) => {
+  res.json(FEE_CFG);
+}));
+router.put('/fee-config', authMode, superOnly, h(async (req, res) => {
+  const B = req.body || {};
+  const v = V(B);
+  const fee_mode = v.str('fee_mode', { required: true, enum: ['free', 'paid'] });
+  const cycle = v.str('cycle', { required: true, enum: ['month', 'year', 'once'] });
+  const remind_days = v.int('remind_days', { min: 0, max: 60 });
+  const session_days = v.int('session_days', { min: 1, max: 30 });
+  const rental_price = v.num('rental_price', { min: 0, max: 1e6 });
+  const hotel_price = v.num('hotel_price', { min: 0, max: 1e6 });
+  const property_price = v.num('property_price', { min: 0, max: 1e6 });
+  const currency = v.str('currency', { enum: ['USD', 'CNY'] });
+  v.ok();
+  await shared.query(
+    `UPDATE usage_fee_config SET fee_mode = ?, cycle = ?, remind_days = ?, session_days = ?,
+       rental_price = ?, hotel_price = ?, property_price = ?, currency = ? WHERE id = 1`,
+    [fee_mode, cycle, remind_days, session_days, rental_price, hotel_price, property_price, currency]);
+  await loadFeeCfg();
+  res.json(FEE_CFG);
+}));
+/* 主体使用费汇总：应收（计费开始至今累计周期×单价）/实收（流水合计）/欠费 */
+router.get('/fee-orgs', authMode, superOnly, h(async (req, res) => {
+  const [orgs] = await shared.query('SELECT * FROM orgs ORDER BY mode, id');
+  const out = [];
+  for (const o of orgs) {
+    const [[adm]] = await shared.query('SELECT username, real_name FROM users WHERE id = ?', [o.admin_user_id]);
+    const [[p]] = await shared.query(
+      'SELECT COALESCE(SUM(amount), 0) AS s FROM usage_fee_payments WHERE org_id = ?', [o.id]);
+    const defPrice = o.mode === 'rental' ? FEE_CFG.rental_price
+      : o.mode === 'hotel' ? FEE_CFG.hotel_price : FEE_CFG.property_price;
+    const price = Number(o.fee_price) > 0 ? Number(o.fee_price) : Number(defPrice) || 0;
+    let dueAmt = 0;
+    if (o.fee_start) {
+      if (o.fee_cycle === 'once') dueAmt = price;
+      else {
+        const [ys, ms] = String(o.fee_start).split('-').map(Number);
+        const [yt, mt] = today().split('-').map(Number);
+        const months = (yt - ys) * 12 + (mt - ms);
+        dueAmt = months > 0 ? (o.fee_cycle === 'year' ? Math.floor(months / 12) : months) * price : 0;
+      }
+    }
+    const paid = Number(p.s) || 0;
+    out.push({
+      id: o.id, name: o.name, mode: o.mode,
+      admin: adm ? adm.real_name || adm.username : '',
+      fee_start: o.fee_start, fee_due: o.fee_due, fee_cycle: o.fee_cycle,
+      fee_price: price, fee_status: o.fee_status,
+      due: round2(dueAmt), paid: round2(paid), balance: round2(dueAmt - paid)
+    });
+  }
+  res.json(out);
+}));
+/* 超管设置主体计费（开通计费/调整到期日/单价/暂停或关闭） */
+router.put('/fee-orgs/:id', authMode, superOnly, h(async (req, res) => {
+  const B = req.body || {};
+  const v = V(B);
+  const fee_start = v.str('fee_start', { max: 10 });
+  const fee_due = v.str('fee_due', { max: 10 });
+  const fee_cycle = v.str('fee_cycle', { enum: ['month', 'year', 'once'] });
+  const fee_price = v.num('fee_price', { min: 0, max: 1e6 });
+  const fee_status = v.str('fee_status', { enum: ['active', 'paused', 'closed'] });
+  v.ok();
+  const sets = [], params = [];
+  for (const [k, val] of [['fee_start', fee_start], ['fee_due', fee_due], ['fee_cycle', fee_cycle],
+                           ['fee_price', fee_price], ['fee_status', fee_status]]) {
+    if (val !== undefined) { sets.push(`${k} = ?`); params.push(val === null ? null : val); }
+  }
+  if (!sets.length) return res.status(400).json({ error: '无可更新字段' });
+  params.push(req.params.id);
+  await shared.query(`UPDATE orgs SET ${sets.join(', ')} WHERE id = ?`, params);
+  res.json({ ok: true });
+}));
+/* 收款流水（可按主体过滤） */
+router.get('/fee-payments', authMode, superOnly, h(async (req, res) => {
+  const orgId = Number(req.query.org_id) || 0;
+  const [rows] = await shared.query(
+    `SELECT p.*, o.name AS org_name FROM usage_fee_payments p
+       LEFT JOIN orgs o ON o.id = p.org_id
+      ${orgId ? 'WHERE p.org_id = ?' : ''} ORDER BY p.id DESC`, orgId ? [orgId] : []);
+  res.json(rows);
+}));
+/* 登记收款：写流水并按周期续期（once 一次性 → 长期有效；已超期从今天起算） */
+router.post('/fee-payments', authMode, superOnly, h(async (req, res) => {
+  const B = req.body || {};
+  const v = V(B);
+  const org_id = v.int('org_id', { required: true, min: 1, max: 1e7 });
+  const amount = v.num('amount', { required: true, min: 0.01, max: 1e8 });
+  const pay_method = v.str('pay_method', { max: 30 });
+  const pay_date = v.str('pay_date', { required: true, max: 10 });
+  const remark = v.str('remark', { max: 200 });
+  v.ok();
+  const [[o]] = await shared.query('SELECT * FROM orgs WHERE id = ?', [org_id]);
+  if (!o) return res.status(400).json({ error: '经营主体不存在' });
+  const r = await shared.query(
+    'INSERT INTO usage_fee_payments (org_id, amount, pay_method, pay_date, remark, operator) VALUES (?, ?, ?, ?, ?, ?)',
+    [org_id, amount, pay_method || '', pay_date, remark || '', req.user.username]);
+  /* 续期：base = max(当前到期日, 今天)；once → 永久（NULL） */
+  if (o.fee_cycle === 'once') {
+    await shared.query('UPDATE orgs SET fee_due = NULL, fee_status = ? WHERE id = ?', ['active', org_id]);
+  } else {
+    const base = o.fee_due && String(o.fee_due) >= today() ? String(o.fee_due) : today();
+    const interval = o.fee_cycle === 'year' ? 'INTERVAL 1 YEAR' : 'INTERVAL 1 MONTH';
+    await shared.query(
+      `UPDATE orgs SET fee_due = DATE_ADD(?, ${interval}), fee_status = ? WHERE id = ?`,
+      [base, 'active', org_id]);
+  }
+  res.json({ ok: true, id: r[0].insertId });
+}));
+/* 撤销收款（误登记回滚） */
+router.delete('/fee-payments/:id', authMode, superOnly, h(async (req, res) => {
+  const [rows] = await shared.query('SELECT * FROM usage_fee_payments WHERE id = ?', [req.params.id]);
+  if (!rows.length) return res.status(400).json({ error: '流水不存在' });
+  const [del] = await shared.query('DELETE FROM usage_fee_payments WHERE id = ?', [req.params.id]);
+  if (!del.affectedRows) return res.status(400).json({ error: '流水不存在' });
   res.json({ ok: true });
 }));
 
@@ -1334,6 +1562,13 @@ router.post('/org-employees', auth, h(async (req, res) => {
       return res.status(403).json({ error: '企业管理员只能为本企业添加员工' });
     }
     ownerId = req.companyId;
+    /* 房间归属校验：只能绑定本企业名下房产 */
+    if (room_id) {
+      const [[rm]] = await pool.query(
+        'SELECT id FROM rooms WHERE id = ? AND org_id = ? AND owner_id = ?',
+        [room_id, req.orgId, req.companyId]);
+      if (!rm) return res.status(403).json({ error: '只能绑定本企业名下的房产' });
+    }
   }
   if (!ownerId) {
     const [match] = await pool.query(
@@ -1379,6 +1614,13 @@ router.put('/org-employees/:id', auth, h(async (req, res) => {
     'SELECT * FROM org_employees WHERE id = ? AND org_id = ?' + ownerCond,
     [req.params.id, req.orgId].concat(ownerParams));
   if (!exist.length) return res.status(400).json({ error: '记录不存在' });
+  /* 企业管理员：房间归属校验，只能绑定本企业名下房产 */
+  if (req.level === 'company_admin' && room_id) {
+    const [[rm]] = await pool.query(
+      'SELECT id FROM rooms WHERE id = ? AND org_id = ? AND owner_id = ?',
+      [room_id, req.orgId, req.companyId]);
+    if (!rm) return res.status(403).json({ error: '只能绑定本企业名下的房产' });
+  }
   const [r] = await pool.query(
     `UPDATE org_employees SET company = ?, owner_id = ?, room_id = ?, name = ?, id_number = ?, phone = ?,
        department = ?, position = ?, card_no = ?, photo_url = ?, id_photo_url = ?, remark = ?
@@ -1721,8 +1963,9 @@ router.get('/bills', auth, h(async (req, res) => {
   res.json(rows.map(normBill));
 }));
 
-/* 账单生成（按系统） */
+/* 账单生成（按系统；企业管理员不开放生成，只可查询） */
 router.post('/bills/generate', auth, h(async (req, res) => {
+  if (req.level === 'company_admin') return res.status(403).json({ error: '企业管理员无生成账单权限' });
   const mode = req.mode, f = FEATURES[mode];
   const v = V(req.body || {});
   const kind = v.str('kind', { enum: ['all', 'rental', 'hotel', 'property', 'utility', 'network'], def: 'all' });
@@ -1854,6 +2097,7 @@ router.post('/bills/generate', auth, h(async (req, res) => {
 
 /* 更新网费账单：按当前带宽/单价重算当月未收款账单（保留账单 ID），已收款禁止更新 */
 router.post('/bills/update-network', auth, h(async (req, res) => {
+  if (req.level === 'company_admin') return res.status(403).json({ error: '企业管理员无更新账单权限' });
   const v = V(req.body || {});
   const room_id = v.int('room_id', { min: 1, max: 1e7 });
   v.ok();
@@ -2874,6 +3118,7 @@ app.use('/api', router);
 app.use((req, res) => res.status(404).json({ error: '接口不存在' }));
 
 const PORT = Number(process.env.PORT || 16088);
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`房屋管理系统已启动：http://localhost:${PORT}`);
+app.listen(PORT, '0.0.0.0', async () => {
+  await loadFeeCfg();
+  console.log(`房屋管理系统已启动：http://localhost:${PORT}（使用费模式：${FEE_CFG.fee_mode}，会话 ${FEE_CFG.session_days} 天）`);
 });

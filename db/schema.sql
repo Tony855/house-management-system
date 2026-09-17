@@ -17,7 +17,39 @@ CREATE TABLE orgs (
   name          VARCHAR(100) NOT NULL,                  -- 经营主体名称（如：金边1号公寓）
   mode          ENUM('rental','hotel','property') NOT NULL,
   admin_user_id INT NULL,                               -- 主管理员用户 id
+  fee_start     DATE NULL,                              -- 使用费计费开始日
+  fee_due       DATE NULL,                              -- 当前到期日（NULL=不限制）
+  fee_cycle     ENUM('month','year','once') NOT NULL DEFAULT 'month',
+  fee_price     DECIMAL(10,2) NOT NULL DEFAULT 0,       -- 该主体单价（0=按系统默认）
+  fee_status    ENUM('active','paused','closed') NOT NULL DEFAULT 'active', -- 缴费状态
   created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB;
+
+-- ---------- 使用费全局配置（单行 id=1，超管级） ----------
+CREATE TABLE usage_fee_config (
+  id             INT PRIMARY KEY,
+  fee_mode       ENUM('free','paid') NOT NULL DEFAULT 'free', -- 收费模式
+  cycle          ENUM('month','year','once') NOT NULL DEFAULT 'month', -- 默认周期
+  remind_days    INT NOT NULL DEFAULT 7,                 -- 到期前提前提醒天数
+  session_days   INT NOT NULL DEFAULT 7,                 -- 登录会话有效期（天）
+  rental_price   DECIMAL(10,2) NOT NULL DEFAULT 0,       -- 租房月单价
+  hotel_price    DECIMAL(10,2) NOT NULL DEFAULT 0,       -- 酒店月单价
+  property_price DECIMAL(10,2) NOT NULL DEFAULT 0,       -- 物业月单价
+  currency       ENUM('USD','CNY') NOT NULL DEFAULT 'USD',
+  updated_at     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB;
+
+-- ---------- 使用费收款流水（超管登记） ----------
+CREATE TABLE usage_fee_payments (
+  id         INT AUTO_INCREMENT PRIMARY KEY,
+  org_id     INT NOT NULL,
+  amount     DECIMAL(10,2) NOT NULL DEFAULT 0,
+  pay_method VARCHAR(30) NOT NULL DEFAULT '',
+  pay_date   DATE NOT NULL,
+  remark     VARCHAR(200) NOT NULL DEFAULT '',
+  operator   VARCHAR(50) NOT NULL DEFAULT '',
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_fee_pay_org (org_id)
 ) ENGINE=InnoDB;
 
 -- ---------- 角色：org_id 为 NULL 表示系统内置角色；非空为某主体自建角色 ----------

@@ -875,6 +875,7 @@ function curNav(){
   if (!ME) return [];
   if (ME.level === 'super') return [
     ['monitor','activity','系统监控'],
+    ['fee','cash-stack','系统使用费'],
     ['orgs','person-gear','主管理员管理'],
     ['appcfg','gear','系统设置']
   ];
@@ -943,6 +944,32 @@ function renderApp(){
   </div>`;
   go(location.hash.slice(1) || firstAllowedPage(mode) || DEFAULT_PAGE[mode]);
   checkBillReminder();
+  checkFeeNotice();
+}
+
+/* 系统使用费提醒（主管理员可见）：超期/临期/已关闭时顶部横幅持续提醒，关闭后本页不再弹 */
+let _feeRemindShown = false;
+function checkFeeNotice(){
+  try {
+    if (_feeRemindShown || !ME || ME.level !== 'admin' || !ME.fee_notice) return;
+    _feeRemindShown = true;
+    const n = ME.fee_notice;
+    const txt = n.status === 'closed'
+      ? '<b>系统使用费</b>：本系统已被超管关闭，请联系管理员处理'
+      : n.status === 'overdue'
+        ? `<b>系统使用费</b>：已超期 <b class="text-danger">${n.days}</b> 天（到期日 ${n.due}），请尽快续费，否则系统将停用`
+        : `<b>系统使用费</b>：将于 <b>${n.days}</b> 天后到期（${n.due}），请及时续费`;
+    const bar = document.createElement('div');
+    bar.className = 'fee-remind-bar alert alert-danger d-flex align-items-center rounded-0 mb-0';
+    bar.style.cssText = 'position:sticky;top:0;z-index:1050';
+    bar.innerHTML = `<div class="ms-2"><i class="bi bi-cash-stack"></i> ${txt}</div>
+      <div class="ms-auto d-flex gap-2">
+        <button class="btn btn-sm btn-outline-danger" onclick="this.closest('.fee-remind-bar').remove()">知道了</button>
+      </div>`;
+    const main = document.querySelector('main');
+    if (main) main.prepend(bar);
+    else document.body.prepend(bar);
+  } catch(e){ /* 提醒失败不影响使用 */ }
 }
 
 /* 账单到期提醒横幅：主管理员开启后，存在符合条件的未收账单即提醒；
@@ -3998,6 +4025,149 @@ async function saveAppConfig(){
 }
 
 /* ==================================================================
+ * 22c. 系统使用费（仅超管：收费模式/单价/周期/提醒/会话有效期/收款流水/主体计费）
+ * 超期或关闭 → 除主管理员外所有登录停用，持续提醒（见后端 feeBlocked）
+ * ================================================================== */
+const FEE_CYCLE_TXT = { month:'按月', year:'按年', once:'一次性' };
+function feeBadge(o){
+  if (o.fee_status === 'closed') return '<span class="badge bg-danger">已关闭</span>';
+  if (o.fee_status === 'paused') return '<span class="badge bg-warning text-dark">已暂停</span>';
+  if (o.fee_due && o.fee_due < today()) return '<span class="badge bg-danger">已超期</span>';
+  return '<span class="badge bg-success">正常</span>';
+}
+async function renderFee(){
+  const [cfg, orgs, pays] = await Promise.all([api('/api/fee-config'), api('/api/fee-orgs'), api('/api/fee-payments')]);
+  const sym = cfg.currency === 'CNY' ? '¥' : '$';
+  const m = n => sym + (Number(n) || 0).toFixed(2);
+  const rows = orgs.map(o => `<tr>
+    <td><b>${esc(o.name)}</b></td>
+    <td>${MODE_NAME[o.mode]}</td>
+    <td>${FEE_CYCLE_TXT[o.fee_cycle] || o.fee_cycle}</td>
+    <td>${m(o.fee_price)}</td>
+    <td>${o.fee_start || '-'}</td>
+    <td>${o.fee_due || (o.fee_cycle === 'once' ? '长期' : '-')}</td>
+    <td>${m(o.due)}</td>
+    <td>${m(o.paid)}</td>
+    <td class="${o.balance > 0 ? 'text-danger fw-bold' : ''}">${m(o.balance)}</td>
+    <td>${feeBadge(o)}</td>
+    <td class="text-nowrap">
+      <button class="btn btn-sm btn-outline-primary" onclick="addFeePay(${o.id}, '${esc(o.name)}')">登记收款</button>
+      <button class="btn btn-sm btn-outline-secondary" onclick="editFeeOrg(${o.id})">计费设置</button>
+    </td></tr>`).join('')
+    || '<tr><td colspan="11" class="text-center text-muted py-3">暂无经营主体</td></tr>';
+  $('#page').innerHTML = `
+  <div class="d-flex align-items-center gap-3 mb-3">
+    <h5 class="mb-0"><i class="bi bi-cash-stack text-primary"></i> 系统使用费</h5>
+    <span class="text-muted small">超期自动停用除主管理员外的所有登录，持续提醒</span>
+    <button class="btn btn-sm btn-outline-primary ms-auto" onclick="renderFee()"><i class="bi bi-arrow-clockwise"></i> 刷新</button>
+  </div>
+  <div class="card mb-3">
+    <div class="card-header bg-white fw-bold"><i class="bi bi-sliders text-primary"></i> 收费配置（全局）</div>
+    <div class="card-body">
+      <div class="row g-2 align-items-end">
+        <div class="col-auto"><label class="form-label small">收费模式</label>
+          <select class="form-select form-select-sm" id="feeMode">
+            <option value="free" ${cfg.fee_mode === 'free' ? 'selected' : ''}>免费（不限制登录）</option>
+            <option value="paid" ${cfg.fee_mode === 'paid' ? 'selected' : ''}>收费（超期停用）</option>
+          </select></div>
+        <div class="col-auto"><label class="form-label small">默认周期</label>
+          <select class="form-select form-select-sm" id="feeCycle">
+            <option value="month" ${cfg.cycle === 'month' ? 'selected' : ''}>按月</option>
+            <option value="year" ${cfg.cycle === 'year' ? 'selected' : ''}>按年</option>
+            <option value="once" ${cfg.cycle === 'once' ? 'selected' : ''}>一次性</option>
+          </select></div>
+        <div class="col-auto"><label class="form-label small">租房单价</label>
+          <input id="feeRp" type="number" class="form-control form-control-sm" style="width:90px" value="${cfg.rental_price}"></div>
+        <div class="col-auto"><label class="form-label small">酒店单价</label>
+          <input id="feeHp" type="number" class="form-control form-control-sm" style="width:90px" value="${cfg.hotel_price}"></div>
+        <div class="col-auto"><label class="form-label small">物业单价</label>
+          <input id="feePp" type="number" class="form-control form-control-sm" style="width:90px" value="${cfg.property_price}"></div>
+        <div class="col-auto"><label class="form-label small">提前提醒(天)</label>
+          <input id="feeRemind" type="number" class="form-control form-control-sm" style="width:80px" value="${cfg.remind_days}"></div>
+        <div class="col-auto"><label class="form-label small">会话有效期(天)</label>
+          <input id="feeSession" type="number" class="form-control form-control-sm" style="width:80px" value="${cfg.session_days}"></div>
+        <div class="col-auto"><label class="form-label small">使用费货币</label>
+          <select class="form-select form-select-sm" id="feeCur">
+            <option value="USD" ${cfg.currency === 'USD' ? 'selected' : ''}>美元 $</option>
+            <option value="CNY" ${cfg.currency === 'CNY' ? 'selected' : ''}>人民币 ¥</option>
+          </select></div>
+        <div class="col-auto"><button class="btn btn-sm btn-primary" onclick="saveFeeConfig()"><i class="bi bi-check-lg"></i> 保存配置</button></div>
+      </div>
+      <div class="text-muted small mt-2"><i class="bi bi-info-circle"></i> 主体可单独设置周期与单价（计费设置），未设置时按系统默认；登记收款后到期日自动顺延。</div>
+    </div>
+  </div>
+  <div class="table-responsive"><table class="table table-hover">
+    <thead class="table-light"><tr>
+      <th>经营主体</th><th>系统</th><th>周期</th><th>单价</th><th>计费开始</th><th>到期日</th>
+      <th>应收</th><th>实收</th><th>欠费</th><th>状态</th><th width="220">操作</th>
+    </tr></thead><tbody>${rows}</tbody></table></div>
+  <div class="card mt-3"><div class="card-header bg-white fw-bold"><i class="bi bi-receipt text-primary"></i> 收款流水</div>
+    <div class="card-body py-2 small">${pays.length ? pays.slice(0, 20).map(p =>
+      `<div class="d-flex justify-content-between border-bottom py-1">
+        <span>${esc(p.org_name)} · ${m(p.amount)} · ${esc(p.pay_method || '现金')} · ${p.pay_date}
+          ${p.remark ? '· ' + esc(p.remark) : ''}</span>
+        <span class="text-nowrap"><span class="text-muted me-2">${esc(p.operator || '')}</span>
+          <a class="text-danger" onclick="delFeePay(${p.id})">撤销</a></span></div>`).join('')
+      : '<div class="text-muted">暂无收款记录</div>'}</div></div>`;
+}
+async function saveFeeConfig(){
+  try {
+    await api('/api/fee-config', 'PUT', {
+      fee_mode: $('#feeMode').value, cycle: $('#feeCycle').value,
+      rental_price: Number($('#feeRp').value), hotel_price: Number($('#feeHp').value),
+      property_price: Number($('#feePp').value),
+      remind_days: Number($('#feeRemind').value), session_days: Number($('#feeSession').value),
+      currency: $('#feeCur').value
+    });
+    alert('已保存（修改会话有效期后，已登录会话按新天数生效）');
+    renderFee();
+  } catch(e){ alert(e.message); }
+}
+async function addFeePay(orgId, orgName){
+  openForm('登记收款 · ' + orgName, [
+    { name:'amount', label:'收款金额', type:'number', required:true, step:'0.01', placeholder:'必须大于 0' },
+    { name:'pay_method', label:'收款方式', type:'select', options:[
+      { value:'现金', label:'现金' }, { value:'转账', label:'转账' }, { value:'银行', label:'银行' },
+      { value:'微信', label:'微信' }, { value:'支付宝', label:'支付宝' } ] },
+    { name:'pay_date', label:'收款日期', type:'date', required:true },
+    { name:'remark', label:'备注' }
+  ], { org_id: orgId, pay_date: today(), pay_method: '现金' }, async (d, modal) => {
+    try {
+      await api('/api/fee-payments', 'POST', d);
+      modal.hide(); renderFee();
+    } catch(e){ alert(e.message); }
+  });
+}
+async function editFeeOrg(id){
+  const list = await api('/api/fee-orgs');
+  const o = list.find(x => x.id === id);
+  if (!o){ alert('经营主体不存在'); return; }
+  openForm('计费设置 · ' + o.name, [
+    { name:'fee_cycle', label:'计费周期', type:'select', options:[
+      { value:'month', label:'按月' }, { value:'year', label:'按年' }, { value:'once', label:'一次性' } ] },
+    { name:'fee_price', label:'单价（0=按系统默认）', type:'number', step:'0.01' },
+    { name:'fee_start', label:'计费开始日', type:'date' },
+    { name:'fee_due', label:'当前到期日（留空=长期有效）', type:'date' },
+    { name:'fee_status', label:'状态', type:'select', options:[
+      { value:'active', label:'正常' }, { value:'paused', label:'暂停（仅主管理员可登录）' },
+      { value:'closed', label:'关闭（全部停用）' } ] }
+  ], { id:o.id, fee_cycle:o.fee_cycle, fee_price:o.fee_price || '', fee_start:o.fee_start || '', fee_due:o.fee_due || '', fee_status:o.fee_status }, async (d, modal) => {
+    try {
+      await api('/api/fee-orgs/' + id, 'PUT', {
+        fee_cycle:d.fee_cycle, fee_price:Number(d.fee_price) || 0,
+        fee_start:d.fee_start || null, fee_due:d.fee_due || null, fee_status:d.fee_status
+      });
+      modal.hide(); renderFee();
+    } catch(e){ alert(e.message); }
+  });
+}
+async function delFeePay(id){
+  if (!confirm('确定撤销这条收款记录？')) return;
+  try { await api('/api/fee-payments/' + id, 'DELETE'); renderFee(); }
+  catch(e){ alert(e.message); }
+}
+
+/* ==================================================================
  * 22b. 经营主体管理（仅超管：开通/编辑/停用主管理员 = 开通一个独立租户）
  * ================================================================== */
 async function renderOrgs(){
@@ -4087,6 +4257,7 @@ async function delOrg(id){
 const PAGES = {
   home:        { render: renderStaffHome },
   monitor:     { render: renderMonitor },
+  fee:         { render: renderFee },
   orgs:        { render: renderOrgs },
   appcfg:      { render: renderAppConfig },
   dashboard:   { render: renderDashboard },
