@@ -338,8 +338,21 @@ const router = express.Router();
 
 /* 员工实际权限（页面访问 + 操作）全部来自角色，按主体隔离，改角色即时生效；
  * role_permissions 中 `op:` 前缀为操作权限，其余为页面访问权限 */
+/* 各系统可用页面（与前端导航一致）：读取角色/用户权限时按当前系统过滤，
+ * 避免内置角色全局默认模板中的跨系统页面（如租房的"房产管理/订单管理/企业员工"）混入显示与授权 */
+const MODE_PAGES = {
+  rental:   ['dashboard', 'rooms', 'tenants', 'contracts', 'meters', 'network', 'bills', 'repairs', 'buildings'],
+  hotel:    ['dashboard', 'roommap', 'orders', 'rooms', 'tenants', 'bills', 'repairs', 'buildings'],
+  property: ['dashboard', 'buildings', 'properties', 'owners', 'meters', 'network', 'bills', 'complaints', 'repairs', 'orgemp']
+};
+const fitPages = (mode, pages) => {
+  if (mode === 'super') return pages;
+  const allow = MODE_PAGES[mode] || [];
+  return allow.length ? (pages || []).filter(p => allow.includes(p)) : pages;
+};
+
 async function userPerms(userId) {
-  const [[u]] = await shared.query('SELECT role, org_id FROM users WHERE id = ?', [userId]);
+  const [[u]] = await shared.query('SELECT role, org_id, mode FROM users WHERE id = ?', [userId]);
   const pages = [], ops = [];
   if (u && u.role) {
     const [def] = await shared.query(
@@ -358,7 +371,7 @@ async function userPerms(userId) {
       else pages.push(v);
     }
   }
-  return { pages: [...new Set(pages)], ops: [...new Set(ops)] };
+  return { pages: fitPages(u && u.mode, [...new Set(pages)]), ops: [...new Set(ops)] };
 }
 /* 覆盖写角色权限：pages 存裸名，ops 存 op: 前缀；orgId=0 写全局默认，>0 写该主体覆盖 */
 async function setRolePerms(roleId, pages, ops, orgId = 0) {
@@ -371,7 +384,7 @@ async function setRolePerms(roleId, pages, ops, orgId = 0) {
   }
 }
 /* 读取角色权限：该主体有覆盖配置时优先，否则用全局默认模板；返回 { pages, ops } */
-async function rolePerms(roleId, orgId) {
+async function rolePerms(roleId, orgId, mode) {
   const [def] = await shared.query('SELECT page FROM role_permissions WHERE role_id = ? AND org_id = 0', [roleId]);
   const [cov] = orgId ? await shared.query('SELECT page FROM role_permissions WHERE role_id = ? AND org_id = ?', [roleId, orgId]) : [[], null];
   const rps = cov && cov.length ? cov : def;
@@ -381,7 +394,7 @@ async function rolePerms(roleId, orgId) {
     if (v.startsWith('op:')) ops.push(v.slice(3));
     else pages.push(v);
   }
-  return { pages: [...new Set(pages)], ops: [...new Set(ops)] };
+  return { pages: fitPages(mode, [...new Set(pages)]), ops: [...new Set(ops)] };
 }
 
 /* ==================================================================
@@ -2559,7 +2572,7 @@ router.get('/roles', authMode, adminLevel, h(async (req, res) => {
     }
     return {
       ...r, is_system: Number(r.is_system), user_count: Number(r.user_count),
-      pages: [...new Set(pages)], ops: [...new Set(ops)]
+      pages: fitPages(req.mode, [...new Set(pages)]), ops: [...new Set(ops)]
     };
   }));
 }));
@@ -2643,7 +2656,7 @@ router.put('/roles/:id', authMode, h(async (req, res) => {
     if (role.org_id !== null) await setRolePerms(req.params.id, pages, ops, role.org_id);
   }
   const [rows] = await shared.query('SELECT * FROM roles WHERE id = ?', [req.params.id]);
-  const rp = await rolePerms(req.params.id, req.level === 'super' ? 0 : req.orgId);
+  const rp = await rolePerms(req.params.id, req.level === 'super' ? 0 : req.orgId, req.mode);
   res.json({ ...rows[0], pages: rp.pages, ops: rp.ops });
 }));
 router.delete('/roles/:id', authMode, h(async (req, res) => {
@@ -2695,7 +2708,7 @@ router.get('/users', authMode, orgAdminOnly, h(async (req, res) => {
       if (v.startsWith('op:')) ops.push(v.slice(3));
       else pages.push(v);
     }
-    return { ...u, pages: [], role_pages: [...new Set(pages)], role_ops: [...new Set(ops)] };
+    return { ...u, pages: [], role_pages: fitPages(req.mode, [...new Set(pages)]), role_ops: [...new Set(ops)] };
   }));
 }));
 router.post('/users', authMode, orgAdminOnly, h(async (req, res) => {
