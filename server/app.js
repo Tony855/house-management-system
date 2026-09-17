@@ -1722,6 +1722,10 @@ router.post('/bills', auth, h(async (req, res) => {
         return res.status(400).json({ error: '明细项目名称不能为空' });
       }
       if (it.name.trim().length > 100) return res.status(400).json({ error: '明细项目名称不能超过 100 字' });
+      if (it.model !== undefined && it.model !== null && it.model !== '' &&
+          (typeof it.model !== 'string' || it.model.trim().length > 100)) {
+        return res.status(400).json({ error: '明细型号不能超过 100 字' });
+      }
       const qty = (it.qty === null || it.qty === undefined || it.qty === '') ? null : Number(it.qty);
       const price = (it.price === null || it.price === undefined || it.price === '') ? null : Number(it.price);
       if (qty !== null && (!Number.isInteger(qty) || qty < 1 || qty > 999999)) {
@@ -1732,7 +1736,7 @@ router.post('/bills', auth, h(async (req, res) => {
       }
       if (qty === null && price !== null) return res.status(400).json({ error: '明细数量不能为空' });
       if (qty !== null && price === null) return res.status(400).json({ error: '明细单价不能为空' });
-      items.push({ name: it.name.trim(), qty, price });
+      items.push({ name: it.name.trim(), model: it.model !== undefined && it.model !== null && it.model !== '' ? String(it.model).trim() : null, qty, price });
     }
   }
   const total = items ? round2(items.reduce((s, it) => s + ((Number(it.qty) || 0) * (Number(it.price) || 0)), 0)) : amount;

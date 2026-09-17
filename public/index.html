@@ -243,9 +243,10 @@ function openForm(title, fields, values, onSubmit, onMount){
       html += `<div class="item-wrap">
         <div class="table-responsive"><table class="table table-sm table-bordered align-middle mb-1">
           <thead class="table-light"><tr>
-            <th style="min-width:150px">项目名称</th>
-            <th style="width:80px">数量</th>
-            <th style="width:110px">单价</th>
+            <th style="min-width:140px">商品</th>
+            <th style="min-width:110px">型号</th>
+            <th style="width:74px">数量</th>
+            <th style="width:104px">单价</th>
             <th style="width:90px">金额</th>
             <th style="width:52px">说明</th>
             <th style="width:36px"></th></tr></thead>
@@ -326,7 +327,8 @@ function addItemRow(id){
   if (tb.children.length >= 50){ alert('明细最多 50 行'); return; }
   const tr = document.createElement('tr');
   tr.innerHTML = `
-    <td><input class="form-control form-control-sm" data-f="name" placeholder="项目名称"></td>
+    <td><input class="form-control form-control-sm" data-f="name" placeholder="商品名称"></td>
+    <td><input class="form-control form-control-sm" data-f="model" placeholder="型号"></td>
     <td><input class="form-control form-control-sm" data-f="qty" type="number" min="1" step="1" placeholder="数量"></td>
     <td><input class="form-control form-control-sm" data-f="price" type="number" min="0" step="0.01" placeholder="单价"></td>
     <td class="text-end item-amt text-muted">-</td>
@@ -379,27 +381,32 @@ function collectItems(tb){
     const nameInp = tr.querySelector('[data-f="name"]');
     const name = (nameInp && nameInp.value || '').trim();
     if (!name) return;
+    const modelInp = tr.querySelector('[data-f="model"]');
+    const model = (modelInp && modelInp.value || '').trim();
     const free = (tr.querySelector('[data-f="free"]') || {}).checked;
-    if (free){ arr.push({ name }); return; }
+    if (free){ arr.push(model ? { name, model } : { name }); return; }
     const q = Number(tr.querySelector('[data-f="qty"]').value) || 0;
     const p = Number(tr.querySelector('[data-f="price"]').value) || 0;
     if (q <= 0 || p <= 0) return; /* 缺数量或单价的行不入明细 */
-    arr.push({ name, qty: q, price: Math.round(fromDisplayMoney(p) * 100) / 100 });
+    const it = { name, qty: q, price: Math.round(fromDisplayMoney(p) * 100) / 100 };
+    if (model) it.model = model;
+    arr.push(it);
   });
   return arr.length ? arr : null;
 }
 function fmtItems(items){
   if (!Array.isArray(items) || !items.length) return '';
   const rows = items.map(it => {
+    const model = it.model ? `<div class="text-muted" style="font-size:12px">型号：${esc(it.model)}</div>` : '';
     if (it.qty == null && it.price == null){
-      return `<tr class="text-muted"><td colspan="3">${esc(it.name)}</td><td class="text-end">说明</td></tr>`;
+      return `<tr class="text-muted"><td colspan="3">${esc(it.name)}${model}</td><td class="text-end">说明</td></tr>`;
     }
-    return `<tr><td>${esc(it.name)}</td><td>${it.qty}</td><td>${money(it.price)}</td>
+    return `<tr><td>${esc(it.name)}${model}</td><td>${it.qty}</td><td>${money(it.price)}</td>
       <td class="text-end">${money((Number(it.qty) || 0) * (Number(it.price) || 0))}</td></tr>`;
   }).join('');
   const total = items.reduce((s, it) => s + ((Number(it.qty) || 0) * (Number(it.price) || 0)), 0);
   return `<table class="table table-sm table-bordered mt-1 mb-1" style="max-width:420px">
-    <thead class="table-light"><tr><th>项目</th><th>数量</th><th>单价</th><th class="text-end">金额</th></tr></thead>
+    <thead class="table-light"><tr><th>商品</th><th>数量</th><th>单价</th><th class="text-end">金额</th></tr></thead>
     <tbody>${rows}</tbody>
     <tfoot><tr class="fw-bold"><td colspan="3">合计</td><td class="text-end">${money(total)}</td></tr></tfoot>
     </table>`;
