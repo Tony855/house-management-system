@@ -918,15 +918,15 @@ function renderApp(){
   checkBillReminder();
 }
 
-/* 账单到期提醒横幅：主管理员开启后，登录即查未收款账单（含已逾期/临期），本会话只提醒一次 */
+/* 账单到期提醒横幅：主管理员开启后，只要存在符合条件的未收账单，每次登录/刷新都会提醒；
+   页面生命周期内（不刷新）仅弹一次，点「知道了」只关闭当前横幅 */
+let _remindShown = false;
 async function checkBillReminder(){
   try {
-    if (!ME || ME.level === 'super') return;
+    if (_remindShown || !ME || ME.level === 'super') return;
     const r = await api('/api/bill-reminders');
     if (!r || !r.enabled || !r.total) return;
-    const key = 'bill_remind_' + r.total + '_' + today();
-    if (sessionStorage.getItem(key)) return;
-    sessionStorage.setItem(key, '1');
+    _remindShown = true;
     const bar = document.createElement('div');
     bar.className = 'bill-remind-bar alert alert-warning d-flex align-items-center rounded-0 mb-0';
     bar.style.cssText = 'position:sticky;top:0;z-index:1050';
