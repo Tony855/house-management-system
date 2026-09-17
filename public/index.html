@@ -808,7 +808,7 @@ const OP_DEFS = {
     { g:'合同管理', items:[['contract_add','签订'],['contract_edit','编辑'],['contract_delete','终止/删除']] },
     { g:'水电抄表', items:[['meter_add','录入'],['meter_edit','编辑'],['meter_delete','删除']] },
     { g:'网络管理', items:[['netline_add','新增线路'],['netline_edit','编辑线路'],['netline_bandwidth','加兆/减兆'],['netline_status','停用/启用']] },
-    { g:'账单收费', items:[['bill_add','手动添加'],['bill_generate','生成'],['bill_delete','删除'],['bill_pay','收款'],['bill_print','打印账单']] },
+    { g:'账单收费', items:[['bill_add','手动添加'],['bill_generate','生成'],['bill_delete','删除'],['bill_pay','收款'],['bill_print','打印账单'],['bill_remind','账单提醒']] },
     { g:'报修管理', items:[['repair_add','登记'],['repair_handle','处理'],['repair_delete','删除']] },
     { g:'商品库', items:[['itemlib_use','使用商品库（联想/批量添加）']] }
   ],
@@ -817,7 +817,7 @@ const OP_DEFS = {
     { g:'房间管理', items:[['room_add','新增'],['room_edit','编辑/状态'],['room_delete','删除']] },
     { g:'订单管理', items:[['order_add','预订/开房'],['order_edit','编辑'],['order_status','入住/退房/取消'],['order_delete','删除']] },
     { g:'房客管理', items:[['tenant_add','新增'],['tenant_edit','编辑'],['tenant_delete','删除']] },
-    { g:'账单收费', items:[['bill_add','手动添加'],['bill_generate','生成'],['bill_delete','删除'],['bill_pay','收款'],['bill_print','打印账单']] },
+    { g:'账单收费', items:[['bill_add','手动添加'],['bill_generate','生成'],['bill_delete','删除'],['bill_pay','收款'],['bill_print','打印账单'],['bill_remind','账单提醒']] },
     { g:'报修管理', items:[['repair_add','登记'],['repair_handle','处理'],['repair_delete','删除']] }
   ],
   property: [
@@ -827,7 +827,7 @@ const OP_DEFS = {
     { g:'企业员工', items:[['orgemp_add','新增'],['orgemp_edit','编辑'],['orgemp_delete','删除']] },
     { g:'水电抄表', items:[['meter_add','录入'],['meter_edit','编辑'],['meter_delete','删除']] },
     { g:'网络管理', items:[['netline_add','新增线路'],['netline_edit','编辑线路'],['netline_bandwidth','加兆/减兆'],['netline_status','停用/启用']] },
-    { g:'账单收费', items:[['bill_add','手动添加'],['bill_generate','生成'],['bill_delete','删除'],['bill_pay','收款'],['bill_print','打印账单']] },
+    { g:'账单收费', items:[['bill_add','手动添加'],['bill_generate','生成'],['bill_delete','删除'],['bill_pay','收款'],['bill_print','打印账单'],['bill_remind','账单提醒']] },
     { g:'报修管理', items:[['repair_add','登记'],['repair_handle','处理'],['repair_delete','删除']] },
     { g:'投诉建议', items:[['complaint_add','登记'],['complaint_handle','处理'],['complaint_delete','删除']] },
     { g:'商品库', items:[['itemlib_use','使用商品库（联想/批量添加）']] }
@@ -918,22 +918,25 @@ function renderApp(){
   checkBillReminder();
 }
 
-/* 账单到期提醒横幅：主管理员开启后，只要存在符合条件的未收账单，每次登录/刷新都会提醒；
+/* 账单到期提醒横幅：主管理员开启后，存在符合条件的未收账单即提醒；
+   可见性受角色权限「账单提醒」控制（主管理员默认可见，员工/企业管理员需角色勾选）；
    页面生命周期内（不刷新）仅弹一次，点「知道了」只关闭当前横幅 */
 let _remindShown = false;
 async function checkBillReminder(){
   try {
     if (_remindShown || !ME || ME.level === 'super') return;
+    if (typeof canOp === 'function' && !canOp('bill_remind')) return;
     const r = await api('/api/bill-reminders');
     if (!r || !r.enabled || !r.total) return;
     _remindShown = true;
     const bar = document.createElement('div');
     bar.className = 'bill-remind-bar alert alert-warning d-flex align-items-center rounded-0 mb-0';
     bar.style.cssText = 'position:sticky;top:0;z-index:1050';
+    const sumLabel = ME.level === 'company_admin' ? '未付合计' : '未收合计';
     bar.innerHTML = `<div class="ms-2"><i class="bi bi-bell-fill"></i> <b>账单提醒</b>：有 ${r.total} 张账单待收
       ${r.overdue ? `<span class="badge bg-danger ms-1">已逾期 ${r.overdue}</span>` : ''}
       ${r.due_soon ? `<span class="badge bg-warning text-dark ms-1">临期 ${r.due_soon}</span>` : ''}
-      · 未收合计 <b>${money(r.amount)}</b></div>
+      · ${sumLabel} <b>${money(r.amount)}</b></div>
       <div class="ms-auto d-flex gap-2">
         <button class="btn btn-sm btn-outline-primary" onclick="go('bills')">去查看</button>
         <button class="btn btn-sm btn-outline-secondary" onclick="this.closest('.bill-remind-bar').remove()">知道了</button>
