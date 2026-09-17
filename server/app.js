@@ -2600,7 +2600,7 @@ router.post('/roles', authMode, h(async (req, res) => {
 router.put('/roles/:id', authMode, h(async (req, res) => {
   const B = req.body || {};
   const v = V(B);
-  const name = v.str('name', { required: true, max: 50 });
+  const name = v.str('name', { max: 50 });
   const code = v.str('code', { max: 30, pattern: /^[a-zA-Z][a-zA-Z0-9_]{0,29}$/ });
   const description = v.str('description', { max: 200 });
   v.ok();
@@ -2614,7 +2614,10 @@ router.put('/roles/:id', authMode, h(async (req, res) => {
   if (req.level !== 'super' && role.org_id !== req.orgId && !Number(role.is_system)) {
     return res.status(403).json({ error: '只能管理本系统角色' });
   }
-  if (!name) return res.status(400).json({ error: '角色名称不能为空' });
+  /* 主管理员编辑内置角色仅配置本主体权限，名称/说明由超管统一管理（可缺省不更新） */
+  if (!name && (req.level === 'super' || !Number(role.is_system))) {
+    return res.status(400).json({ error: '角色名称不能为空' });
+  }
   if (Number(role.is_system)) {
     /* 内置角色：超管可改名称/描述与全局默认权限；主管理员只配置本主体权限覆盖（不改全局、不互相影响） */
     if (req.level === 'super') {
