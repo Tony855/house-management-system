@@ -4131,9 +4131,9 @@ async function addFeePay(orgId, orgName){
       { value:'微信', label:'微信' }, { value:'支付宝', label:'支付宝' } ] },
     { name:'pay_date', label:'收款日期', type:'date', required:true },
     { name:'remark', label:'备注' }
-  ], { org_id: orgId, pay_date: today(), pay_method: '现金' }, async (d, modal) => {
+  ], { pay_date: today(), pay_method: '现金' }, async (d, modal) => {
     try {
-      await api('/api/fee-payments', 'POST', d);
+      await api('/api/fee-payments', 'POST', { org_id: orgId, ...d });
       modal.hide(); renderFee();
     } catch(e){ alert(e.message); }
   });
