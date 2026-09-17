@@ -2597,7 +2597,10 @@ async function renderNetwork(){
     <tbody>${list.map(r => {
       const bill = billByRoom[r.room_id];
       const billBtns = canOp('bill_delete') ? (bill
-        ? `<button class="btn btn-sm btn-outline-danger" onclick="delRoomNetBill(${bill.id})">删除账单</button>`
+        ? `${bill.status === 'paid'
+            ? '<span class="text-muted small" title="已收款账单不能更新">已收款</span>'
+            : (canOp('bill_generate') ? `<button class="btn btn-sm btn-outline-primary" onclick="updateRoomNetBill(${r.room_id}, '${esc(netFilter.month)}')">更新账单</button>` : '')}
+           <button class="btn btn-sm btn-outline-danger" onclick="delRoomNetBill(${bill.id})">删除账单</button>`
         : ((r.bandwidth || 0) <= 0
           ? '<span class="text-muted small">无带宽</span>'
           : (canOp('bill_generate') ? `<button class="btn btn-sm btn-outline-warning" onclick="genRoomNetBill(${r.room_id}, '${esc(netFilter.month)}')">生成账单</button>` : ''))) : '';
@@ -2922,6 +2925,15 @@ async function genRoomNetBill(roomId, month){
     const extra = (r.detail && r.detail.length)
       ? '\n\n跳过原因：\n' + r.detail.map(d => '· ' + d.room + ' — ' + d.reason).join('\n') : '';
     alert(r.msg + extra);
+    renderNetwork();
+  } catch(e){ alert(e.message); }
+}
+
+async function updateRoomNetBill(roomId, month){
+  if (!confirm(`按当前带宽/单价重算该房间 ${month} 网费账单？\n（未收款账单会更新金额与明细，账单 ID 保留）`)) return;
+  try {
+    const r = await api('/api/bills/update-network', 'POST', { room_id: roomId });
+    alert(r.msg);
     renderNetwork();
   } catch(e){ alert(e.message); }
 }

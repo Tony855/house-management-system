@@ -274,6 +274,7 @@ const OP_ROUTES = [
   [/^\/netRequests$/, 'netline_bandwidth', 'POST'],
   [/^\/bills$/, 'bill_add', 'POST'],
   [/^\/bills\/generate$/, 'bill_generate', 'POST'],
+  [/^\/bills\/update-network$/, 'bill_generate', 'POST'],
   [/^\/bills\/\d+$/, 'bill_delete', 'DELETE'],
   [/^\/bills\/\d+\/pay$/, 'bill_pay', 'POST'],
   [/^\/repairs$/, 'repair_add', 'POST'],
@@ -1713,6 +1714,57 @@ router.post('/bills/generate', auth, h(async (req, res) => {
     detail: skippedReasons
   });
   return res.json({ msg: `本次共生成 ${n} 条${label}账单${skipped ? `，跳过 ${skipped} 项` : ''}`, detail: skippedReasons });
+}));
+
+/* 更新网费账单：按当前带宽/单价重算当月未收款账单（保留账单 ID），已收款禁止更新 */
+router.post('/bills/update-network', auth, h(async (req, res) => {
+  const v = V(req.body || {});
+  const room_id = v.int('room_id', { min: 1, max: 1e7 });
+  v.ok();
+  const oid = req.orgId;
+  const t = today(), ym = t.slice(0, 7);
+  const end = addDays(addMonths(monthStart(t), 1), -1);
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    const [bills] = await conn.query(
+      "SELECT * FROM bills WHERE org_id = ? AND source = 'network' AND room_id = ? AND period_start LIKE ?",
+      [oid, room_id, ym + '%']);
+    const bill = bills[0];
+    if (!bill) {
+      await conn.rollback(); conn.release();
+      return res.json({ msg: '该房间当月没有网费账单，请先「生成账单」' });
+    }
+    if (bill.status === 'paid') {
+      await conn.rollback(); conn.release();
+      return res.status(403).json({ msg: '该账单已收款，不能更新（避免破坏财务记录）' });
+    }
+    const calc = await calcNetFee(conn, room_id, ym);
+    if (calc.total <= 0) {
+      /* 带宽为 0：无网费，删除原账单 */
+      await conn.query('DELETE FROM bills WHERE id = ? AND org_id = ?', [bill.id, oid]);
+      await conn.commit(); conn.release();
+      return res.json({ msg: '当前带宽为 0，无网费，已删除原账单，需要时可重新生成' });
+    }
+    const detail = calc.lines.map(l => {
+      const segTxt = l.segments.map(s => `${s.bandwidth}兆×${s.days}天`).join(' + ');
+      return `【${l.line_name}】${segTxt}`;
+    }).join(' ');
+    const [st0] = await shared.query('SELECT currency, rate FROM settings WHERE org_id = ?', [oid]);
+    const isUsd = st0[0] && st0[0].currency === 'USD';
+    const rate0 = st0[0] && Number(st0[0].rate) > 0 ? Number(st0[0].rate) : 7.2;
+    const unit = calc.lines[0] ? Number(calc.lines[0].price) || 0 : 0;
+    const unitTxt = (isUsd ? '$' : '¥') + (isUsd ? (unit / rate0).toFixed(2) : unit.toFixed(2));
+    await conn.query(
+      `UPDATE bills SET amount = ?, remark = ?, period_end = ? WHERE id = ? AND org_id = ?`,
+      [calc.total, `网费：${detail}（按 ${calc.daysInMonth} 天折算，单价 ${unitTxt}/兆）`, end, bill.id, oid]);
+    await conn.commit(); conn.release();
+    return res.json({ msg: `已更新账单 #${bill.id}：金额由 ${bill.amount} 重算为 ${calc.total}`, amount: calc.total });
+  } catch (e) {
+    await conn.rollback();
+    conn.release();
+    throw e;
+  }
 }));
 /* 租房：某房间生效合同的租客 id */
 async function rentedTenant(conn, roomId, oid) {
