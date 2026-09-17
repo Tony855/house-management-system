@@ -945,15 +945,21 @@ function renderApp(){
   go(location.hash.slice(1) || firstAllowedPage(mode) || DEFAULT_PAGE[mode]);
   checkBillReminder();
   checkFeeNotice();
+  startFeePolling();
 }
 
-/* 系统使用费提醒（主管理员可见）：超期/临期/已关闭时顶部横幅持续提醒，关闭后本页不再弹 */
+/* 系统使用费提醒（主管理员可见）：超期/临期/已关闭时顶部横幅提醒；
+ * 登录时检查一次，并在登录期间每 5 分钟轮询 /me 刷新状态，到期状态出现或变化时再次提醒 */
 let _feeRemindShown = false;
+let _feeNotifiedKey = '';
 function checkFeeNotice(){
   try {
-    if (_feeRemindShown || !ME || ME.level !== 'admin' || !ME.fee_notice) return;
-    _feeRemindShown = true;
+    if (!ME || ME.level !== 'admin' || !ME.fee_notice) return;
     const n = ME.fee_notice;
+    const key = n.status + ':' + n.days + ':' + n.due;
+    if (key === _feeNotifiedKey) return; /* 同一到期状态只提醒一次 */
+    _feeNotifiedKey = key;
+    _feeRemindShown = true;
     const txt = n.status === 'closed'
       ? '<b>系统使用费</b>：本系统已被超管关闭，请联系管理员处理'
       : n.status === 'overdue'
@@ -970,6 +976,19 @@ function checkFeeNotice(){
     if (main) main.prepend(bar);
     else document.body.prepend(bar);
   } catch(e){ /* 提醒失败不影响使用 */ }
+}
+let _feePollingStarted = false;
+function startFeePolling(){
+  if (!ME || ME.level !== 'admin' || _feePollingStarted) return;
+  _feePollingStarted = true;
+  setInterval(async () => {
+    try {
+      const me = await api('/api/me');
+      if (!me || !me.fee_notice) return;
+      ME.fee_notice = me.fee_notice;
+      checkFeeNotice();
+    } catch(e){ /* 网络或会话异常时跳过本轮 */ }
+  }, 5 * 60 * 1000);
 }
 
 /* 账单到期提醒横幅：主管理员开启后，存在符合条件的未收账单即提醒；
