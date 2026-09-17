@@ -3572,10 +3572,10 @@ async function renderRoles(){
     : l === 'manager' ? '<span class="badge bg-info text-dark">管理员</span>'
     : '<span class="badge bg-secondary">员工</span>';
   const permTxt = r => (r.pages && r.pages.length)
-    ? `<small>${r.pages.map(p => pageName(p)).join('、')}</small>`
+    ? `<div class="d-flex flex-wrap gap-1">${r.pages.map(p => `<span class="badge bg-light text-dark border">${esc(pageName(p))}</span>`).join('')}</div>`
     : (r.is_system ? '<span class="text-muted small">—</span>' : '<span class="text-muted small">未配置</span>');
   const opsTxt = r => (r.ops && r.ops.length)
-    ? `<small class="text-primary">${r.ops.map(opLabel).join('；')}</small>`
+    ? `<div class="d-flex flex-wrap gap-1 mt-1">${r.ops.map(opLabel).map(l => `<span class="badge bg-light text-primary border">${esc(l)}</span>`).join('')}</div>`
     : '<span class="text-muted small">—</span>';
   $('#page').innerHTML = `
   <div class="mb-3 d-flex gap-2">
@@ -3587,7 +3587,7 @@ async function renderRoles(){
   <div class="card"><div class="table-responsive"><table class="table table-hover mb-0">
     <thead class="table-light"><tr>
       <th>ID</th><th>角色名称</th><th>编码</th><th>层级</th>
-      <th>角色权限</th><th>使用人数</th><th>类型</th><th width="150">操作</th>
+      <th>角色权限</th><th>类型</th><th width="150">操作</th>
     </tr></thead>
     <tbody>${roles.map(r => `<tr>
       <td>${r.id}</td>
@@ -3595,7 +3595,6 @@ async function renderRoles(){
       <td><code>${esc(r.code)}</code></td>
       <td>${lvlBadge(r.level)}</td>
       <td><div>${permTxt(r)}</div><div>${opsTxt(r)}</div></td>
-      <td>${r.user_count !== undefined ? r.user_count : 0}</td>
       <td>${r.is_system
         ? '<span class="badge bg-info text-dark">系统内置</span>'
         : '<span class="badge bg-light text-dark">自定义</span>'}</td>
