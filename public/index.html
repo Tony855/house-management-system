@@ -1000,8 +1000,9 @@ async function checkSuperFeeNotice(){
     if (!ME || ME.level !== 'super') return;
     const [orgs, cfg] = await Promise.all([api('/api/fee-orgs'), api('/api/fee-config')]);
     const t = today();
-    const ovd = orgs.filter(o => o.fee_status !== 'closed' && o.fee_due && o.fee_due < t);
-    const soon = orgs.filter(o => o.fee_status !== 'closed' && o.fee_due && o.fee_due >= t && daysBetween(o.fee_due, t) >= -cfg.remind_days);
+    const dDue = o => Math.round((new Date(o.fee_due + 'T00:00:00') - new Date(t + 'T00:00:00')) / 86400000); /* 到期-今天：负=超期，0~remind 天内=临期 */
+    const ovd = orgs.filter(o => o.fee_status !== 'closed' && o.fee_due && dDue(o) < 0);
+    const soon = orgs.filter(o => o.fee_status !== 'closed' && o.fee_due && dDue(o) >= 0 && dDue(o) <= cfg.remind_days);
     const closed = orgs.filter(o => o.fee_status === 'closed');
     const key = JSON.stringify([ovd.map(o=>o.id+':'+o.fee_due), soon.map(o=>o.id+':'+o.fee_due), closed.map(o=>o.id)]);
     if (key === _superFeeKey) return;

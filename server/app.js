@@ -104,9 +104,9 @@ async function feeNotice(orgId) {
   const due = o.fee_due ? String(o.fee_due) : null;
   if (o.fee_status === 'closed') return { status: 'closed', due };
   if (due) {
-    const over = daysBetween(due, today());
-    if (over > 0) return { status: 'overdue', days: over, due };
-    if (over >= -FEE_CFG.remind_days) return { status: 'soon', days: -over, due };
+    const over = Math.round((new Date(due + 'T00:00:00') - new Date(today() + 'T00:00:00')) / 86400000); /* due - 今天：负=已超期，0~remind 天内=临期，更远=不提醒 */
+    if (over < 0) return { status: 'overdue', days: -over, due };
+    if (over <= FEE_CFG.remind_days) return { status: 'soon', days: over, due };
   }
   return null;
 }
