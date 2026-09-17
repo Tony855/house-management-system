@@ -107,7 +107,7 @@ const DB = { data: { settings: { mode: 'hotel', currency: 'USD', rate: 7.2, net_
 /* ==================================================================
  *  3. 常量
  * ================================================================== */
-const MODE_NAME = { rental:'租房', hotel:'酒店', property:'物业' };
+const MODE_NAME = { rental:'租房', hotel:'酒店', property:'物业综合管理' };
 const MODE_TAB = { rental:'租房', hotel:'酒店', property:'物业' };
 const DEFAULT_PAGE = { rental:'dashboard', hotel:'roommap', property:'dashboard' };
 /* 三个系统：租房 / 酒店 / 物业 */
@@ -668,7 +668,7 @@ function renderLoginHome(){
       <div class="row g-3">
         ${entry('rental', '租房', 'house-door', '租房系统：房源 · 租客 · 合同 · 账单')}
         ${entry('hotel', '酒店', 'building', '酒店系统：房态 · 订单 · 房客 · 账单')}
-        ${entry('property', '物业', 'hdd-network', '物业系统：房产 · 企业 · 水电抄表 · 网费')}
+        ${entry('property', '物业综合管理', 'hdd-network', '物业综合管理系统：房产 · 企业 · 水电抄表 · 网费')}
       </div>
     </div>
   </div>`;
@@ -2123,6 +2123,17 @@ async function delOrder(id){
  * 14. 账单收费
  * ================================================================== */
 let billFilter = { status:'', source:'', owner:'' };
+let billCompanies = [];
+/* 企业筛选：输入清空即恢复全部；选择/确认联想项后按企业过滤 */
+function billOwnerInput(el){
+  if (!el.value && billFilter.owner){ billFilter.owner = ''; renderBills(); }
+}
+function billOwnerPick(){
+  const el = document.getElementById('billOwnerQ');
+  const hit = (billCompanies || []).find(c => c.name === el.value);
+  billFilter.owner = hit ? String(hit.id) : '';
+  renderBills();
+}
 
 async function renderBills(){
   const mode = curMode();
@@ -2135,17 +2146,21 @@ async function renderBills(){
 
   const personCol = mode === 'hotel' ? '房客' : (mode === 'property' ? '企业' : '租客');
 
-  /* 物业：企业筛选下拉（企业管理员仅见本企业，无实际筛选意义但保持一致） */
+  /* 物业：企业筛选（输入企业名关键字联想，选中后按企业过滤） */
   let ownerOpts = '';
   if (mode === 'property'){
     let companies = [];
     try { companies = await api('/api/tenants'); } catch(e){}
+    billCompanies = companies;
+    const curName = billFilter.owner ? (companies.find(c => String(c.id) === String(billFilter.owner)) || {}).name || '' : '';
     ownerOpts = `
       <div class="col-auto">
-        <select class="form-select form-select-sm" onchange="billFilter.owner=this.value;renderBills()">
-          <option value="">全部企业</option>
-          ${companies.map(c => `<option value="${c.id}" ${billFilter.owner === String(c.id) ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}
-        </select>
+        <input class="form-control form-control-sm" id="billOwnerQ" list="billOwnerList" placeholder="搜索企业"
+          value="${esc(curName)}" autocomplete="off"
+          oninput="billOwnerInput(this)" onchange="billOwnerPick()">
+        <datalist id="billOwnerList">
+          ${companies.map(c => `<option value="${esc(c.name)}">`).join('')}
+        </datalist>
       </div>`;
   }
 
@@ -3945,7 +3960,7 @@ async function renderAppConfig(){
             <select class="form-select" id="cfgLoginDefault">
               <option value="rental" ${cfg.login_default === 'rental' ? 'selected' : ''}>租房系统</option>
               <option value="hotel" ${cfg.login_default === 'hotel' ? 'selected' : ''}>酒店系统</option>
-              <option value="property" ${cfg.login_default === 'property' ? 'selected' : ''}>物业系统</option>
+              <option value="property" ${cfg.login_default === 'property' ? 'selected' : ''}>物业综合管理系统</option>
               <option value="super" ${cfg.login_default === 'super' ? 'selected' : ''}>超级管理员</option>
             </select>
           </div>
