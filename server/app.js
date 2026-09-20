@@ -2212,7 +2212,7 @@ router.post('/bills', auth, h(async (req, res) => {
   const period_start = v.date('period_start', { required: true });
   const period_end = v.date('period_end', { required: true });
   const due_date = v.date('due_date', { def: today() });
-  const amount = v.num('amount', { required: true, min: 0, max: 1e12 });
+  const amount = v.num('amount', { required: true, min: 0.01, max: 1e12 });
   const remark = v.str('remark', { max: 500 });
   v.ok();
   if (!(await ownRoomCheck(req, room_id))) return res.status(403).json({ error: '仅可为本企业房产添加账单' });
@@ -2260,7 +2260,7 @@ router.post('/bills', auth, h(async (req, res) => {
 router.post('/bills/:id/pay', auth, h(async (req, res) => {
   const B = req.body || {};
   const v = V(B);
-  const amt = v.num('amount', { required: true, min: 0, max: 1e12 });
+  const amt = v.num('amount', { required: true, min: 0.01, max: 10000000 });
   const pay_date = v.date('pay_date', { def: today() });
   const pay_method = v.str('pay_method', { max: 30 });
   v.ok();
