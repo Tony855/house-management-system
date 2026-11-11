@@ -243,3 +243,11 @@ The CI legacy MariaDB integration now creates an ephemeral tenant database, clon
 - `services/platform-api/admin-auth-dependencies.js` now composes the platform DB auth/MFA stores, KMS encryption adapter, recovery pepper, login limiter and separate signing/verification key providers. Its output can be passed directly to `createPlatformApi({ pool, adminAuthService })`.
 - Tests cover platform-only limiter identity, limiter DB outage fail-closed behavior, MFA infrastructure outage handling, dependency composition and route mounting.
 - Still not production-ready until actual KMS/HSM and key rotation, first-admin bootstrap, MFA enrollment/recovery administration, cookie/CSRF policy, deployed rate-limit secret, live MariaDB auth concurrency tests and independent security review are complete.
+
+
+### Explicit Super Admin step-up MFA boundary
+- Initial login MFA and sensitive-operation step-up now use separate session timestamps.
+- A successful login MFA may establish an authenticated session but does not authorize plan, tenant, billing or other write operations requiring step-up.
+- The explicit `/api/platform/auth/step-up` flow records `last_step_up_at`; authorization accepts write scopes only while that independent timestamp is fresh.
+- Migration 010 adds the nullable step-up timestamp to existing platform admin sessions.
+- Unit, store, route authorization and MariaDB migration checks cover the distinction.
