@@ -13,6 +13,7 @@ class TenantPoolManager {
     this.now = now;
     this.entries = new Map();
     this.pending = new Map();
+    this.tenantEpoch = new Map();
   }
 
   _key(context) {
@@ -49,14 +50,22 @@ class TenantPoolManager {
       this.entries.set(key, entry);
       return entry.pool;
     }
-    if (this.pending.has(key)) return this.pending.get(key);
-    const pending = this._createPool(context, key);
+    if (this.pending.has(key)) return this.pending.get(key).promise;
+    // A changed password produces a new key; retire older pools for this tenant immediately.
+    for (const [oldKey, oldEntry] of this.entries) {
+      if (oldEntry.tenantId === context.tenantId && oldKey !== key) {
+        this.entries.delete(oldKey);
+        await this._close(oldEntry);
+      }
+    }
+    const epoch = this.tenantEpoch.get(context.tenantId) || 0;
+    const pending = { tenantId: context.tenantId, promise: null };
+    pending.promise = this._createPool(context, key, epoch).finally(() => this.pending.delete(key));
     this.pending.set(key, pending);
-    try { return await pending; }
-    finally { this.pending.delete(key); }
+    return pending.promise;
   }
 
-  async _createPool(context, key) {
+  async _createPool(context, key, epoch) {
     while (this.entries.size >= this.maxPools) {
       const oldestKey = this.entries.keys().next().value;
       const oldest = this.entries.get(oldestKey);
@@ -75,17 +84,24 @@ class TenantPoolManager {
       connectionLimit: 5,
       queueLimit: 50
     });
+    if ((this.tenantEpoch.get(context.tenantId) || 0) !== epoch) {
+      await this._close({ pool });
+      throw new Error('TENANT_POOL_INVALIDATED');
+    }
     this.entries.set(key, { pool, lastUsedAt: this.now(), tenantId: context.tenantId });
     return pool;
   }
 
   async closeTenant(tenantId) {
+    this.tenantEpoch.set(tenantId, (this.tenantEpoch.get(tenantId) || 0) + 1);
+    const pending = [...this.pending.values()].filter(item => item.tenantId === tenantId);
     for (const [key, entry] of this.entries) {
       if (entry.tenantId === tenantId) {
         this.entries.delete(key);
         await this._close(entry);
       }
     }
+    await Promise.all(pending.map(item => item.promise.catch(() => {})));
   }
 
   async closeAll() {
