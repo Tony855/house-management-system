@@ -21,6 +21,7 @@ export MYSQL_PWD="$DB_PASSWORD"
 "${mysql_cmd[@]}" "$DB_NAME" < "$ROOT_DIR/db/migrations/platform/007_platform_admin_mfa.sql"
 "${mysql_cmd[@]}" "$DB_NAME" < "$ROOT_DIR/db/migrations/platform/008_platform_admin_auth.sql"
 "${mysql_cmd[@]}" "$DB_NAME" < "$ROOT_DIR/db/migrations/platform/009_platform_admin_login_rate_limit.sql"
+"${mysql_cmd[@]}" "$DB_NAME" < "$ROOT_DIR/db/migrations/platform/010_platform_admin_step_up_mfa.sql"
 
 expected_tables=11
 actual_tables="$("${mysql_cmd[@]}" -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '$DB_NAME' AND table_type = 'BASE TABLE' AND table_name IN ('platform_billing_accounts','platform_products','platform_plans','platform_subscriptions','platform_invoices','platform_invoice_lines','platform_payment_transactions','platform_payment_webhook_events','platform_refunds','platform_ledger_entries','platform_billing_audit')")"
@@ -103,3 +104,11 @@ if [[ "$platform_login_app_enum" != *"platform"* ]]; then
   echo "Platform administrator rate-limit namespace was not installed" >&2
   exit 1
 fi
+
+
+step_up_column="$("${mysql_cmd[@]}" -e "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = '$DB_NAME' AND table_name = 'platform_admin_sessions' AND column_name = 'last_step_up_at' AND is_nullable = 'YES'")"
+if [[ "$step_up_column" != "1" ]]; then
+  echo "Separate platform administrator step-up MFA timestamp was not installed" >&2
+  exit 1
+fi
+echo "Platform administrator step-up MFA schema verified."
