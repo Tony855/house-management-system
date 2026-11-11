@@ -11,8 +11,9 @@ const apps = [
 test('four independent portal entrypoints have distinct app and session boundaries', () => {
   const seen = new Set();
   for (const [app, cookie] of apps) {
-    const html = fs.readFileSync('apps/' + app + '-web/index.html', 'utf8');
-    const js = fs.readFileSync('apps/' + app + '-web/portal.js', 'utf8');
+    const dir = app === 'platform' ? 'super-admin' : app;
+    const html = fs.readFileSync('apps/' + dir + '-web/index.html', 'utf8');
+    const js = fs.readFileSync('apps/' + dir + '-web/portal.js', 'utf8');
     assert.match(html, new RegExp('data-app-id="' + app + '"'));
     assert.match(html, new RegExp('data-session-cookie="' + cookie + '"'));
     assert.match(html, /type="module"/);
