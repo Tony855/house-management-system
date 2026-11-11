@@ -5,6 +5,15 @@
 就是一个**经营主体（租户 org）**，同一系统内可有多个主体，彼此的业务数据、
 系统设置（币种/汇率/单价）、角色与员工**完全独立、互不可见**。
 
+> **生产部署安全提示：** 请使用 [安全一键安装与部署说明](docs/DEPLOYMENT.md)。当前 `deploy.sh` 仅支持全新安装；发现任意旧数据库就会停止，绝不覆盖已有数据。不要在生产环境执行 `db/init.sh`（它会 DROP 并重建数据库）。安装器会生成随机初始化密码并保存到 root-only 凭据文件。当前运行时仍是旧共享数据库架构，尚未完成 database-per-tenant 隔离。
+
+
+## 架构重构文档
+
+- [独立应用与 API 边界](docs/INDEPENDENT_SERVICES.md)
+- [前端架构与设计规范](docs/FRONTEND_ARCHITECTURE.md)
+- [平台计费设计](docs/PLATFORM_BILLING.md)
+
 ## 角色与职责
 
 | 角色 | 入口 | 职责 |
@@ -89,7 +98,7 @@
 | 层 | 技术 |
 |---|---|
 | 前端 | 原生 HTML/CSS/JS + Bootstrap 5（静态文件，无构建） |
-| 后端 | Node.js 20 + Express 4 |
+| 后端 | Node.js 24 + Express 5 |
 | 数据库 | MariaDB（mysql2/promise 连接池，utf8mb4） |
 | 认证 | 服务端 token 会话表 + scrypt 加盐哈希 |
 | 多租户隔离 | 所有业务表带 `org_id` 行级归属；会话经 AsyncLocalStorage 注入 `mode/orgId` |
@@ -130,7 +139,7 @@ npm start            # 访问 http://localhost:16088
 - 默认端口 **16088**，可用环境变量 `PORT` 覆盖；数据库连接可用
   `DB_HOST / DB_PORT / DB_USER / DB_PASSWORD` 覆盖（默认 127.0.0.1:3306、root、空密码）。
 - **重建库前先停掉正在运行的 node 服务**，否则其连接池会阻塞 `DROP DATABASE`。
-- 首次安装默认超管账号：**`superadmin / super123`**。
+- 开发环境种子默认超管账号：**`superadmin / super123`**。生产一键安装会覆盖为随机密码，并写入 root-only 凭据文件。
 - core 种子内置账号（业务数据为空）：
 
 | 账号 | 密码 | 身份 | 入口 |
@@ -149,8 +158,8 @@ npm start            # 访问 http://localhost:16088
 
 ```bash
 npm start                 # 启动服务
-bash db/init.sh           # 重建库表 + core 干净种子（业务为空）
-bash db/init.sh demo      # 重建库表 + 三系统演示业务数据
+bash db/init.sh           # 仅限开发/测试：DROP 并重建库表 + core 种子（严禁生产）
+bash db/init.sh demo      # 仅限开发/测试：重建库表 + 三系统演示业务数据
 node server/seed.js core  # 仅补账号体系（库已有账号时跳过）
 node server/seed.js       # 补账号 + 演示业务（库已有账号时跳过）
 node db/test_api.js       # 多租户 API 端到端测试（需服务已启动，自动清理临时数据）

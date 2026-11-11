@@ -1,142 +1,155 @@
 #!/usr/bin/env bash
-# ==================================================================
-# 房屋管理系统 · Ubuntu 一键全自动部署脚本
-# 适用：Ubuntu 20.04 / 22.04 / 24.04（apt 系）
-# 功能：自动安装 Node.js LTS + MariaDB → 建库建表 → 写入账号体系
-#       → 创建专用数据库账号（随机密码）→ 注册 systemd 服务 → 放行防火墙
-# 用法：
-#   sudo bash deploy.sh              # 默认端口 16088
-#   sudo bash deploy.sh --port 8080  # 自定义端口
-#   sudo bash deploy.sh --force      # 库中已有数据时仍强制重建（危险！会清空业务数据）
-# ==================================================================
-set -euo pipefail
-
-PORT=16088
-FORCE=0
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --port)  PORT="$2"; shift 2 ;;
-    --force) FORCE=1; shift ;;
-    *) echo "未知参数: $1（仅支持 --port <端口> 与 --force）"; exit 1 ;;
-  esac
-done
-
-APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Safe first-install script for the legacy shared-database runtime.
+set -Eeuo pipefail
+umask 077
+APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 SERVICE=house-sys
 ENV_FILE=/etc/house-sys.env
-DB_USER=house
-DB_PASS="$(openssl rand -hex 16)"
-
-# ---------- 0. root 权限检查 ----------
-if [[ $EUID -ne 0 ]]; then
-  echo "✗ 需要 root 权限，请执行：sudo bash deploy.sh"
-  exit 1
-fi
-
-echo "========== 房屋管理系统 · Ubuntu 一键部署 =========="
-echo "项目目录: $APP_DIR    端口: $PORT"
-
-# ---------- 1. 安装 Node.js（NodeSource 官方源 LTS 20） ----------
-echo "== [1/8] 检查/安装 Node.js =="
-if ! command -v node >/dev/null 2>&1; then
-  apt-get update -y
-  curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
-  apt-get install -y nodejs
-fi
-echo "Node: $(node -v)   npm: $(npm -v)"
-
-# ---------- 2. 安装并启动 MariaDB ----------
-echo "== [2/8] 检查/安装 MariaDB =="
-if ! command -v mariadb >/dev/null 2>&1 && ! command -v mysql >/dev/null 2>&1; then
-  apt-get update -y
-  apt-get install -y mariadb-server
-fi
-systemctl enable --now mariadb >/dev/null 2>&1 || service mariadb start
-
-# ---------- 3. 安装项目依赖 ----------
-echo "== [3/8] 安装项目依赖 =="
-cd "$APP_DIR"
-npm install --no-audit --no-fund
-
-# ---------- 4. 初始化数据库 ----------
-echo "== [4/8] 初始化数据库（建库建表） =="
-# 安全保护：库中已有数据时中止（除非 --force）
-EXISTING=$(mysql -uroot -N -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='house_sys' AND table_name='users'" 2>/dev/null || echo 0)
-if [[ "$EXISTING" != "0" ]]; then
-  USERS=$(mysql -uroot -N -e "SELECT COUNT(*) FROM house_sys.users" 2>/dev/null || echo 0)
-  if [[ "$USERS" != "0" && "$FORCE" != "1" ]]; then
-    echo "✗ 检测到 house_sys.users 已有 $USERS 条数据，为避免误清业务数据已中止。"
-    echo "  确认要重建请执行：sudo bash deploy.sh --force"
-    exit 1
-  fi
-fi
-mysql -uroot < db/schema.sql
-echo "数据库表结构已重建（house_sys + rental/hotel/property）"
-
-# ---------- 5. 创建专用数据库账号（随机密码，仅本机访问） ----------
-echo "== [5/8] 创建数据库专用账号 =="
-mysql -uroot <<SQL
-CREATE USER IF NOT EXISTS '${DB_USER}'@'127.0.0.1' IDENTIFIED BY '${DB_PASS}';
-CREATE USER IF NOT EXISTS '${DB_USER}'@'localhost' IDENTIFIED BY '${DB_PASS}';
-GRANT ALL PRIVILEGES ON house_sys.*           TO '${DB_USER}'@'127.0.0.1';
-GRANT ALL PRIVILEGES ON house_sys_rental.*    TO '${DB_USER}'@'127.0.0.1';
-GRANT ALL PRIVILEGES ON house_sys_hotel.*     TO '${DB_USER}'@'127.0.0.1';
-GRANT ALL PRIVILEGES ON house_sys_property.*  TO '${DB_USER}'@'127.0.0.1';
-GRANT ALL PRIVILEGES ON house_sys.*           TO '${DB_USER}'@'localhost';
-GRANT ALL PRIVILEGES ON house_sys_rental.*    TO '${DB_USER}'@'localhost';
-GRANT ALL PRIVILEGES ON house_sys_hotel.*     TO '${DB_USER}'@'localhost';
-GRANT ALL PRIVILEGES ON house_sys_property.*  TO '${DB_USER}'@'localhost';
-FLUSH PRIVILEGES;
-SQL
-echo "数据库账号 ${DB_USER} 已创建（随机密码已生成）"
-
-# ---------- 6. 写入账号体系（超管 superadmin/super123） ----------
-echo "== [6/8] 写入账号体系 =="
-DB_HOST=127.0.0.1 DB_USER=$DB_USER DB_PASSWORD=$DB_PASS node server/seed.js core
-
-# ---------- 7. 写入服务配置并注册 systemd ----------
-echo "== [7/8] 写入服务配置并注册 systemd 服务 =="
-cat > "$ENV_FILE" <<EOF
+PORT=16088
 DB_HOST=127.0.0.1
 DB_PORT=3306
+DRY_RUN=0
+NON_INTERACTIVE=0
+SKIP_FIREWALL=0
+usage(){ echo "Usage: sudo bash deploy.sh [--port N] [--db-host HOST] [--db-port N] [--non-interactive] [--skip-firewall] [--dry-run]"; }
+die(){ echo "ERROR: $*" >&2; exit 1; }
+while [ "$#" -gt 0 ]; do
+ case "$1" in
+  --port) [ "$#" -ge 2 ] || die "--port needs a value"; PORT="$2"; shift 2;;
+  --db-host) [ "$#" -ge 2 ] || die "--db-host needs a value"; DB_HOST="$2"; shift 2;;
+  --db-port) [ "$#" -ge 2 ] || die "--db-port needs a value"; DB_PORT="$2"; shift 2;;
+  --non-interactive) NON_INTERACTIVE=1; shift;;
+  --skip-firewall) SKIP_FIREWALL=1; shift;;
+  --dry-run) DRY_RUN=1; shift;;
+  -h|--help) usage; exit 0;;
+  *) die "Unknown option: $1";;
+ esac
+done
+case "$PORT" in ''|*[!0-9]*) die "Invalid port";; esac
+[ "$PORT" -ge 1 ] && [ "$PORT" -le 65535 ] || die "Port out of range"
+case "$DB_PORT" in ''|*[!0-9]*) die "Invalid DB port";; esac
+[ "$DB_PORT" -ge 1 ] && [ "$DB_PORT" -le 65535 ] || die "DB port out of range"
+case "$DB_HOST" in *[!A-Za-z0-9._:-]*|'') die "Invalid DB host";; esac
+[ -f "$APP_DIR/package-lock.json" ] && [ -f "$APP_DIR/db/schema.sql" ] && [ -f "$APP_DIR/server/seed.js" ] || die "Incomplete checkout"
+[ "$EUID" -eq 0 ] || die "Run with sudo"
+. /etc/os-release
+case "$ID" in ubuntu|debian) ;; *) die "Ubuntu/Debian only";; esac
+if [ "$DRY_RUN" -eq 1 ]; then
+ echo "Dry-run OK: app=$APP_DIR port=$PORT database=$DB_HOST:$DB_PORT"
+ echo "No files, services or databases changed."
+ exit 0
+fi
+mkdir -p /run/lock
+exec 9>/run/lock/house-sys-deploy.lock
+flock -n 9 || die "Another deployment is running"
+if [ "$NON_INTERACTIVE" -eq 0 ]; then
+ echo "WARNING: first install only. This initializes legacy shared databases."
+ echo "Existing databases are never overwritten. This is NOT database-per-tenant."
+ read -r -p "Continue? [y/N] " answer
+ [ "$answer" = y ] || [ "$answer" = Y ] || die "Cancelled"
+fi
+export DEBIAN_FRONTEND=noninteractive
+apt-get update
+apt-get install -y ca-certificates curl gnupg mariadb-server ufw
+if ! command -v node >/dev/null 2>&1 || [ "$(node -p 'Number(process.versions.node.split(".")[0])')" -lt 24 ] || [ "$(node -p 'Number(process.versions.node.split(".")[0])')" -ge 27 ]; then
+ curl -fsSL https://deb.nodesource.com/setup_24.x | bash -
+ apt-get install -y nodejs
+fi
+systemctl enable --now mariadb
+MYSQL="mariadb --protocol=socket --user=root"
+$MYSQL -Nse 'SELECT VERSION()' >/dev/null || die "MariaDB root socket login failed"
+for database in house_sys house_sys_rental house_sys_hotel house_sys_property; do
+ exists=$($MYSQL -Nse "SELECT COUNT(*) FROM information_schema.schemata WHERE schema_name='$database'")
+ [ "$exists" = 0 ] || die "Database $database already exists; refusing destructive db/schema.sql import"
+done
+cd "$APP_DIR"
+npm ci --omit=dev --no-audit --no-fund
+$MYSQL < db/schema.sql
+DB_USER=house_sys_app
+DB_PASS="$(openssl rand -hex 32)"
+BOOTSTRAP_SUPER="$(openssl rand -hex 24)"
+BOOTSTRAP_RENTAL="$(openssl rand -hex 24)"
+BOOTSTRAP_HOTEL="$(openssl rand -hex 24)"
+BOOTSTRAP_PROPERTY="$(openssl rand -hex 24)"
+BOOTSTRAP_STAFF="$(openssl rand -hex 24)"
+BOOTSTRAP_PROPERTY_STAFF="$(openssl rand -hex 24)"
+$MYSQL <<SQL
+CREATE USER '$DB_USER'@'127.0.0.1' IDENTIFIED BY '$DB_PASS';
+GRANT SELECT, INSERT, UPDATE, DELETE ON house_sys.* TO '$DB_USER'@'127.0.0.1';
+GRANT SELECT, INSERT, UPDATE, DELETE ON house_sys_rental.* TO '$DB_USER'@'127.0.0.1';
+GRANT SELECT, INSERT, UPDATE, DELETE ON house_sys_hotel.* TO '$DB_USER'@'127.0.0.1';
+GRANT SELECT, INSERT, UPDATE, DELETE ON house_sys_property.* TO '$DB_USER'@'127.0.0.1';
+FLUSH PRIVILEGES;
+SQL
+HOUSE_SYS_SUPERADMIN_PASSWORD="$BOOTSTRAP_SUPER" HOUSE_SYS_RENTAL_ADMIN_PASSWORD="$BOOTSTRAP_RENTAL" HOUSE_SYS_HOTEL_ADMIN_PASSWORD="$BOOTSTRAP_HOTEL" HOUSE_SYS_PROPERTY_ADMIN_PASSWORD="$BOOTSTRAP_PROPERTY" HOUSE_SYS_RENTAL_STAFF_PASSWORD="$BOOTSTRAP_STAFF" HOUSE_SYS_PROPERTY_STAFF_PASSWORD="$BOOTSTRAP_PROPERTY_STAFF" DB_HOST="$DB_HOST" DB_PORT="$DB_PORT" DB_USER="$DB_USER" DB_PASSWORD="$DB_PASS" node server/seed.js core
+if ! id house-sys >/dev/null 2>&1; then useradd --system --home-dir "$APP_DIR" --no-create-home --shell /usr/sbin/nologin house-sys; fi
+install -d -o house-sys -g house-sys -m 0750 "$APP_DIR/uploads"
+TMP_ENV="$(mktemp /etc/house-sys.env.XXXXXX)"
+cat > "$TMP_ENV" <<EOF
+NODE_ENV=production
+DB_HOST=$DB_HOST
+DB_PORT=$DB_PORT
 DB_USER=$DB_USER
 DB_PASSWORD=$DB_PASS
 PORT=$PORT
 EOF
-chmod 600 "$ENV_FILE"
-
-cat > /etc/systemd/system/${SERVICE}.service <<EOF
+chown root:root "$TMP_ENV"; chmod 0600 "$TMP_ENV"; mv "$TMP_ENV" "$ENV_FILE"
+NODE_BIN="$(command -v node)"
+cat > "/etc/systemd/system/$SERVICE.service" <<EOF
 [Unit]
-Description=House Management System
-After=network.target mariadb.service
-
+Description=House Management System (legacy shared DB)
+After=network-online.target mariadb.service
+Requires=mariadb.service
 [Service]
 Type=simple
+User=house-sys
+Group=house-sys
 WorkingDirectory=$APP_DIR
-ExecStart=/usr/bin/node server/app.js
 EnvironmentFile=$ENV_FILE
-Restart=always
-RestartSec=3
-
+ExecStart=$NODE_BIN $APP_DIR/server/app.js
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=$APP_DIR/uploads
+LockPersonality=true
+RestrictSUIDSGID=true
+CapabilityBoundingSet=
+AmbientCapabilities=
 [Install]
 WantedBy=multi-user.target
 EOF
 systemctl daemon-reload
-systemctl enable --now ${SERVICE} >/dev/null 2>&1 || service ${SERVICE} start
-sleep 2
-
-# ---------- 8. 防火墙放行 ----------
-echo "== [8/8] 防火墙放行 =="
-if command -v ufw >/dev/null 2>&1; then
-  ufw allow ${PORT}/tcp >/dev/null 2>&1 || true
-  ufw reload >/dev/null 2>&1 || true
-fi
-
-# ---------- 完成 ----------
-echo ""
-echo "========== 部署完成 ✓ =========="
-echo "访问地址 : http://<服务器IP>:${PORT}"
-echo "超级管理员 : superadmin / super123"
-echo "数据库账号 : ${DB_USER}（密码已写入 ${ENV_FILE}，权限 600）"
-echo "服务管理 : systemctl {status|restart|stop} house-sys"
-echo "日志查看 : journalctl -u house-sys -f"
+systemctl enable --now "$SERVICE"
+systemctl restart "$SERVICE"
+if [ "$SKIP_FIREWALL" -eq 0 ] && command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: active'; then ufw allow "$PORT/tcp"; fi
+ready=0
+for attempt in $(seq 1 20); do
+ if timeout 1 bash -c ":</dev/tcp/127.0.0.1/$PORT" 2>/dev/null; then ready=1; break; fi
+ sleep 1
+done
+[ "$ready" -eq 1 ] || { journalctl -u "$SERVICE" -n 60 --no-pager >&2 || true; die "Service failed to listen"; }
+CREDENTIAL_FILE=/root/house-sys-bootstrap-credentials.txt
+cat > "$CREDENTIAL_FILE" <<EOF
+Super Admin: superadmin
+Super Admin password: $BOOTSTRAP_SUPER
+Rental Admin: admin_r
+Rental Admin password: $BOOTSTRAP_RENTAL
+Hotel Admin: admin_h
+Hotel Admin password: $BOOTSTRAP_HOTEL
+Property Admin: admin_p
+Property Admin password: $BOOTSTRAP_PROPERTY
+Rental Staff: staff
+Rental Staff password: $BOOTSTRAP_STAFF
+Property Staff: wy
+Property Staff password: $BOOTSTRAP_PROPERTY_STAFF
+Change passwords after first login. Store securely, then delete this file.
+EOF
+chmod 0600 "$CREDENTIAL_FILE"
+unset DB_PASS BOOTSTRAP_SUPER BOOTSTRAP_RENTAL BOOTSTRAP_HOTEL BOOTSTRAP_PROPERTY BOOTSTRAP_STAFF BOOTSTRAP_PROPERTY_STAFF
+echo "Install complete: http://<server-ip>:$PORT"
+echo "Bootstrap credentials stored in $CREDENTIAL_FILE (root-only)."
+echo "This remains the legacy shared-database runtime, not database-per-tenant."

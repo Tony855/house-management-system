@@ -11,8 +11,13 @@ const { hashPassword, today, nowStr, addDays, addMonths } = require('./util');
 
 const MODES = ['rental', 'hotel', 'property'];
 const ORG_NAMES = { rental: '租房', hotel: '酒店', property: '物业' };
-const ADMIN = { rental: ['admin_r', 'admin_r123', '租房管理员'], hotel: ['admin_h', 'admin_h123', '酒店管理员'],
-  property: ['admin_p', 'admin_p123', '物业管理员'] };
+const ADMIN = { rental: ['admin_r', process.env.HOUSE_SYS_RENTAL_ADMIN_PASSWORD || 'admin_r123', '租房管理员'], hotel: ['admin_h', process.env.HOUSE_SYS_HOTEL_ADMIN_PASSWORD || 'admin_h123', '酒店管理员'],
+  property: ['admin_p', process.env.HOUSE_SYS_PROPERTY_ADMIN_PASSWORD || 'admin_p123', '物业管理员'] };
+const BOOTSTRAP_PASSWORDS = {
+  superadmin: process.env.HOUSE_SYS_SUPERADMIN_PASSWORD || 'super123',
+  staff: process.env.HOUSE_SYS_RENTAL_STAFF_PASSWORD || 'staff123',
+  wy: process.env.HOUSE_SYS_PROPERTY_STAFF_PASSWORD || 'wy123'
+};
 
 async function seedShared() {
   const [[{ c }]] = await shared.query('SELECT COUNT(*) AS c FROM users');
@@ -70,12 +75,12 @@ async function seedShared() {
 
     /* 超管 + 三系统主管理员 + 两员工 */
     const users = [
-      ['superadmin', 'super123', '超级管理员', 'super', null, null],
+      ['superadmin', BOOTSTRAP_PASSWORDS.superadmin, '超级管理员', 'super', null, null],
       ['admin_r', 'admin_r123', '租房管理员', 'admin', 'rental', orgIds.rental],
       ['admin_h', 'admin_h123', '酒店管理员', 'admin', 'hotel', orgIds.hotel],
       ['admin_p', 'admin_p123', '物业管理员', 'admin', 'property', orgIds.property],
-      ['staff', 'staff123', '前台小王', 'staff', 'rental', orgIds.rental],
-      ['wy', 'wy123', '物业老李', 'staff', 'property', orgIds.property]
+      ['staff', BOOTSTRAP_PASSWORDS.staff, '前台小王', 'staff', 'rental', orgIds.rental],
+      ['wy', BOOTSTRAP_PASSWORDS.wy, '物业老李', 'staff', 'property', orgIds.property]
     ];
     const ids = {};
     for (const [u, p, n, r, m, o] of users) {

@@ -1,0 +1,92 @@
+{
+  "platformDatabase": "platform_control",
+  "platformTables": [
+    "platform_admins",
+    "platform_tenants",
+    "platform_provisioning_events",
+    "platform_billing_accounts",
+    "platform_products",
+    "platform_plans",
+    "platform_subscriptions",
+    "platform_invoices",
+    "platform_invoice_lines",
+    "platform_payment_transactions",
+    "platform_payment_webhook_events",
+    "platform_refunds",
+    "platform_ledger_entries",
+    "platform_billing_audit",
+    "platform_product_sessions",
+    "platform_tenant_login_hosts"
+  ],
+  "legacySharedDatabase": {
+    "house_sys": {
+      "platformOwned": [
+        "usage_fee_config",
+        "app_config",
+        "usage_fee_payments"
+      ],
+      "tenantOwnedSplitByOrg": [
+        "users",
+        "roles",
+        "settings",
+        "sessions",
+        "user_permissions",
+        "role_permissions"
+      ],
+      "tenantDirectorySource": [
+        "orgs"
+      ]
+    }
+  },
+  "products": {
+    "rental": [
+      "buildings",
+      "rooms",
+      "tenants",
+      "contracts",
+      "meters",
+      "room_net_lines",
+      "net_changes",
+      "net_requests",
+      "bills",
+      "repairs"
+    ],
+    "hotel": [
+      "buildings",
+      "rooms",
+      "tenants",
+      "orders",
+      "bills",
+      "repairs"
+    ],
+    "property": [
+      "buildings",
+      "rooms",
+      "tenants",
+      "org_employees",
+      "meters",
+      "room_net_lines",
+      "net_changes",
+      "net_requests",
+      "bills",
+      "repairs",
+      "complaints"
+    ]
+  },
+  "migrationRules": {
+    "tenantBoundary": "one database per tenant, one database principal per tenant",
+    "orgId": "remove org_id from destination tenant tables only after source filtering and reconciliation",
+    "sessions": "never copy legacy sessions; revoke all and require fresh login through platform_product_sessions",
+    "userIdentity": "copy users for source org and product; include referenced tenant roles and global defaults; merge effective role permissions; never globally deduplicate",
+    "platformIdentity": "extract only verified super-admin accounts to platform_admins",
+    "files": "copy each org upload tree into tenant-specific storage and verify checksums",
+    "legacyCutover": "expand-copy-verify-switch-contract; no uncontrolled dual writes"
+  },
+  "tenantIdentityTables": [
+    "users",
+    "roles",
+    "settings",
+    "user_permissions",
+    "role_permissions"
+  ]
+}
