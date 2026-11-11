@@ -44,6 +44,16 @@ function createPlatformAdminMfaStore(pool) {
       const connection = await pool.getConnection();
       try {
         await connection.beginTransaction();
+        const [pendingRows] = await connection.query(
+          'SELECT encrypted_secret FROM platform_admin_mfa_enrollments WHERE admin_id = ? AND expires_at > UTC_TIMESTAMP() FOR UPDATE',
+          [adminId]
+        );
+        if (!pendingRows[0] ||
+            JSON.stringify(parseEnvelope(pendingRows[0].encrypted_secret)) !== JSON.stringify(encryptedSecret)) {
+          throw Object.assign(new Error('PLATFORM_MFA_ENROLLMENT_CONFLICT'), {
+            code: 'PLATFORM_MFA_ENROLLMENT_CONFLICT', status: 409
+          });
+        }
         await connection.query(
           'INSERT INTO platform_admin_mfa_factors (admin_id, encrypted_secret, enabled, last_totp_counter) VALUES (?, ?, 1, ?) ' +
           'ON DUPLICATE KEY UPDATE encrypted_secret = VALUES(encrypted_secret), enabled = 1, last_totp_counter = VALUES(last_totp_counter)',
