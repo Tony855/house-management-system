@@ -60,3 +60,21 @@ test('product login composition refuses to enable login without a dedicated limi
     signingKeyProvider: { getSigningKey: async () => ({ kid: 'v1', key: '0123456789abcdef0123456789abcdef' }) }
   }), /LOGIN_RATE_LIMIT_HMAC_KEY_REQUIRED/);
 });
+
+test('product dependencies enable tenant writes only with explicit authorization and step-up verifiers', () => {
+  const pool = { query: async () => [[], []] };
+  const base = {
+    appId: 'rental', issuer: 'https://auth.example.test', platformPool: pool,
+    secretManager: { getSecret: async () => ({ user: 'tenant', password: 'secret' }) },
+    keyProvider: { getVerificationKey: async () => '0123456789abcdef0123456789abcdef' },
+    poolManager: { getPool: async () => ({}) }
+  };
+  assert.throws(() => createProductControlPlaneDependencies({
+    ...base, writeSecurity: { authorize: async () => true }
+  }), /PRODUCT_WRITE_SECURITY_DEPENDENCIES_REQUIRED/);
+  const dependencies = createProductControlPlaneDependencies({
+    ...base,
+    writeSecurity: { authorize: async () => true, verifyStepUp: async () => true }
+  });
+  assert.equal(typeof dependencies.writeService.execute, 'function');
+});
