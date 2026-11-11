@@ -3,7 +3,7 @@
 ## Current transition state
 The existing product UI began as one HTML document containing the application script and inline styling. This change establishes an asset boundary without pretending the four portals are already independent:
 - `public/index.html`: minimal HTML shell and vendor asset references.
-- `public/app.js`: extracted legacy application runtime. It still contains legacy routing, API calls and view renderers; it is not yet four portal bundles.
+- `public/js/00-core.js` through `public/js/90-bootstrap.js`: nine ordered feature scripts for shared utilities/API, auth, dashboard, rooms, people, billing, operations, admin and startup. They are now separate cacheable assets, but still use the legacy shared global runtime and are not yet independent portal bundles.
 - `public/ui.css`: shared visual tokens and responsive shell overrides. Product-specific tokens must move into each portal as the split proceeds.
 
 ## UI principles
@@ -31,7 +31,7 @@ packages/
 ```
 
 ## Migration sequence
-1. Extract static shell, scripts and styles (this batch).
+1. Extract static shell, ordered feature scripts and styles (this batch).
 2. Characterize current views and API contracts with browser/API regression tests.
 3. Split app entrypoints and layouts one product at a time; keep separate auth audiences and API origins.
 4. Move product-specific screens into feature modules; remove legacy router only after route parity.
