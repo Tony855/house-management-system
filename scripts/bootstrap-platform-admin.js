@@ -31,7 +31,6 @@ function validateInput({ username, password, mfaEncryption, recoveryCodePepper }
 
 async function bootstrapFirstPlatformAdmin({
   pool, username, password, mfaEncryption, recoveryCodePepper,
-  now = () => Math.floor(Date.now() / 1000),
   randomBytes = crypto.randomBytes,
   passwordHasher = hashPassword
 }) {
@@ -87,8 +86,10 @@ async function bootstrapFirstPlatformAdmin({
       recoveryCodes = Array.from({ length: RECOVERY_CODE_COUNT }, () => {
         const raw = randomBytes(6);
         if (!Buffer.isBuffer(raw) || raw.length !== 6) throw new Error('PLATFORM_BOOTSTRAP_RANDOM_SOURCE_INVALID');
-        const value = raw.toString('hex').toUpperCase();
-        return value.slice(0, 4) + '-' + value.slice(4, 8) + '-' + value.slice(8, 12);
+        try {
+          const value = raw.toString('hex').toUpperCase();
+          return value.slice(0, 4) + '-' + value.slice(4, 8) + '-' + value.slice(8, 12);
+        } finally { raw.fill(0); }
       });
       const hashes = recoveryCodes.map(code => hashRecoveryCode(code, recoveryCodePepper));
       for (const codeHash of hashes) {
@@ -201,8 +202,7 @@ async function main() {
     process.stdout.write('Recovery codes (each is single-use):\n' + result.recoveryCodes.join('\n') + '\n');
     process.stdout.write('The TOTP secret and recovery codes will not be shown again.\n');
   } finally {
-    password.split('').forEach((_, index) => {});
-    if (typeof pool.end === 'function') await pool.end();
+      if (typeof pool.end === 'function') await pool.end();
   }
 }
 
