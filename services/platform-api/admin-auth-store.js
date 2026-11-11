@@ -127,7 +127,8 @@ function createPlatformAdminAuthStore(pool) {
     ,
     async disableAdmin({ actorAdminId, targetAdminId, sessionId }) {
       if (!Number.isSafeInteger(actorAdminId) || actorAdminId < 1 ||
-          !Number.isSafeInteger(targetAdminId) || targetAdminId < 1 || actorAdminId === targetAdminId ||\n          typeof sessionId !== 'string' || !/^[A-Za-z0-9._~-]{16,128}$/.test(sessionId)) return false;
+          !Number.isSafeInteger(targetAdminId) || targetAdminId < 1 || actorAdminId === targetAdminId ||
+          typeof sessionId !== 'string' || !/^[A-Za-z0-9._~-]{16,128}$/.test(sessionId)) return false;
       if (typeof pool.getConnection !== 'function') throw new TypeError('PLATFORM_ADMIN_TRANSACTION_REQUIRED');
       const connection = await pool.getConnection();
       try {
