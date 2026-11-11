@@ -63,11 +63,22 @@ function createPlatformBillingRouter({ repository, authenticate }) {
   });
   router.get('/tenants', authorize('tenants:read'), async (req, res, next) => {
     try {
-      res.json(await repository.listTenants({
+      const rows = await repository.listTenants({
         appId: ['rental', 'hotel', 'property'].includes(req.query.app) ? req.query.app : undefined,
         state: ['provisioning', 'provisioning_failed', 'active', 'suspended', 'deleting', 'deleted'].includes(req.query.state) ? req.query.state : undefined,
         limit: bounded(req.query.limit), offset: offset(req.query.offset)
-      }));
+      });
+      // Defense in depth: never serialize database routing or secret metadata,
+      // even if a repository implementation accidentally returns extra columns.
+      res.json(rows.map(row => ({
+        tenant_uuid: row.tenant_uuid,
+        app_id: row.app_id,
+        display_label: row.display_label,
+        lifecycle_state: row.lifecycle_state,
+        schema_version: row.schema_version,
+        created_at: row.created_at,
+        updated_at: row.updated_at
+      })));
     } catch (e) { next(e); }
   });
   router.get('/invoices', authorize('billing:read'), async (req, res, next) => {
