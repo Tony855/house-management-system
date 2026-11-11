@@ -60,7 +60,7 @@ class TenantPoolManager {
     }
     const epoch = this.tenantEpoch.get(context.tenantId) || 0;
     const pending = { tenantId: context.tenantId, promise: null };
-    pending.promise = this._createPool(context, key, epoch).finally(() => this.pending.delete(key));
+    pending.promise = Promise.resolve().then(() => this._createPool(context, key, epoch)).finally(() => this.pending.delete(key));
     this.pending.set(key, pending);
     return pending.promise;
   }
@@ -105,9 +105,14 @@ class TenantPoolManager {
   }
 
   async closeAll() {
+    const pending = Array.from(this.pending.values());
+    const tenantIds = new Set([...this.entries.values()].map(entry => entry.tenantId));
+    for (const item of pending) tenantIds.add(item.tenantId);
+    for (const tenantId of tenantIds) this.tenantEpoch.set(tenantId, (this.tenantEpoch.get(tenantId) || 0) + 1);
     const entries = Array.from(this.entries.values());
     this.entries.clear();
     await Promise.all(entries.map(entry => this._close(entry)));
+    await Promise.all(pending.map(item => item.promise.catch(() => {})));
   }
 
   get size() { return this.entries.size; }
