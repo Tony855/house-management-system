@@ -98,7 +98,7 @@ function createPlatformAuthRouter({ authService, mfaService, auditStore, adminSt
       if (!adminStore || typeof adminStore.disableAdmin !== 'function') {
         return next(Object.assign(new Error('PLATFORM_ADMIN_MANAGEMENT_UNAVAILABLE'), { code: 'PLATFORM_ADMIN_MANAGEMENT_UNAVAILABLE', status: 503 }));
       }
-      const disabled = await adminStore.disableAdmin({ actorAdminId: req.platformAuth.adminId, targetAdminId });
+      const disabled = await adminStore.disableAdmin({ actorAdminId: req.platformAuth.adminId, targetAdminId, sessionId: req.platformAuth.sessionId });
       if (disabled !== true) {
         return next(Object.assign(new Error('PLATFORM_ADMIN_DISABLE_REJECTED'), { code: 'PLATFORM_ADMIN_DISABLE_REJECTED', status: 409 }));
       }
