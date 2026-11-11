@@ -8,6 +8,7 @@ function assertPlatformAdmin(auth, permission, options = {}) {
   if (!auth || auth.authenticated !== true) fail('PLATFORM_AUTH_REQUIRED', 401);
   if (auth.audience !== 'platform' || auth.appId !== 'platform') fail('PLATFORM_AUDIENCE_MISMATCH', 403);
   if (auth.adminStatus !== 'active') fail('PLATFORM_ADMIN_INACTIVE', 403);
+  if (!Number.isSafeInteger(auth.adminId) || auth.adminId < 1) fail('PLATFORM_ADMIN_ID_REQUIRED', 403);
   if (auth.mfaVerified !== true) fail('PLATFORM_MFA_REQUIRED', 403);
   if (typeof permission !== 'string' || !permission || !Array.isArray(auth.permissions) || !auth.permissions.includes(permission)) {
     fail('PLATFORM_PERMISSION_DENIED', 403);
