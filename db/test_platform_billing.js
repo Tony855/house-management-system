@@ -37,7 +37,7 @@ test('refunds cannot exceed captured balance', () => {
 
 const { assertPlatformAdmin } = require('../services/platform-api/platform-authz');
 test('platform billing authorization requires platform audience, active admin, MFA and permission', () => {
-  const base = { authenticated: true, audience: 'platform', appId: 'platform', adminStatus: 'active', mfaVerified: true, permissions: ['billing:read'] };
+  const base = { authenticated: true, audience: 'platform', appId: 'platform', adminStatus: 'active', adminId: 1, mfaVerified: true, permissions: ['billing:read'] };
   assert.equal(assertPlatformAdmin(base, 'billing:read'), true);
   assert.throws(() => assertPlatformAdmin({ ...base, audience: 'rental' }, 'billing:read'), /PLATFORM_AUDIENCE_MISMATCH/);
   assert.throws(() => assertPlatformAdmin({ ...base, mfaVerified: false }, 'billing:read'), /PLATFORM_MFA_REQUIRED/);
