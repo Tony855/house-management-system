@@ -4,14 +4,14 @@ const assert = require('node:assert/strict');
 const { toMinorUnits, fromMinorUnits, assertTransition, invoiceTotalMinor, paymentIdempotencyKey, assertRefundWithinBalance } = require('../services/platform-api/billing-domain');
 test('money conversion is exact for USD, KHR and three-decimal currencies', () => {
   assert.equal(toMinorUnits('12.34', 'USD'), 1234);
-  assert.equal(toMinorUnits('1200', 'KHR'), 1200);
+  assert.equal(toMinorUnits('1200', 'KHR'), 120000);
   assert.equal(toMinorUnits('1.234', 'KWD'), 1234);
   assert.equal(fromMinorUnits(1234, 'USD'), '12.34');
-  assert.equal(fromMinorUnits(1200, 'KHR'), '1200');
+  assert.equal(fromMinorUnits(120000, 'KHR'), '1200.00');
 });
 test('money rejects invalid, negative, exponent and excessive precision inputs', () => {
   for (const value of ['-1', '1e3', '1.001', '01.00', 'NaN', '']) assert.throws(() => toMinorUnits(value, 'USD'));
-  assert.throws(() => toMinorUnits('1.1', 'KHR'), /BILLING_AMOUNT_PRECISION_INVALID/);
+  assert.throws(() => toMinorUnits('1.001', 'KHR'), /BILLING_AMOUNT_PRECISION_INVALID/);
 });
 test('invoice totals validate amounts and prevent discounts above subtotal', () => {
   assert.equal(invoiceTotalMinor({ subtotalMinor: 1000, discountMinor: 100, taxMinor: 72 }), 972);
