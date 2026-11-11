@@ -97,17 +97,31 @@ async function copyTenantOrgData({
     return { mode, appId, tenantId, sourceOrgId, manifest: normalized.manifest, copied: false, cutover: false };
   }
 
-  await targetWriter.importTenantSnapshot({ appId, tenantId, tables: normalized.tables });
-  const target = await targetReader.readTenantSnapshot({ appId, tenantId });
-  const targetNormalized = normalizeTargetSnapshot(appId, target);
-  if (!compareManifests(normalized.manifest, targetNormalized.manifest)) {
-    const error = new Error('TENANT_DATA_MIGRATION_RECONCILIATION_FAILED');
-    error.code = 'TENANT_DATA_MIGRATION_RECONCILIATION_FAILED';
-    await audit({ event: 'tenant_data_migration_reconciliation_failed', appId, tenantId, sourceOrgId });
+  try {
+    await targetWriter.importTenantSnapshot({ appId, tenantId, tables: normalized.tables });
+    const target = await targetReader.readTenantSnapshot({ appId, tenantId });
+    const targetNormalized = normalizeTargetSnapshot(appId, target);
+    if (!compareManifests(normalized.manifest, targetNormalized.manifest)) {
+      const error = new Error('TENANT_DATA_MIGRATION_RECONCILIATION_FAILED');
+      error.code = 'TENANT_DATA_MIGRATION_RECONCILIATION_FAILED';
+      throw error;
+    }
+    await audit({ event: 'tenant_data_migration_copy_verified', appId, tenantId, sourceOrgId, manifest: normalized.manifest });
+    return { mode, appId, tenantId, sourceOrgId, manifest: normalized.manifest, copied: true, cutover: false };
+  } catch (error) {
+    try {
+      await audit({
+        event: 'tenant_data_migration_copy_failed',
+        appId,
+        tenantId,
+        sourceOrgId,
+        code: /^[A-Z][A-Z0-9_]{1,63}$/.test(error.code || '') ? error.code : 'TENANT_DATA_MIGRATION_FAILED'
+      });
+    } catch (auditError) {
+      error.auditFailure = auditError.code || auditError.message || 'AUDIT_WRITE_FAILED';
+    }
     throw error;
   }
-  await audit({ event: 'tenant_data_migration_copy_verified', appId, tenantId, sourceOrgId, manifest: normalized.manifest });
-  return { mode, appId, tenantId, sourceOrgId, manifest: normalized.manifest, copied: true, cutover: false };
 }
 
 function normalizeTargetSnapshot(appId, snapshot) {
