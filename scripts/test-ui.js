@@ -1,0 +1,15 @@
+'use strict';
+const fs = require('fs');
+const assert = require('assert');
+const html = fs.readFileSync('public/index.html', 'utf8');
+const css = fs.readFileSync('public/ui.css', 'utf8');
+assert.match(html, /bootstrap@5\.3\.8\/dist\/css\/bootstrap\.min\.css/);
+assert.match(html, /bootstrap-icons@1\.13\.2\/font\/bootstrap-icons\.min\.css/);
+assert.match(html, /href="\/ui\.css"/);
+assert.ok(html.indexOf('href="/ui.css"') > html.indexOf('</style>'), 'theme stylesheet must load after legacy inline styles');
+assert.match(css, /--ui-primary:/);
+assert.match(css, /\.sidebar \.nav-link\.active/);
+assert.match(css, /@media \(max-width: 680px\)/);
+assert.match(css, /:focus-visible/);
+assert.match(css, /prefers-reduced-motion/);
+console.log('Frontend theme and accessibility smoke checks passed.');
