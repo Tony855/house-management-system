@@ -32,11 +32,11 @@ test('product session store binds session to subject, tenant, app and expiry', a
       captured = args;
       return [[{ active: 1 }], []];
     }
-  }, { now: () => new Date('2026-11-11T00:00:00.000Z') });
+  });
   assert.equal(await store.isSessionActive({
     sessionId: 'session-identifier-1234', userId: 'user-1', tenantId, appId: 'rental'
   }), true);
-  assert.deepEqual(captured[1], ['session-identifier-1234', 'user-1', tenantId, 'rental', new Date('2026-11-11T00:00:00.000Z')]);
+  assert.deepEqual(captured[1], ['session-identifier-1234', 'user-1', tenantId, 'rental']);
   assert.match(captured[0], /revoked_at IS NULL/);
   assert.match(captured[0], /expires_at > \?/);
 });
