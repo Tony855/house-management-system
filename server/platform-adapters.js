@@ -85,7 +85,86 @@ function createTenantDatabaseSecretProvider(secretManager) {
   };
 }
 
+function createPlatformLoginRateLimiter(pool, {
+  hmacKey, maxAttempts = 10, windowSeconds = 900, blockSeconds = 900
+} = {}) {
+  if (!pool || typeof pool.getConnection !== 'function') throw new TypeError('PLATFORM_DB_CONNECTION_POOL_REQUIRED');
+  if (!(typeof hmacKey === 'string' || Buffer.isBuffer(hmacKey)) || Buffer.byteLength(hmacKey) < 32) {
+    throw new TypeError('LOGIN_RATE_LIMIT_HMAC_KEY_REQUIRED');
+  }
+  if (!Number.isInteger(maxAttempts) || maxAttempts < 3 || maxAttempts > 100 ||
+      !Number.isInteger(windowSeconds) || windowSeconds < 60 || windowSeconds > 86400 ||
+      !Number.isInteger(blockSeconds) || blockSeconds < 60 || blockSeconds > 86400) {
+    throw new TypeError('LOGIN_RATE_LIMIT_OPTIONS_INVALID');
+  }
+
+  function identityHash({ appId, host, username }) {
+    if (!APP_IDS.has(appId) || typeof host !== 'string' || !host || host.length > 253 ||
+        typeof username !== 'string' || !username || username.length > 50) {
+      throw new TypeError('LOGIN_RATE_LIMIT_IDENTITY_INVALID');
+    }
+    return require('node:crypto').createHmac('sha256', hmacKey)
+      .update([appId, host.toLowerCase(), username.toLowerCase()].join(String.fromCharCode(0))).digest('hex');
+  }
+
+  async function withTransaction(fn) {
+    const connection = await pool.getConnection();
+    try {
+      await connection.beginTransaction();
+      const result = await fn(connection);
+      await connection.commit();
+      return result;
+    } catch (error) {
+      try { await connection.rollback(); } catch (_) {}
+      throw error;
+    } finally {
+      connection.release();
+    }
+  }
+
+  return Object.freeze({
+    async assertAllowed(identity) {
+      const hash = identityHash(identity);
+      const [rows] = await pool.query(
+        'SELECT (blocked_until IS NOT NULL AND blocked_until > UTC_TIMESTAMP()) AS blocked FROM platform_login_attempts WHERE app_id = ? AND identity_hash = ? LIMIT 1',
+        [identity.appId, hash]
+      );
+      if (Number(rows[0]?.blocked) === 1) {
+        throw Object.assign(new Error('LOGIN_RATE_LIMITED'), { code: 'LOGIN_RATE_LIMITED', status: 429 });
+      }
+      return true;
+    },
+    async recordFailure(identity) {
+      const hash = identityHash(identity);
+      await withTransaction(async connection => {
+        await connection.query(
+          'INSERT IGNORE INTO platform_login_attempts (app_id, identity_hash, window_started_at, failures, blocked_until) VALUES (?, ?, UTC_TIMESTAMP(), 0, NULL)',
+          [identity.appId, hash]
+        );
+        const [rows] = await connection.query(
+          'SELECT window_started_at, failures FROM platform_login_attempts WHERE app_id = ? AND identity_hash = ? FOR UPDATE',
+          [identity.appId, hash]
+        );
+        const row = rows[0];
+        const expired = !row || (Date.now() - new Date(row.window_started_at).getTime()) >= windowSeconds * 1000;
+        const failures = expired ? 1 : Number(row.failures) + 1;
+        const blocked = failures >= maxAttempts;
+        await connection.query(
+          'UPDATE platform_login_attempts SET window_started_at = IF(?, UTC_TIMESTAMP(), window_started_at), failures = ?, blocked_until = IF(?, DATE_ADD(UTC_TIMESTAMP(), INTERVAL ? SECOND), NULL), updated_at = UTC_TIMESTAMP() WHERE app_id = ? AND identity_hash = ?',
+          [expired, failures, blocked, blockSeconds, identity.appId, hash]
+        );
+      });
+      return true;
+    },
+    async clear(identity) {
+      const hash = identityHash(identity);
+      await pool.query('DELETE FROM platform_login_attempts WHERE app_id = ? AND identity_hash = ?', [identity.appId, hash]);
+      return true;
+    }
+  });
+}
 module.exports = {
+  createPlatformLoginRateLimiter,
   createPlatformTenantRegistry,
   createPlatformProductSessionStore,
   createTenantDatabaseSecretProvider
