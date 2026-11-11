@@ -101,7 +101,7 @@ function createPlatformLoginRateLimiter(pool, {
   function identityHash({ appId, host, username }) {
     const validAppId = APP_IDS.has(appId) || appId === 'platform';
     if (!validAppId || typeof host !== 'string' || !host || host.length > 253 ||
-        typeof username !== 'string' || !username || username.length > 50) {
+        typeof username !== 'string' || !username || username.length > 80) {
       throw new TypeError('LOGIN_RATE_LIMIT_IDENTITY_INVALID');
     }
     return require('node:crypto').createHmac('sha256', hmacKey)
