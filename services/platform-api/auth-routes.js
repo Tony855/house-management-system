@@ -146,6 +146,80 @@ function createPlatformAuthRouter({ authService, mfaService, auditStore, adminSt
       return res.status(204).end();
     } catch (error) { return next(error); }
   });
+  router.post('/admins/:adminId/reenable/request', authService.authenticate, (req, _res, next) => {
+    if (!req.platformAuth?.permissions?.includes('platform:admins:write') ||
+        req.platformAuth.stepUpVerified !== true) {
+      return next(Object.assign(new Error('PLATFORM_ADMIN_STEP_UP_REQUIRED'), {
+        code: 'PLATFORM_ADMIN_STEP_UP_REQUIRED', status: 403
+      }));
+    }
+    if (typeof req.body?.reason !== 'string' || req.body.reason.trim().length < 8 ||
+        req.body.reason.trim().length > 500) {
+      return next(Object.assign(new Error('PLATFORM_ACTION_REASON_REQUIRED'), {
+        code: 'PLATFORM_ACTION_REASON_REQUIRED', status: 400
+      }));
+    }
+    return next();
+  }, async (req, res, next) => {
+    try {
+      const targetAdminId = Number(req.params.adminId);
+      if (!Number.isSafeInteger(targetAdminId) || targetAdminId < 1) {
+        return next(Object.assign(new Error('PLATFORM_ADMIN_ID_INVALID'), {
+          code: 'PLATFORM_ADMIN_ID_INVALID', status: 400
+        }));
+      }
+      if (!adminStore || typeof adminStore.requestAdminReenable !== 'function') {
+        return next(Object.assign(new Error('PLATFORM_ADMIN_MANAGEMENT_UNAVAILABLE'), {
+          code: 'PLATFORM_ADMIN_MANAGEMENT_UNAVAILABLE', status: 503
+        }));
+      }
+      const requestId = await adminStore.requestAdminReenable({
+        actorAdminId: req.platformAuth.adminId, targetAdminId,
+        sessionId: req.platformAuth.sessionId, reason: req.body.reason
+      });
+      if (!Number.isSafeInteger(requestId) || requestId < 1) {
+        return next(Object.assign(new Error('PLATFORM_ADMIN_REENABLE_REJECTED'), {
+          code: 'PLATFORM_ADMIN_REENABLE_REJECTED', status: 409
+        }));
+      }
+      return res.status(201).json({ requestId, status: 'pending' });
+    } catch (error) { return next(error); }
+  });
+  router.post('/admins/:adminId/reenable/approve', authService.authenticate, (req, _res, next) => {
+    if (!req.platformAuth?.permissions?.includes('platform:admins:write') ||
+        req.platformAuth.stepUpVerified !== true) {
+      return next(Object.assign(new Error('PLATFORM_ADMIN_STEP_UP_REQUIRED'), {
+        code: 'PLATFORM_ADMIN_STEP_UP_REQUIRED', status: 403
+      }));
+    }
+    return next();
+  }, async (req, res, next) => {
+    try {
+      const targetAdminId = Number(req.params.adminId);
+      const requestId = Number(req.body?.requestId);
+      if (!Number.isSafeInteger(targetAdminId) || targetAdminId < 1 ||
+          !Number.isSafeInteger(requestId) || requestId < 1) {
+        return next(Object.assign(new Error('PLATFORM_ADMIN_REENABLE_REQUEST_INVALID'), {
+          code: 'PLATFORM_ADMIN_REENABLE_REQUEST_INVALID', status: 400
+        }));
+      }
+      if (!adminStore || typeof adminStore.approveAdminReenable !== 'function') {
+        return next(Object.assign(new Error('PLATFORM_ADMIN_MANAGEMENT_UNAVAILABLE'), {
+          code: 'PLATFORM_ADMIN_MANAGEMENT_UNAVAILABLE', status: 503
+        }));
+      }
+      const approved = await adminStore.approveAdminReenable({
+        actorAdminId: req.platformAuth.adminId, targetAdminId, requestId,
+        sessionId: req.platformAuth.sessionId
+      });
+      if (approved !== true) {
+        return next(Object.assign(new Error('PLATFORM_ADMIN_REENABLE_APPROVAL_REJECTED'), {
+          code: 'PLATFORM_ADMIN_REENABLE_APPROVAL_REJECTED', status: 409
+        }));
+      }
+      return res.status(204).end();
+    } catch (error) { return next(error); }
+  });
   return router;
 }
 
