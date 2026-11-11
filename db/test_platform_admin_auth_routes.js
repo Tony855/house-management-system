@@ -156,7 +156,7 @@ test('admin disable requires fresh step-up and explicit admin-management permiss
   };
   let called = false;
   const app = createPlatformApi({
-    pool: { query: async () => [[], []] }, adminAuthService: authService, mfaService,
+    pool: { query: async () => [[], []], getConnection: async () => ({}) }, adminAuthService: authService, mfaService,
     adminStore: { disableAdmin: async () => { called = true; return true; } }
   });
   await withServer(app, async base => {
