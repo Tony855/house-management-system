@@ -19,7 +19,7 @@ function createPlatformAdminAuthService({
 }) {
   if (!adminStore || typeof adminStore.findByUsername !== 'function') throw new TypeError('PLATFORM_ADMIN_STORE_REQUIRED');
   if (!challengeStore || !['createChallenge', 'getChallenge', 'consumeChallenge', 'recordChallengeFailure'].every(k => typeof challengeStore[k] === 'function')) throw new TypeError('PLATFORM_ADMIN_CHALLENGE_STORE_REQUIRED');
-  if (!sessionStore || !['createSession', 'getActiveSession', 'revokeSession', 'touchMfaVerified'].every(k => typeof sessionStore[k] === 'function')) throw new TypeError('PLATFORM_ADMIN_SESSION_STORE_REQUIRED');
+  if (!sessionStore || !['createSession', 'getActiveSession', 'revokeSession', 'touchMfaVerified', 'touchStepUpVerified'].every(k => typeof sessionStore[k] === 'function')) throw new TypeError('PLATFORM_ADMIN_SESSION_STORE_REQUIRED');
   if (!mfaService || typeof mfaService.verify !== 'function') throw new TypeError('PLATFORM_ADMIN_MFA_SERVICE_REQUIRED');
   if (!signingKeyProvider || typeof signingKeyProvider.getSigningKey !== 'function' ||
       !verificationKeyProvider || typeof verificationKeyProvider.getVerificationKey !== 'function') throw new TypeError('PLATFORM_ADMIN_KEY_PROVIDER_REQUIRED');
@@ -133,13 +133,15 @@ function createPlatformAdminAuthService({
       const session = await sessionStore.getActiveSession({ sessionId: claims.jti, adminId: Number(claims.sub), now: current });
       if (!session || session.status !== 'active') authError('SESSION_REVOKED');
       const mfaAt = Number(session.mfaVerifiedAt);
+      const stepUpAt = Number(session.stepUpVerifiedAt);
       const mfaVerified = Number.isSafeInteger(mfaAt) && mfaAt <= current && current - mfaAt <= stepUpFreshSeconds;
+      const stepUpVerified = Number.isSafeInteger(stepUpAt) && stepUpAt > 0 && stepUpAt <= current && current - stepUpAt <= stepUpFreshSeconds;
       req.platformAuth = Object.freeze({
         authenticated: true, audience: 'platform', appId: 'platform',
         adminStatus: session.adminStatus, adminId: Number(claims.sub),
         permissions: Array.isArray(session.permissions) ? session.permissions : [],
         mfaVerified, mfaVerifiedAt: mfaAt,
-        stepUpVerified: mfaVerified, stepUpVerifiedAt: mfaAt,
+        stepUpVerified, stepUpVerifiedAt: Number.isSafeInteger(stepUpAt) ? stepUpAt : null,
         sessionId: claims.jti
       });
       return next();
@@ -152,7 +154,7 @@ function createPlatformAdminAuthService({
   async function stepUp({ adminId, sessionId, code }) {
     const verified = await mfaService.verify({ adminId, code });
     if (!verified || verified.verified !== true) authError('PLATFORM_MFA_REQUIRED', 401);
-    const updated = await sessionStore.touchMfaVerified({ adminId, sessionId, verifiedAt: verified.verifiedAt });
+    const updated = await sessionStore.touchStepUpVerified({ adminId, sessionId, verifiedAt: verified.verifiedAt });
     if (updated !== true) authError('SESSION_REVOKED', 401);
     return Object.freeze({ stepUpVerified: true, verifiedAt: verified.verifiedAt });
   }
