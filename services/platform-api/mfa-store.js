@@ -103,8 +103,7 @@ function createPlatformAdminMfaStore(pool) {
         [adminId, codeHash]
       );
       return Number(result.affectedRows) === 1;
-    }
-    ,
+    },
     async replaceRecoveryCodes({ adminId, recoveryCodeHashes }) {
       if (!Number.isSafeInteger(adminId) || adminId < 1 ||
           !Array.isArray(recoveryCodeHashes) || recoveryCodeHashes.length !== 10 ||
