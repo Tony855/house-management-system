@@ -7,6 +7,7 @@ DB_PORT="${DB_PORT:-3306}"
 DB_NAME="${DB_NAME:-platform_control_test}"
 DB_USER="${DB_USER:-root}"
 : "${DB_PASSWORD:?DB_PASSWORD is required}"
+if [[ ! "$DB_NAME" =~ ^[A-Za-z0-9_]{1,64}$ ]]; then echo "Unsafe test database name" >&2; exit 2; fi
 
 mysql_cmd=(mysql --protocol=tcp --host="$DB_HOST" --port="$DB_PORT" --user="$DB_USER" --batch --skip-column-names)
 export MYSQL_PWD="$DB_PASSWORD"
