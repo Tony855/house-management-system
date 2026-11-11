@@ -30,7 +30,11 @@ function createPlatformAdminAuthService({
     if (typeof username !== 'string' || !/^[A-Za-z0-9_.@-]{1,80}$/.test(username) ||
         typeof password !== 'string' || password.length < 1 || password.length > 256) authError('LOGIN_INVALID', 400);
     const identity = { appId: 'platform', host: 'platform', username: username.toLowerCase() };
-    await loginRateLimiter.assertAllowed(identity);
+    try { await loginRateLimiter.assertAllowed(identity); }
+    catch (error) {
+      if (error && error.code === 'LOGIN_RATE_LIMITED' && error.status === 429) throw error;
+      authError('AUTHENTICATION_UNAVAILABLE', 503);
+    }
     let admin;
     try { admin = await adminStore.findByUsername(username); }
     catch (_) { authError('AUTHENTICATION_UNAVAILABLE', 503); }
@@ -38,11 +42,13 @@ function createPlatformAdminAuthService({
     try { valid = !!admin && admin.status === 'active' && verifyPassword(password, admin.passwordHash) === true; }
     catch (_) { valid = false; }
     if (!valid) {
-      await loginRateLimiter.recordFailure(identity);
+      try { await loginRateLimiter.recordFailure(identity); }
+      catch (_) { authError('AUTHENTICATION_UNAVAILABLE', 503); }
       authError('INVALID_CREDENTIALS', 401);
     }
     if (admin.mfaRequired !== true) authError('PLATFORM_MFA_POLICY_INVALID', 503);
-    await loginRateLimiter.clear(identity);
+    try { await loginRateLimiter.clear(identity); }
+    catch (_) { authError('AUTHENTICATION_UNAVAILABLE', 503); }
     const challenge = randomBytes(32).toString('base64url');
     if (typeof challenge !== 'string' || challenge.length < 40) authError('PLATFORM_AUTH_RANDOM_UNAVAILABLE', 503);
     await challengeStore.createChallenge({
@@ -82,7 +88,9 @@ function createPlatformAdminAuthService({
     let verified;
     try { verified = await mfaService.verify({ adminId: record.adminId, code }); }
     catch (error) {
-      await challengeStore.recordChallengeFailure({ challengeHash: digest(challenge), adminId: record.adminId });
+      if (error && error.status === 401) {
+        await challengeStore.recordChallengeFailure({ challengeHash: digest(challenge), adminId: record.adminId });
+      }
       throw error;
     }
     if (!verified || verified.verified !== true) {
