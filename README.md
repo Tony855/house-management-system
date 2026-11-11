@@ -7,6 +7,13 @@
 
 > **生产部署安全提示：** 请使用 [安全一键安装与部署说明](docs/DEPLOYMENT.md)。当前 `deploy.sh` 仅支持全新安装；发现任意旧数据库就会停止，绝不覆盖已有数据。不要在生产环境执行 `db/init.sh`（它会 DROP 并重建数据库）。安装器会生成随机初始化密码并保存到 root-only 凭据文件。当前运行时仍是旧共享数据库架构，尚未完成 database-per-tenant 隔离。
 
+
+## 架构重构文档
+
+- [独立应用与 API 边界](docs/INDEPENDENT_SERVICES.md)
+- [前端架构与设计规范](docs/FRONTEND_ARCHITECTURE.md)
+- [平台计费设计](docs/PLATFORM_BILLING.md)
+
 ## 角色与职责
 
 | 角色 | 入口 | 职责 |
