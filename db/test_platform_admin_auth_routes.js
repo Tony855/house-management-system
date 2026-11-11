@@ -167,3 +167,81 @@ test('admin disable requires fresh step-up and explicit admin-management permiss
   });
   assert.equal(called, false);
 });
+
+
+test('administrator MFA reset requires admin-write permission, step-up and reason, then returns no secret material', async () => {
+  const calls = [];
+  const authService = {
+    login: async () => ({}), verifyChallenge: async () => ({}),
+    authenticate: (req, _res, next) => {
+      req.platformAuth = {
+        adminId: 7, sessionId: 'session-id-1234567890', permissions: ['platform:admins:write'],
+        stepUpVerified: true, mfaVerified: true
+      };
+      next();
+    },
+    stepUp: async () => ({}), logout: async () => true
+  };
+  const mfaService = {
+    getStatus: async () => ({ enabled: true }), beginEnrollment: async () => ({}),
+    confirmEnrollment: async () => ({}), rotateRecoveryCodes: async () => ({})
+  };
+  const app = createPlatformApi({
+    pool: { query: async () => [[], []], getConnection: async () => ({}) },
+    adminAuthService: authService, mfaService,
+    adminStore: { resetAdminMfa: async input => { calls.push(input); return true; } }
+  });
+  await withServer(app, async base => {
+    const missingReason = await fetch(base + '/api/platform/auth/admins/8/mfa/reset', {
+      method: 'POST', headers: {
+        authorization: 'Bearer session-token', 'content-type': 'application/json'
+      }, body: JSON.stringify({ reason: 'short' })
+    });
+    assert.equal(missingReason.status, 400);
+
+    const response = await fetch(base + '/api/platform/auth/admins/8/mfa/reset', {
+      method: 'POST', headers: {
+        authorization: 'Bearer session-token', 'content-type': 'application/json'
+      }, body: JSON.stringify({ reason: 'Lost authenticator device' })
+    });
+    assert.equal(response.status, 204);
+    assert.equal(await response.text(), '');
+  });
+  assert.deepEqual(calls, [{
+    actorAdminId: 7, targetAdminId: 8, sessionId: 'session-id-1234567890',
+    reason: 'Lost authenticator device'
+  }]);
+});
+
+test('administrator MFA reset rejects callers without fresh step-up or admin-write permission', async () => {
+  const authService = {
+    login: async () => ({}), verifyChallenge: async () => ({}),
+    authenticate: (req, _res, next) => {
+      req.platformAuth = {
+        adminId: 7, sessionId: 'session-id-1234567890', permissions: [],
+        stepUpVerified: false, mfaVerified: true
+      };
+      next();
+    },
+    stepUp: async () => ({}), logout: async () => true
+  };
+  const mfaService = {
+    getStatus: async () => ({}), beginEnrollment: async () => ({}),
+    confirmEnrollment: async () => ({}), rotateRecoveryCodes: async () => ({})
+  };
+  let called = false;
+  const app = createPlatformApi({
+    pool: { query: async () => [[], []], getConnection: async () => ({}) },
+    adminAuthService: authService, mfaService,
+    adminStore: { resetAdminMfa: async () => { called = true; return true; } }
+  });
+  await withServer(app, async base => {
+    const response = await fetch(base + '/api/platform/auth/admins/8/mfa/reset', {
+      method: 'POST', headers: {
+        authorization: 'Bearer session-token', 'content-type': 'application/json'
+      }, body: JSON.stringify({ reason: 'Lost authenticator device' })
+    });
+    assert.equal(response.status, 403);
+  });
+  assert.equal(called, false);
+});
