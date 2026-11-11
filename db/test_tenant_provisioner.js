@@ -82,7 +82,8 @@ test('partial provisioning failure removes secret, principal and database in rev
       delete: async () => calls.push('secret:delete')
     },
     migrationRunner: { apply: async () => calls.push('migrate') },
-    isolationVerifier: { verify: async () => ({ passed: true }) }
+    isolationVerifier: { verify: async () => ({ passed: true }) },
+    audit: async () => {}
   }), /GRANT_FAILED/);
   assert.equal(state, 'provisioning_failed');
   assert.deepEqual(calls, [
