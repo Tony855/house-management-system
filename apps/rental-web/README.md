@@ -1,10 +1,10 @@
 # Rental Portal
 
-独立租房前端应用边界。后续在此建立独立 HTML 入口、路由、登录客户端、cookie 名称、CSP、构建与部署流水线。
+独立租房前端入口：`index.html` + `portal.js`，固定 audience `rental`，独立 cookie contract `rental_session`。
 
-- App audience: `rental`
-- API service: `rental-api`
-- Tenant identity and business data: tenant-owned rental database only
-- Never reuse hotel/property/super-admin access tokens or shared browser auth state.
+- API service factory: `services/rental-api/app.js`
+- Tenant DB resolution: verified auth context → platform tenant registry → secret provider → tenant pool.
+- Frontend does not read/write browser localStorage or sessionStorage.
+- Shared `apps/portal.css` is presentation only.
 
-This directory is an application boundary scaffold, not a production-ready portal yet.
+当前是独立入口/UI shell 与 API boundary foundation；业务模块、登录/刷新会话、权限导航、真实租房 API 路由和 database-per-tenant 生产切换仍待完成。
