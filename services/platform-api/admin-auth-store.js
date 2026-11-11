@@ -165,6 +165,46 @@ function createPlatformAdminAuthStore(pool) {
       } finally {
         connection.release();
       }
+    },
+    async resetAdminMfa({ actorAdminId, targetAdminId, sessionId, reason }) {
+      if (!Number.isSafeInteger(actorAdminId) || actorAdminId < 1 ||
+          !Number.isSafeInteger(targetAdminId) || targetAdminId < 1 || actorAdminId === targetAdminId ||
+          typeof sessionId !== 'string' || !/^[A-Za-z0-9._~-]{16,128}$/.test(sessionId) ||
+          typeof reason !== 'string' || reason.trim().length < 8 || reason.trim().length > 500) return false;
+      if (typeof pool.getConnection !== 'function') throw new TypeError('PLATFORM_ADMIN_TRANSACTION_REQUIRED');
+      const connection = await pool.getConnection();
+      try {
+        await connection.beginTransaction();
+        const [rows] = await connection.query(
+          "SELECT id FROM platform_admins WHERE id = ? AND status = 'active' FOR UPDATE",
+          [targetAdminId]
+        );
+        if (!rows[0]) {
+          await connection.rollback();
+          return false;
+        }
+        await connection.query(
+          'UPDATE platform_admin_mfa_factors SET enabled = 0 WHERE admin_id = ?',
+          [targetAdminId]
+        );
+        await connection.query('DELETE FROM platform_admin_mfa_recovery_codes WHERE admin_id = ?', [targetAdminId]);
+        await connection.query('DELETE FROM platform_admin_mfa_enrollments WHERE admin_id = ?', [targetAdminId]);
+        await connection.query(
+          'UPDATE platform_admin_sessions SET revoked_at = UTC_TIMESTAMP() WHERE admin_id = ? AND revoked_at IS NULL',
+          [targetAdminId]
+        );
+        await connection.query(
+          'INSERT INTO platform_admin_audit_events (admin_id, session_id, action, outcome, detail_code) VALUES (?, ?, ?, ?, ?)',
+          [actorAdminId, sessionId, 'admin.mfa.reset', 'success', 'TARGET_ADMIN_' + targetAdminId]
+        );
+        await connection.commit();
+        return true;
+      } catch (error) {
+        try { await connection.rollback(); } catch (rollbackError) { error.rollbackError = rollbackError; }
+        throw error;
+      } finally {
+        connection.release();
+      }
     }
   });
 }
