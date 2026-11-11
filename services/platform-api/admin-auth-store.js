@@ -153,6 +153,10 @@ function createPlatformAdminAuthStore(pool) {
           'UPDATE platform_admin_sessions SET revoked_at = UTC_TIMESTAMP() WHERE admin_id = ? AND revoked_at IS NULL',
           [targetAdminId]
         );
+        await connection.query(
+          'INSERT INTO platform_admin_audit_events (admin_id, session_id, action, outcome, detail_code) VALUES (?, ?, ?, ?, ?)',
+          [actorAdminId, sessionId, 'admin.disable', 'success', 'TARGET_ADMIN_' + targetAdminId]
+        );
         await connection.commit();
         return true;
       } catch (error) {
