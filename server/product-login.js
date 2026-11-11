@@ -5,13 +5,17 @@ const { resolveTenantContext } = require('./tenant-registry');
 const { verifyPassword: defaultVerifyPassword } = require('./util');
 
 const APP_IDS = new Set(['rental', 'hotel', 'property']);
-const USERNAME_RE = /^[A-Za-z0-9_@.\\-]{1,50}$/;
-const HOST_RE = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z]{2,63}$/;
+const USERNAME_RE = /^[A-Za-z0-9_@.-]{1,50}$/;
+const HOST_LABEL_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 
 function normalizeLoginHost(value) {
   if (typeof value !== 'string' || value.length > 300) return null;
-  const host = value.trim().toLowerCase().replace(/\\.$/, '');
-  if (!HOST_RE.test(host)) return null;
+  let host = value.trim().toLowerCase();
+  if (host.endsWith('.')) host = host.slice(0, -1);
+  const labels = host.split('.');
+  if (labels.length < 2 || labels.length > 127 ||
+      labels.some(label => !HOST_LABEL_RE.test(label)) ||
+      !/^[a-z]{2,63}$/.test(labels[labels.length - 1])) return null;
   return host;
 }
 
