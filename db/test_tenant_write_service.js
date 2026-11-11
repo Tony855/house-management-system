@@ -13,6 +13,7 @@ const tenantContext = Object.freeze({ appId: 'rental', tenantId: auth.tenantId, 
 const request = Object.freeze({
   auth, tenantContext, operation: 'update', reason: 'Correct room rent after review',
   stepUpToken: 'step-up-token-1234567890', requestId: 'request-identifier-0001',
+  requestFingerprint: 'a'.repeat(64),
   mutate: async tx => { tx.calls.push('MUTATE'); return { updated: true }; }
 });
 
@@ -36,6 +37,10 @@ function setup(overrides = {}) {
     authorize: async input => { calls.push(['authorize', input.auth.tenantId]); return true; },
     verifyStepUp: async input => { calls.push(['step-up', input.reason]); return true; },
     auditWriter: { append: async (tx, event) => { tx.calls.push(['audit', event.event]); } },
+    idempotencyStore: { execute: async (_tx, input, mutate) => {
+      calls.push(['idempotency', input.requestId]);
+      return { status: 'executed', result: await mutate() };
+    } },
     ...overrides
   });
   return { service, repository, calls };
@@ -47,11 +52,12 @@ test('tenant write requires valid authenticated tenant and product context', asy
   await assert.rejects(service.execute({ ...request, repository, auth: { ...auth, appId: 'hotel' } }), /TENANT_WRITE_CONTEXT_INVALID/);
 });
 
-test('tenant write requires a reason, step-up token and idempotency request id', async () => {
+test('tenant write requires a reason, step-up token, request id and SHA-256 fingerprint', async () => {
   const { service, repository } = setup();
   await assert.rejects(service.execute({ ...request, repository, reason: 'no' }), /TENANT_WRITE_REQUEST_INVALID/);
   await assert.rejects(service.execute({ ...request, repository, stepUpToken: '' }), /TENANT_WRITE_REQUEST_INVALID/);
   await assert.rejects(service.execute({ ...request, repository, requestId: 'short' }), /TENANT_WRITE_REQUEST_INVALID/);
+  await assert.rejects(service.execute({ ...request, repository, requestFingerprint: 'not-a-hash' }), /TENANT_WRITE_REQUEST_INVALID/);
 });
 
 test('tenant write authorizes and step-up verifies before opening a transaction', async () => {
@@ -69,7 +75,7 @@ test('tenant write appends start and commit audit events in the same transaction
   assert.deepEqual(result, { updated: true });
   assert.deepEqual(calls, [
     ['authorize', auth.tenantId], ['step-up', request.reason], 'BEGIN',
-    ['audit', 'tenant_write_started'], 'MUTATE',
+    ['audit', 'tenant_write_started'], ['idempotency', request.requestId], 'MUTATE',
     ['audit', 'tenant_write_committed'], 'COMMIT'
   ]);
 });
@@ -98,4 +104,45 @@ test('tenant write requires authorization, step-up and audit adapters at constru
   assert.throws(() => createTenantWriteService({}), /TENANT_WRITE_AUTHORIZER_REQUIRED/);
   assert.throws(() => createTenantWriteService({ authorize: async () => true }), /TENANT_WRITE_STEP_UP_REQUIRED/);
   assert.throws(() => createTenantWriteService({ authorize: async () => true, verifyStepUp: async () => true }), /TENANT_WRITE_AUDIT_REQUIRED/);
+  assert.throws(() => createTenantWriteService({ authorize: async () => true, verifyStepUp: async () => true, auditWriter: { append: async () => {} } }), /TENANT_WRITE_IDEMPOTENCY_REQUIRED/);
+});
+
+test('tenant write replays an identical idempotency key without repeating the mutation', async () => {
+  let stored;
+  let mutationCount = 0;
+  const f = setup({
+    idempotencyStore: {
+      async execute(_tx, input, mutate) {
+        if (stored) {
+          if (stored.fingerprint !== input.requestFingerprint) return { status: 'conflict' };
+          return { status: 'replayed', result: stored.result };
+        }
+        const result = await mutate();
+        stored = { fingerprint: input.requestFingerprint, result };
+        return { status: 'executed', result };
+      }
+    }
+  });
+  const mutate = async tx => { mutationCount++; tx.calls.push('MUTATE'); return { recordId: 42 }; };
+  const first = await f.service.execute({ ...request, repository: f.repository, mutate });
+  const second = await f.service.execute({ ...request, repository: f.repository, mutate });
+  assert.deepEqual(first, { recordId: 42 });
+  assert.deepEqual(second, { recordId: 42 });
+  assert.equal(mutationCount, 1);
+  assert.ok(f.calls.some(call => Array.isArray(call) && call[1] === 'tenant_write_replayed'));
+});
+
+test('tenant write rejects reuse of an idempotency key with a different payload fingerprint', async () => {
+  const f = setup({
+    idempotencyStore: {
+      execute: async (_tx, input) => input.requestFingerprint === 'a'.repeat(64)
+        ? { status: 'executed', result: { updated: true } }
+        : { status: 'conflict' }
+    }
+  });
+  await f.service.execute({ ...request, repository: f.repository });
+  await assert.rejects(
+    f.service.execute({ ...request, repository: f.repository, requestFingerprint: 'b'.repeat(64) }),
+    error => error.code === 'TENANT_WRITE_IDEMPOTENCY_CONFLICT' && error.status === 409
+  );
 });
