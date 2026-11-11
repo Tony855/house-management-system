@@ -37,6 +37,7 @@ const admin = { authenticated: true, audience: 'platform', appId: 'platform', ad
 test('platform DB configuration is mandatory and never falls back to legacy DB settings', () => {
   assert.throws(() => createPlatformPool({ env: { DB_HOST: 'localhost', DB_NAME: 'legacy', DB_USER: 'root', DB_PASSWORD: 'x' } }), /PLATFORM_DATABASE_CONFIGURATION_REQUIRED/);
   assert.throws(() => createPlatformPool({ env: { PLATFORM_DB_HOST: 'localhost', PLATFORM_DB_NAME: 'bad-name', PLATFORM_DB_USER: 'u', PLATFORM_DB_PASSWORD: 'p' } }), /PLATFORM_DATABASE_NAME_INVALID/);
+  assert.throws(() => createPlatformPool({ env: { PLATFORM_DB_HOST: 'localhost', PLATFORM_DB_NAME: 'platform_control', PLATFORM_DB_USER: 'u', PLATFORM_DB_PASSWORD: 'p', PLATFORM_DB_POOL_SIZE: '0' } }), /PLATFORM_DATABASE_POOL_SIZE_INVALID/);
   let captured;
   const pool = createPlatformPool({ env: { PLATFORM_DB_HOST: 'platform-db', PLATFORM_DB_NAME: 'platform_control', PLATFORM_DB_USER: 'platform', PLATFORM_DB_PASSWORD: 'secret' }, createPool: config => (captured = config) });
   assert.equal(pool.database, 'platform_control');
