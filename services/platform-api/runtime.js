@@ -49,7 +49,7 @@ function createPlatformApiRuntime({
     });
   } catch (error) {
     if (typeof platformPool.end === 'function') {
-      try { platformPool.end(); } catch (_) { /* preserve startup failure */ }
+      try { Promise.resolve(platformPool.end()).catch(() => {}); } catch (_) { /* preserve startup failure */ }
     }
     throw error;
   }
