@@ -14,7 +14,8 @@
     "test:platform-billing": "node --test db/test_platform_billing.js",
     "test:frontend": "node db/check_frontend.js && node scripts/test-ui.js",
     "test:runtime": "node scripts/test-runtime.js",
-    "test:api-architecture": "node --test db/test_product_api.js db/test_product_read_routes.js db/test_tenant_repository.js db/test_product_auth.js db/test_product_dependencies.js db/test_platform_adapters.js db/test_platform_api.js db/test_portals.js db/test_service_boundaries.js db/test_payment_provider.js"
+    "test:api-architecture": "node --test db/test_product_api.js db/test_product_read_routes.js db/test_tenant_repository.js db/test_product_auth.js db/test_product_dependencies.js db/test_platform_adapters.js db/test_platform_api.js db/test_portals.js db/test_service_boundaries.js db/test_payment_provider.js",
+    "test:product-read-mariadb": "node db/test_product_read_routes_mariadb.js"
   },
   "dependencies": {
     "express": "^5.3.0",
