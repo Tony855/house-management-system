@@ -19,7 +19,7 @@ const APPS = Object.freeze({
   property: { create: createPropertyApi, room: { building_id: 1, room_no: 'CI-P-101', owner_id: 1, property_fee: 100, water_price: 2, elec_price: 1.5 } }
 });
 
-async function createTenantDb(adminPool, config, appId, tenantId, created) {
+async function createTenantDb(adminPool, config, appId, tenantId, created, createdUsers) {
   const source = 'house_sys_' + appId;
   const database = tenantDatabaseName(appId, tenantId);
   await adminPool.execute('CREATE DATABASE `' + database + '` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci');
@@ -43,7 +43,12 @@ async function createTenantDb(adminPool, config, appId, tenantId, created) {
   if (appId === 'property') {
     await pool.execute('INSERT INTO tenants (name, contact, phone, license_no, remark) VALUES (?, ?, ?, ?, ?)', ['CI property owner', '', '', '', 'temporary']);
   }
-  return pool;
+  const dbUser = 't_' + tenantId.replace(/-/g, '').slice(0, 24);
+  const dbPassword = crypto.randomBytes(24).toString('base64url');
+  await adminPool.query('CREATE USER ' + mysql.escapeId(dbUser) + '@\'%\' IDENTIFIED BY ?', [dbPassword]);
+  await adminPool.query('GRANT SELECT, INSERT, UPDATE, DELETE ON ' + mysql.escapeId(database) + '.* TO ' + mysql.escapeId(dbUser) + '@\'%\'');
+  createdUsers.push(dbUser);
+  return { pool, credentials: { user: dbUser, password: dbPassword } };
 }
 
 async function startServer(app) {
@@ -78,14 +83,24 @@ async function main() {
   };
   const adminPool = mysql.createPool({ ...config, connectionLimit: 4 });
   const created = [];
+  const createdUsers = [];
   const pools = [];
   const managers = [];
   const servers = [];
   try {
     for (const [appId, definition] of Object.entries(APPS)) {
       const tenantId = crypto.randomUUID();
-      const pool = await createTenantDb(adminPool, config, appId, tenantId, created);
+      const tenantDb = await createTenantDb(adminPool, config, appId, tenantId, created, createdUsers);
+      const pool = tenantDb.pool;
       pools.push(pool);
+      const runtimeCredentials = tenantDb.credentials;
+      const runtimeProbe = await mysql.createConnection({ ...config, ...runtimeCredentials, database: tenantDatabaseName(appId, tenantId) });
+      try {
+        const [[ownDb]] = await runtimeProbe.query('SELECT DATABASE() AS dbName');
+        assert.equal(ownDb.dbName, tenantDatabaseName(appId, tenantId), appId + ' tenant principal database scope');
+        await assert.rejects(runtimeProbe.query('SELECT id FROM `house_sys_' + appId + '`.`buildings`'), appId + ' legacy shared DB denied');
+        await assert.rejects(runtimeProbe.query('CREATE TABLE tenant_ddl_must_be_denied (id INT)'), appId + ' DDL denied');
+      } finally { await runtimeProbe.end(); }
       const poolManager = new TenantPoolManager({ createPool: options => mysql.createPool(options), maxPools: 2 });
       managers.push(poolManager);
       let failCommitAudit = false;
@@ -118,7 +133,7 @@ async function main() {
             } : null;
           }
         },
-        secretProvider: { async getDatabaseCredentials() { return { user: config.user, password: config.password, version: 'ci' }; } },
+        secretProvider: { async getDatabaseCredentials() { return { ...runtimeCredentials, version: 'ci' }; } },
         poolManager,
         writeService
       });
@@ -168,6 +183,9 @@ async function main() {
     for (const server of servers) await new Promise(resolve => server.close(resolve));
     for (const manager of managers) await manager.closeAll();
     for (const pool of pools) await pool.end();
+    for (const user of createdUsers) {
+      try { await adminPool.query('DROP USER IF EXISTS ' + mysql.escapeId(user) + '@\'%\''); } catch (_) {}
+    }
     for (const database of created) {
       try { await adminPool.execute('DROP DATABASE `' + database + '`'); } catch (_) {}
     }
