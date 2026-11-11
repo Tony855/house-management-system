@@ -136,3 +136,19 @@ test('platform login limiter propagates database failures without treating them 
   await assert.rejects(limiter.recordFailure({ appId: 'rental', host: 'a.example.test', username: 'user' }), /database unavailable/);
   await assert.rejects(limiter.assertAllowed({ appId: 'rental', host: 'a.example.test', username: 'user' }), /database unavailable/);
 });
+
+
+test('platform admin login limiter accepts only the dedicated platform namespace', async () => {
+  const calls = [];
+  const limiter = createPlatformLoginRateLimiter({
+    query: async (sql, params) => { calls.push([sql, params]); return [[], []]; }
+  }, { hmacKey: 'platform-admin-login-hmac-key-at-least-32-bytes' });
+  const identity = { appId: 'platform', host: 'platform', username: 'Root.Admin' };
+  assert.equal(await limiter.assertAllowed(identity), true);
+  await limiter.recordFailure(identity);
+  assert.equal(calls[0][1][0], 'platform');
+  assert.equal(calls[1][1][0], 'platform');
+  assert.match(calls[1][1][1], /^[a-f0-9]{64}$/);
+  assert.notEqual(calls[1][1][1], identity.username);
+  assert.throws(() => limiter.assertAllowed({ appId: 'unknown', host: 'platform', username: 'root' }), /LOGIN_RATE_LIMIT_IDENTITY_INVALID/);
+});
