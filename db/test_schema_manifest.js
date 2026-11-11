@@ -33,7 +33,7 @@ test('tenant schema manifest covers every legacy product table exactly once', ()
 test('platform manifest does not include tenant business tables or identities', () => {
   assert.ok(!manifest.platformTables.includes('users'));
   assert.ok(!manifest.platformTables.includes('tenants'));
-  assert.equal(manifest.migrationRules.sessions, 'revoke all legacy sessions; require fresh login');
+  assert.equal(manifest.migrationRules.sessions, 'never copy legacy sessions; revoke all and require fresh login through platform_product_sessions');
 });
 
 
