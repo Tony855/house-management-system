@@ -22,6 +22,10 @@ The pool manager accepts only the three product app IDs and UUID tenant IDs, val
 
 If any stage fails, cleanup is attempted in reverse order using deterministic resource names. A cleanup or audit failure is surfaced and the tenant must remain non-active. Operators must reconcile orphaned resources before retrying provisioning.
 
+## Transactional product writes
+
+Product API write routes are disabled unless `createProductControlPlaneDependencies` receives both explicit `writeSecurity.authorize` and `writeSecurity.verifyStepUp` callbacks. When enabled, the composition uses tenant-local idempotency and `tenant_write_audit_events`; audit, mutation and idempotency completion share the same tenant DB transaction. The verifier must validate the product/tenant/session binding and a short-lived step-up proof. Do not use a permissive callback or reuse Platform Admin credentials.
+
 ## Data migration and cutover
 
 The current migration adapters support read-only org-scoped source snapshots, non-destructive dry runs, transactional imports into empty tenant databases, read-back verification and per-table row-count/SHA-256 manifests. They do not perform production routing cutover or delete legacy records.
