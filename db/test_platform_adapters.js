@@ -109,7 +109,7 @@ test('platform login limiter stores only keyed identity hashes and blocks after 
             if (!state.row) state.row = { window_started_at: new Date(), failures: 0, blocked_until: null };
             return [{ affectedRows: 1 }, []];
           }
-          if (sql.startsWith('SELECT window_started_at')) return [[state.row], []];
+          if (sql.startsWith('SELECT window_started_at')) return [[{ ...state.row, expired: 0 }], []];
           if (sql.startsWith('UPDATE platform_login_attempts')) {
             state.row = { window_started_at: params[0] ? new Date() : state.row.window_started_at, failures: params[1], blocked_until: params[2] ? new Date(Date.now() + params[3] * 1000) : null };
             return [{ affectedRows: 1 }, []];
