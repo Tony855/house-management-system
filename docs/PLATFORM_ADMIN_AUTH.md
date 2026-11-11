@@ -19,7 +19,7 @@ The runtime fails startup if security dependencies are absent. It has no develop
 2. Successful TOTP/recovery verification consumes the challenge and creates a persisted server-side session.
 3. Platform JWTs are platform-audience-only, short-lived, session-bound and checked against current admin state.
 4. Sensitive mutations require fresh step-up MFA.
-5. Logout revokes the exact server-side session.
+5. Logout revokes the exact server-side session.\n6. Admin disable requires `platform:admins:write` plus fresh step-up MFA, refuses self-disable/last-active-admin disable, and revokes every session for the target in one transaction.
 6. Enrollment and recovery-code rotation require a recent MFA-verified session; plaintext recovery codes are returned once and never stored.
 
 ## Persistent security audit
@@ -34,7 +34,7 @@ A safe one-time first-admin bootstrap command is not yet implemented. Do not see
 
 Still required before production activation:
 - First-admin bootstrap and forced initial MFA enrollment.
-- Admin disablement, global session revocation and audited recovery procedures.
+- Admin re-enable/recovery procedures and production key-rotation runbooks.
 - Production KMS/HSM provisioning, key rotation and denied-key drills.
 - Real Secret Manager and least-privilege tenant DB provisioning adapters.
 - Rental/Hotel/Property historical data migration and isolation verification.
