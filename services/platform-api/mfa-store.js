@@ -104,6 +104,39 @@ function createPlatformAdminMfaStore(pool) {
       );
       return Number(result.affectedRows) === 1;
     }
+    ,
+    async replaceRecoveryCodes({ adminId, recoveryCodeHashes }) {
+      if (!Number.isSafeInteger(adminId) || adminId < 1 ||
+          !Array.isArray(recoveryCodeHashes) || recoveryCodeHashes.length !== 10 ||
+          recoveryCodeHashes.some(hash => typeof hash !== 'string' || !/^[a-f0-9]{64}$/.test(hash)) ||
+          new Set(recoveryCodeHashes).size !== recoveryCodeHashes.length) return false;
+      const connection = await pool.getConnection();
+      try {
+        await connection.beginTransaction();
+        const [rows] = await connection.query(
+          'SELECT admin_id FROM platform_admin_mfa_factors WHERE admin_id = ? AND enabled = 1 FOR UPDATE',
+          [adminId]
+        );
+        if (!rows[0]) {
+          await connection.rollback();
+          return false;
+        }
+        await connection.query('DELETE FROM platform_admin_mfa_recovery_codes WHERE admin_id = ?', [adminId]);
+        for (const hash of recoveryCodeHashes) {
+          await connection.query(
+            'INSERT INTO platform_admin_mfa_recovery_codes (admin_id, code_hash) VALUES (?, ?)',
+            [adminId, hash]
+          );
+        }
+        await connection.commit();
+        return true;
+      } catch (error) {
+        try { await connection.rollback(); } catch (_) { /* preserve original failure */ }
+        throw error;
+      } finally {
+        connection.release();
+      }
+    }
   });
 }
 
