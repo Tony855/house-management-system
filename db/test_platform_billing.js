@@ -34,3 +34,18 @@ test('refunds cannot exceed captured balance', () => {
   assert.equal(assertRefundWithinBalance({ capturedMinor: 1000, refundedMinor: 200, requestedMinor: 300 }), 500);
   assert.throws(() => assertRefundWithinBalance({ capturedMinor: 1000, refundedMinor: 900, requestedMinor: 200 }), /BILLING_REFUND_EXCEEDS_CAPTURE/);
 });
+
+const { assertPlatformAdmin } = require('../services/platform-api/platform-authz');
+test('platform billing authorization requires platform audience, active admin, MFA and permission', () => {
+  const base = { authenticated: true, audience: 'platform', appId: 'platform', adminStatus: 'active', mfaVerified: true, permissions: ['billing:read'] };
+  assert.equal(assertPlatformAdmin(base, 'billing:read'), true);
+  assert.throws(() => assertPlatformAdmin({ ...base, audience: 'rental' }, 'billing:read'), /PLATFORM_AUDIENCE_MISMATCH/);
+  assert.throws(() => assertPlatformAdmin({ ...base, mfaVerified: false }, 'billing:read'), /PLATFORM_MFA_REQUIRED/);
+  assert.throws(() => assertPlatformAdmin(base, 'billing:write'), /PLATFORM_PERMISSION_DENIED/);
+});
+test('billing mutations require step-up verification and reason for sensitive actions', () => {
+  const base = { authenticated: true, audience: 'platform', appId: 'platform', adminStatus: 'active', mfaVerified: true, permissions: ['billing:write', 'billing:refund'], stepUpVerified: true, reason: 'Customer requested refund' };
+  assert.equal(assertPlatformAdmin(base, 'billing:refund'), true);
+  assert.throws(() => assertPlatformAdmin({ ...base, stepUpVerified: false }, 'billing:write'), /PLATFORM_STEP_UP_REQUIRED/);
+  assert.throws(() => assertPlatformAdmin({ ...base, reason: '' }, 'billing:refund'), /PLATFORM_ACTION_REASON_REQUIRED/);
+});
