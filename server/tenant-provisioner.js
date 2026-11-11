@@ -31,7 +31,7 @@ async function provisionTenant({
   if (!APP_IDS.has(appId) || typeof displayLabel !== 'string' || !displayLabel.trim() || !UUID_RE.test(tenantId)) {
     throw new Error('TENANT_PROVISIONING_INPUT_INVALID');
   }
-  for (const [name, adapter] of Object.entries({ registry, databaseAdmin, secretStore, migrationRunner, isolationVerifier, audit })) {
+  for (const [name, adapter] of Object.entries({ registry, databaseAdmin, secretStore, migrationRunner, isolationVerifier })) {
     if (!adapter) throw new TypeError(name + ' adapter is required');
   }
   if (typeof audit !== 'function') throw new TypeError('TENANT_AUDIT_ADAPTER_REQUIRED');
