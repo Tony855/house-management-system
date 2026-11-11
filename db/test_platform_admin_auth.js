@@ -145,3 +145,28 @@ test('step-up verifies MFA again and updates the existing active session', async
   assert.equal(result.stepUpVerified, true);
   assert.equal(sessions.get(payload.jti).mfaVerifiedAt, 1800000000);
 });
+
+
+test('platform admin login fails closed as 503 when the limiter database is unavailable', async () => {
+  const { service } = fixture({
+    loginRateLimiter: {
+      assertAllowed: async () => { throw new Error('platform database unavailable'); },
+      recordFailure: async () => true,
+      clear: async () => true
+    }
+  });
+  await assert.rejects(service.login({ username: 'root', password: 'correct' }),
+    error => error.code === 'AUTHENTICATION_UNAVAILABLE' && error.status === 503);
+});
+
+test('MFA infrastructure failures do not consume the user challenge failure budget', async () => {
+  const { service, challenges } = fixture({
+    mfaService: { verify: async () => {
+      throw Object.assign(new Error('KMS unavailable'), { code: 'PLATFORM_MFA_ENCRYPTION_UNAVAILABLE', status: 503 });
+    } }
+  });
+  const pending = await service.login({ username: 'root', password: 'correct' });
+  await assert.rejects(service.verifyChallenge({ challenge: pending.challenge, code: '123456' }),
+    error => error.status === 503);
+  assert.equal([...challenges.values()][0].attempts, 0);
+});
