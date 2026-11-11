@@ -42,6 +42,9 @@ if [[ "$session_table" != "1" ]]; then echo "Product session migration was not i
 if (( fk_count < 11 )); then echo "Expected product session and billing foreign keys, found $fk_count" >&2; exit 1; fi
 
 test_tenant_uuid='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+login_host_table="$(${mysql_cmd[@]}" -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '$DB_NAME' AND table_name = 'platform_tenant_login_hosts' AND table_type = 'BASE TABLE')"
+if [[ "$login_host_table" != "1" ]]; then echo "Tenant login host migration was not installed" >&2; exit 1; fi
+
 test_session_id='ci-product-session-revocation-0001'
 "${mysql_cmd[@]}" "$DB_NAME" -e "INSERT INTO platform_tenants (tenant_uuid, app_id, display_label, lifecycle_state, db_host, db_port, db_name, db_secret_ref) VALUES ('$test_tenant_uuid', 'rental', 'CI tenant', 'active', '127.0.0.1', 3306, 'ci_tenant_db', 'ci/tenant/db')"
 "${mysql_cmd[@]}" "$DB_NAME" -e "INSERT INTO platform_product_sessions (session_id, app_id, tenant_uuid, subject_id, issued_at, expires_at) VALUES ('$test_session_id', 'rental', '$test_tenant_uuid', 'ci-user-1', UTC_TIMESTAMP(), DATE_ADD(UTC_TIMESTAMP(), INTERVAL 5 MINUTE))"
