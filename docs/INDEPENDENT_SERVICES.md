@@ -182,3 +182,12 @@ The CI legacy MariaDB integration now creates an ephemeral tenant database, clon
 - The routes lock the parent building, reject duplicate room numbers, validate Property owner references, and insert only through the product tenant repository inside the tenant write transaction. Client-supplied tenant/org IDs and cross-product fields are rejected.
 - Mounted API tests now exercise Hotel and Property composition roots, tenant-context resolution, product-specific SQL column projections, owner-not-found rollback, and fail-closed behavior when no write service is configured.
 - These routes remain unavailable for production mutation until each deployed product injects real authorization, MFA/step-up, durable audit and MariaDB idempotency adapters, and the per-tenant schema has been provisioned and verified. The MariaDB idempotency adapter is implemented; its production use still depends on applying migration 002 to each tenant DB and wiring the real adapters into the product API deployment.
+
+
+### Real MariaDB room-write integration gate
+
+- CI creates disposable per-tenant databases by cloning each product's legacy table definitions and removing the legacy `org_id` column, matching the tenant-copy contract. It does not alter the source product databases.
+- The integration test applies tenant migration 002 and exercises the actual Rental, Hotel and Property Express composition roots with MariaDB-backed tenant pools, the transactional write service, SQL audit writes and the MariaDB idempotency adapter.
+- Coverage includes concurrent duplicate request delivery, idempotent replay, same-key/different-payload conflict, duplicate room rejection, missing building, Property owner validation, and rollback when the commit-audit adapter fails.
+- CI uses explicit test-only authorization and step-up verifiers. These prove transaction orchestration and persistence behavior; they are not production MFA or policy implementations. Production deployments must inject real identity-bound authorization and step-up verifiers, a durable audit adapter, tenant-specific database credentials and tenant migrations before enabling writes.
+- Disposable databases are removed in test cleanup. The test never copies or modifies production tenant data.
