@@ -14,12 +14,24 @@ async function createTenantDatabase(adminPool, config, sourceDatabase, appId, su
   createdDatabases.push(database);
   const pool = mysql.createPool({ ...config, database });
   targetPools.push(pool);
-  for (const table of [...TABLES[appId]].sort()) {
+  const tables = [...TABLES[appId]].sort();
+  const placeholders = tables.map(() => '?').join(', ');
+  const [sourceOrgColumns] = await adminPool.execute(
+    'SELECT COUNT(*) AS total FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ? AND COLUMN_NAME = \'org_id\' AND TABLE_NAME IN (' + placeholders + ')',
+    [sourceDatabase, ...tables]
+  );
+  if (Number(sourceOrgColumns[0]?.total) !== tables.length) throw new Error('TENANT_MIGRATION_SOURCE_SCHEMA_SCOPE_INVALID_' + appId);
+  for (const table of tables) {
     await adminPool.execute(
       'CREATE TABLE `' + database + '`.`' + table + '` LIKE `' + sourceDatabase + '`.`' + table + '`'
     );
     await adminPool.execute('ALTER TABLE `' + database + '`.`' + table + '` DROP COLUMN `org_id`');
   }
+  const [targetOrgColumns] = await adminPool.execute(
+    'SELECT COUNT(*) AS total FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ? AND COLUMN_NAME = \'org_id\' AND TABLE_NAME IN (' + placeholders + ')',
+    [database, ...tables]
+  );
+  if (Number(targetOrgColumns[0]?.total) !== 0) throw new Error('TENANT_MIGRATION_TARGET_SCHEMA_ORG_ID_PRESENT_' + appId);
   return { database, pool };
 }
 
