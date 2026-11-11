@@ -28,7 +28,13 @@ The login limiter accepts usernames up to 80 characters, matching the auth endpo
 
 ## MFA enrollment and first-admin bootstrap
 
-MFA enrollment is currently exposed by the MFA domain service and durable store, but a self-service enrollment/recovery HTTP workflow and a safe first-admin bootstrap command are not yet part of the Platform API. Do not expose raw enrollment secrets through ad-hoc endpoints or seed a production admin with a shared default password.
+The Platform API now exposes authenticated MFA lifecycle endpoints:
+- `GET /api/platform/auth/mfa/status`: returns only whether an MFA factor is enabled; never returns its encrypted envelope.
+- `POST /api/platform/auth/mfa/enrollment`: starts a ten-minute enrollment and returns the TOTP secret/otpauth URI once.
+- `POST /api/platform/auth/mfa/enrollment/confirm`: confirms the pending factor and returns ten recovery codes once.
+- `POST /api/platform/auth/mfa/recovery-codes/rotate`: verifies the current TOTP or a single-use recovery code, atomically replaces all recovery-code hashes, and returns the new codes once.
+
+Enrollment and recovery-code rotation require an authenticated session whose MFA verification is still fresh (the configured step-up freshness window). Recovery-code hashes are replaced transactionally while locking the enabled factor row. Plaintext recovery codes are never persisted. A safe first-admin bootstrap command is still not implemented; do not seed a production admin with a shared default password.
 
 Before production activation, implement and review:
 - A one-time, audited bootstrap procedure executed from a trusted administrative channel.
