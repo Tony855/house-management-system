@@ -31,7 +31,7 @@ function setup(overrides = {}) {
     registry: { findTenantById: async id => id === tenantId ? tenant : null },
     secretProvider: { getDatabaseCredentials: async () => ({ user: 'rental_a', password: 'secret' }) },
     poolManager: { getPool: async context => {
-      const pool = { database: context.db.database };
+      const pool = { database: context.db.database, execute: async () => [[], {}] };
       pools.push(pool);
       return pool;
     } },
