@@ -111,11 +111,12 @@ test('closeAll invalidates in-flight tenant pool creation', async () => {
   let release;
   const gate = new Promise(resolve => { release = resolve; });
   const manager = new TenantPoolManager({
-    createPool: async config => {
-      await gate;
-      return { config, ended: false, end: async function () { this.ended = true; } };
-    }
+    maxPools: 1,
+    createPool: config => ({ config, ended: false, end: async function () { this.ended = true; } })
   });
+  await manager.getPool({ tenantId: tenantB, appId: 'rental', db: { host: 'db.internal', port: 3306, database: 'rental_b', user: 'tenant_b', password: 'secret' } });
+  const originalClose = manager._close.bind(manager);
+  manager._close = async entry => { await gate; return originalClose(entry); };
   const pending = manager.getPool({
     tenantId: tenantA, appId: 'rental',
     db: { host: 'db.internal', port: 3306, database: 'rental_a', user: 'tenant_a', password: 'secret' }
