@@ -9,7 +9,7 @@ const MAX_ROWS_PER_TABLE = 250000;
 const RELATIONSHIPS = Object.freeze({
   rental: Object.freeze([
     ['rooms', 'building_id', 'buildings'], ['contracts', 'room_id', 'rooms'], ['contracts', 'tenant_id', 'tenants'],
-    ['meters', 'room_id', 'rooms'], ['room_net_lines', 'room_id', 'rooms'], ['net_changes', 'room_id', 'rooms'],
+    ['meters', 'room_id', 'rooms'], ['room_net_lines', 'room_id', 'rooms'], ['net_changes', 'room_id', 'rooms'], ['net_changes', 'line_id', 'room_net_lines'], ['net_changes', 'line_id', 'room_net_lines'],
     ['net_requests', 'room_id', 'rooms'], ['net_requests', 'line_id', 'room_net_lines'],
     ['bills', 'room_id', 'rooms'], ['bills', 'tenant_id', 'tenants'], ['bills', 'contract_id', 'contracts'],
     ['repairs', 'room_id', 'rooms']
@@ -23,7 +23,7 @@ const RELATIONSHIPS = Object.freeze({
     ['rooms', 'building_id', 'buildings'], ['org_employees', 'room_id', 'rooms'], ['meters', 'room_id', 'rooms'],
     ['room_net_lines', 'room_id', 'rooms'], ['net_changes', 'room_id', 'rooms'],
     ['net_requests', 'room_id', 'rooms'], ['net_requests', 'line_id', 'room_net_lines'],
-    ['bills', 'room_id', 'rooms'], ['bills', 'tenant_id', 'tenants'], ['bills', 'order_id', 'orders'],
+    ['bills', 'room_id', 'rooms'], ['bills', 'tenant_id', 'tenants'],
     ['repairs', 'room_id', 'rooms'], ['complaints', 'room_id', 'rooms']
   ])
 });
