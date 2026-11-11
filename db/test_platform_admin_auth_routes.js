@@ -61,6 +61,7 @@ test('Platform API mounts password login, MFA challenge, step-up and logout rout
       method: 'POST', headers: { authorization: 'Bearer session-token' }
     });
     assert.equal(enrollment.status, 200);
+    assert.equal(enrollment.headers.get('cache-control'), 'no-store');
     assert.equal((await enrollment.json()).secret, 'BASE32');
 
     const confirm = await fetch(base + '/api/platform/auth/mfa/enrollment/confirm', {
@@ -68,6 +69,7 @@ test('Platform API mounts password login, MFA challenge, step-up and logout rout
       body: JSON.stringify({ code: '123456' })
     });
     assert.equal(confirm.status, 200);
+    assert.equal(confirm.headers.get('cache-control'), 'no-store');
     assert.equal((await confirm.json()).recoveryCodes.length, 1);
 
     const rotate = await fetch(base + '/api/platform/auth/mfa/recovery-codes/rotate', {
@@ -75,6 +77,7 @@ test('Platform API mounts password login, MFA challenge, step-up and logout rout
       body: JSON.stringify({ code: '123456' })
     });
     assert.equal(rotate.status, 200);
+    assert.equal(rotate.headers.get('cache-control'), 'no-store');
     assert.equal((await rotate.json()).rotated, true);
 
     const stepUp = await fetch(base + '/api/platform/auth/step-up', {
