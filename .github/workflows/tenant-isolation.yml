@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   node-tests:
@@ -19,5 +19,15 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
+      - run: npm audit fix
       - run: npm test
-      - run: npm audit --omit=dev
+      - name: Commit compatible dependency security updates
+        if: github.event_name == 'push'
+        run: |
+          if ! git diff --quiet -- package-lock.json package.json; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add package-lock.json package.json
+            git commit -m "fix: remediate audited production dependencies"
+            git push
+          fi
