@@ -39,7 +39,8 @@ function setup(overrides = {}) {
       createSession: async input => { calls.push(['create', input]); },
       revokeSession: async input => { calls.push(['revoke', input]); }
     },
-    signingKeyProvider: { getSigningKey: async () => ({ kid: 'key-1', key: secret }) },\n    loginRateLimiter: { assertAllowed: async input => { calls.push(['rate-allowed', input]); }, recordFailure: async input => { calls.push(['rate-failure', input]); }, clear: async input => { calls.push(['rate-clear', input]); } },
+    signingKeyProvider: { getSigningKey: async () => ({ kid: 'key-1', key: secret }) },
+    loginRateLimiter: { assertAllowed: async input => { calls.push(['rate-allowed', input]); }, recordFailure: async input => { calls.push(['rate-failure', input]); }, clear: async input => { calls.push(['rate-clear', input]); } },
     verifyPassword: (password, hash) => password === 'correct' && hash === 'hash',
     now: () => issuedAt,
     ...overrides
@@ -67,7 +68,9 @@ test('issues product/tenant-bound JWT and persists active session after password
   assert.equal(decoded.tenantId, tenantA);
   assert.equal(decoded.sub, '17');
   assert.equal(Buffer.from(signature, 'base64url').length, 32);
-  assert.equal(calls.some(x => x[0] === 'create'), true);\n  assert.equal(calls[0][0], 'rate-allowed');\n  assert.equal(calls.some(x => x[0] === 'rate-clear'), true);
+  assert.equal(calls.some(x => x[0] === 'create'), true);
+  assert.equal(calls[0][0], 'rate-allowed');
+  assert.equal(calls.some(x => x[0] === 'rate-clear'), true);
 });
 
 test('same username in another tenant cannot be selected by client tenant input', async () => {
@@ -75,14 +78,16 @@ test('same username in another tenant cannot be selected by client tenant input'
   await assert.rejects(service.login({
     host: 'other.example.test', username: 'same-user', password: 'correct', tenantId: tenantB
   }), error => error.code === 'INVALID_CREDENTIALS' && error.status === 401);
-  assert.equal(calls.some(x => x[0] === 'pool'), false);\n  assert.equal(calls.some(x => x[0] === 'rate-failure'), true);
+  assert.equal(calls.some(x => x[0] === 'pool'), false);
+  assert.equal(calls.some(x => x[0] === 'rate-failure'), true);
 });
 
 test('rejects wrong password without creating a session', async () => {
   const { service, calls } = setup();
   await assert.rejects(service.login({ host: 'tenant.example.test', username: 'same-user', password: 'wrong' }),
     error => error.code === 'INVALID_CREDENTIALS' && error.status === 401);
-  assert.equal(calls.some(x => x[0] === 'create'), false);\n  assert.equal(calls.some(x => x[0] === 'rate-failure'), true);
+  assert.equal(calls.some(x => x[0] === 'create'), false);
+  assert.equal(calls.some(x => x[0] === 'rate-failure'), true);
 });
 
 test('fails closed for inactive tenant and missing signing key', async () => {
