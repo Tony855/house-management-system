@@ -18,7 +18,7 @@ function createPlatformAdminAuthService({
   randomBytes = crypto.randomBytes
 }) {
   if (!adminStore || typeof adminStore.findByUsername !== 'function') throw new TypeError('PLATFORM_ADMIN_STORE_REQUIRED');
-  if (!challengeStore || !['createChallenge', 'getChallenge', 'consumeChallenge'].every(k => typeof challengeStore[k] === 'function')) throw new TypeError('PLATFORM_ADMIN_CHALLENGE_STORE_REQUIRED');
+  if (!challengeStore || !['createChallenge', 'getChallenge', 'consumeChallenge', 'recordChallengeFailure'].every(k => typeof challengeStore[k] === 'function')) throw new TypeError('PLATFORM_ADMIN_CHALLENGE_STORE_REQUIRED');
   if (!sessionStore || !['createSession', 'getActiveSession', 'revokeSession', 'touchMfaVerified'].every(k => typeof sessionStore[k] === 'function')) throw new TypeError('PLATFORM_ADMIN_SESSION_STORE_REQUIRED');
   if (!mfaService || typeof mfaService.verify !== 'function') throw new TypeError('PLATFORM_ADMIN_MFA_SERVICE_REQUIRED');
   if (!signingKeyProvider || typeof signingKeyProvider.getSigningKey !== 'function' ||
@@ -79,8 +79,16 @@ function createPlatformAdminAuthService({
     if (typeof challenge !== 'string' || challenge.length < 40 || challenge.length > 128) authError('MFA_CHALLENGE_INVALID');
     const record = await challengeStore.getChallenge(digest(challenge));
     if (!record || record.consumedAt || record.expiresAt <= now()) authError('MFA_CHALLENGE_EXPIRED', 410);
-    const verified = await mfaService.verify({ adminId: record.adminId, code });
-    if (!verified || verified.verified !== true) authError('PLATFORM_MFA_REQUIRED', 401);
+    let verified;
+    try { verified = await mfaService.verify({ adminId: record.adminId, code }); }
+    catch (error) {
+      await challengeStore.recordChallengeFailure({ challengeHash: digest(challenge), adminId: record.adminId });
+      throw error;
+    }
+    if (!verified || verified.verified !== true) {
+      await challengeStore.recordChallengeFailure({ challengeHash: digest(challenge), adminId: record.adminId });
+      authError('PLATFORM_MFA_REQUIRED', 401);
+    }
     const consumed = await challengeStore.consumeChallenge({ challengeHash: digest(challenge), adminId: record.adminId });
     if (consumed !== true) authError('MFA_CHALLENGE_REPLAYED', 401);
     return issueSession(record.adminId, verified.verifiedAt);
