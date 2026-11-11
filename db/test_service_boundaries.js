@@ -28,8 +28,9 @@ test('each product API factory is fixed to its own audience and health identity'
     assert.equal(result.body.service, id + '-api');
   }
 });
-test('product API cannot be reconfigured to another product through dependencies', () => {
-  assert.throws(() => createRentalApi({ ...productDeps, appId: 'hotel' }), /APP_ID_INVALID|PRODUCT_API_ID_INVALID/);
+test('product API factory fixes its audience even if caller supplies another appId', async () => {
+  const result = await health(createRentalApi({ ...productDeps, appId: 'hotel' }));
+  assert.equal(result.body.service, 'rental-api');
 });
 test('platform API uses a separate injected platform pool and health identity', async () => {
   const pool = { query: async () => [[]], getConnection: async () => ({}) };
