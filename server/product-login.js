@@ -38,13 +38,24 @@ function createProductLoginService({
   if (typeof verifyPassword !== 'function') throw new TypeError('PRODUCT_LOGIN_PASSWORD_VERIFIER_REQUIRED');\n  if (!loginRateLimiter || typeof loginRateLimiter.assertAllowed !== 'function' ||\n      typeof loginRateLimiter.recordFailure !== 'function' || typeof loginRateLimiter.clear !== 'function') {\n    throw new TypeError('PRODUCT_LOGIN_RATE_LIMITER_REQUIRED');\n  }
   if (!Number.isInteger(lifetimeSeconds) || lifetimeSeconds < 60 || lifetimeSeconds > 3600) throw new TypeError('PRODUCT_LOGIN_LIFETIME_INVALID');
 
+  async function runRateLimit(action, identity) {
+    try {
+      return await loginRateLimiter[action](identity);
+    } catch (error) {
+      if (error && error.code === 'LOGIN_RATE_LIMITED') throw error;
+      throw Object.assign(new Error('LOGIN_RATE_LIMITER_UNAVAILABLE'), {
+        code: 'LOGIN_RATE_LIMITER_UNAVAILABLE', status: 503
+      });
+    }
+  }
+
   async function login({ host, username, password }) {
     const hostname = normalizeLoginHost(host);
     if (!hostname || typeof username !== 'string' || !USERNAME_RE.test(username) ||
         typeof password !== 'string' || password.length < 1 || password.length > 100) {
       throw Object.assign(new Error('LOGIN_INVALID'), { code: 'LOGIN_INVALID', status: 400 });
     }
-    const rateLimitIdentity = { appId, host: hostname, username };\n    await loginRateLimiter.assertAllowed(rateLimitIdentity);\n    const mapped = await registry.findTenantByLoginHost(hostname, appId);
+    const rateLimitIdentity = { appId, host: hostname, username };\n    await runRateLimit('assertAllowed', rateLimitIdentity);\n    const mapped = await registry.findTenantByLoginHost(hostname, appId);
     if (!mapped || mapped.app_id !== appId || mapped.lifecycle_state !== 'active') {
       throw Object.assign(new Error('INVALID_CREDENTIALS'), { code: 'INVALID_CREDENTIALS', status: 401 });
     }
@@ -62,7 +73,7 @@ function createProductLoginService({
     if (user && typeof user.password === 'string') {
       try { valid = verifyPassword(password, user.password) === true; } catch (_) { valid = false; }
     }
-    if (!valid) {\n      await loginRateLimiter.recordFailure(rateLimitIdentity);\n      throw Object.assign(new Error('INVALID_CREDENTIALS'), { code: 'INVALID_CREDENTIALS', status: 401 });\n    }
+    if (!valid) {\n      await runRateLimit('recordFailure', rateLimitIdentity);\n      throw Object.assign(new Error('INVALID_CREDENTIALS'), { code: 'INVALID_CREDENTIALS', status: 401 });\n    }
     if (!Number.isSafeInteger(Number(user.id)) || Number(user.id) < 1) {
       throw Object.assign(new Error('LOGIN_IDENTITY_INVALID'), { code: 'LOGIN_IDENTITY_INVALID', status: 503 });
     }
