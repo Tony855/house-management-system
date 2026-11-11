@@ -198,3 +198,12 @@ The CI legacy MariaDB integration now creates an ephemeral tenant database, clon
 
 - The integration suite also asserts the exact least-privilege DML grant (without `ALL PRIVILEGES` or `GRANT OPTION`), absence of legacy `org_id` columns in the tenant schema, successful/denied authorization and step-up cases, and the precise started/committed/replayed audit event counts for concurrent retries.
 - Audit failure assertions verify that both the room mutation and its idempotency row roll back. A CI fixture validation defect discovered in the first run (the synthetic room number exceeded the production 20-character limit) was corrected; the fixture now uses a valid short room number.
+
+### Platform-side login failure throttling
+
+- Product login now requires a persistent platform rate-limit adapter. It checks the exact normalized product/host/username identity before tenant lookup, records unknown-tenant and invalid-password failures, and clears that identity's counter only after a successful session has been persisted.
+- The adapter in `server/platform-adapters.js` uses a row lock and transaction, a bounded failure window, and a timed lockout. The platform database clock (`UTC_TIMESTAMP`) is authoritative for window and lockout calculations.
+- Migration `005_login_attempt_rate_limit.sql` stores only an HMAC-SHA256 identity digest, never the raw username or hostname. Production must supply a dedicated random HMAC key of at least 32 bytes via the secret manager; do not reuse JWT signing keys, database passwords, or the general application secret.
+- Missing or unavailable limiter storage fails closed with HTTP 503; an active lockout returns HTTP 429. Default policy is 10 failures in 15 minutes followed by a 15-minute lockout. The current identity key is product + normalized host + normalized username; this is account-targeted throttling, not a substitute for edge/IP rate limiting, bot protection, MFA, or credential-stuffing detection.
+- CI runs adapter contract tests plus a real MariaDB integration test covering concurrent failure increments, lockout, and explicit counter clearing. The integration uses disposable CI identities and removes them in `finally`.
+- Production rollout still needs an edge/IP rate limit, monitoring/alerting for lockouts, a retention/cleanup job for stale hashed buckets, HMAC-key rotation procedure, and deployment wiring for `loginRateLimitHmacKey`. MFA enrollment/challenge and recovery flows remain separate unfinished controls.
