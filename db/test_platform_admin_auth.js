@@ -180,3 +180,43 @@ test('MFA infrastructure failures do not consume the user challenge failure budg
     error => error.status === 503);
   assert.equal([...challenges.values()][0].attempts, 0);
 });
+
+
+test('platform login accepts the full documented 80-character username limit', async () => {
+  const { service, calls } = fixture({
+    adminStore: {
+      findByUsername: async () => null,
+      findById: async () => null
+    }
+  });
+  await assert.rejects(service.login({ username: 'u'.repeat(80), password: 'wrong' }),
+    error => error.code === 'INVALID_CREDENTIALS');
+  assert.equal(calls.some(call => call[0] === 'allowed' && call[1].username.length === 80), true);
+});
+
+test('platform signing key identifiers are validated before issuing a token', async () => {
+  const { service } = fixture({
+    signingKeyProvider: {
+      getSigningKey: async () => ({ kid: 'invalid kid', key: 'platform-signing-key-material-at-least-32-bytes' })
+    }
+  });
+  const pending = await service.login({ username: 'root', password: 'correct' });
+  await assert.rejects(service.verifyChallenge({ challenge: pending.challenge, code: '123456' }),
+    error => error.code === 'AUTH_SIGNING_KEY_UNAVAILABLE' && error.status === 503);
+});
+
+test('platform auth rejects non-canonical base64url token segments', async () => {
+  const { service } = fixture();
+  const pending = await service.login({ username: 'root', password: 'correct' });
+  const issued = await service.verifyChallenge({ challenge: pending.challenge, code: '123456' });
+  const token = issued.accessToken;
+  const req = { headers: { authorization: 'Bearer ' + token.replace('.', '=.') } };
+  await service.authenticate(req, {}, error => {
+    assert.equal(error.code, 'TOKEN_INVALID');
+  });
+});
+
+test('platform auth rejects unsafe lifetime configuration at construction', () => {
+  assert.throws(() => fixture({ sessionLifetimeSeconds: 0 }), /PLATFORM_ADMIN_AUTH_CONFIG_INVALID/);
+  assert.throws(() => fixture({ challengeLifetimeSeconds: 601 }), /PLATFORM_ADMIN_AUTH_CONFIG_INVALID/);
+});
