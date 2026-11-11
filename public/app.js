@@ -1,0 +1,4366 @@
+/* ==================================================================
+ *  0. 通用工具
+ * ================================================================== */
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c =>
+  ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+const p2 = n => String(n).padStart(2, '0');
+/* ===== 统一提示弹窗（替代原生 alert）：居中卡片 + 图标 + 动画 ===== */
+function showUiDialog(msg, type){
+  type = type || 'info';
+  const icons = { info: '<i class="bi bi-info-circle-fill"></i>', warn: '<i class="bi bi-exclamation-triangle-fill"></i>',
+    err: '<i class="bi bi-x-circle-fill"></i>', ok: '<i class="bi bi-check-circle-fill"></i>' };
+  const titles = { info: '提示', warn: '警告', err: '出错了', ok: '成功' };
+  const mask = document.createElement('div');
+  mask.className = 'ui-dialog-mask';
+  mask.innerHTML = `<div class="ui-dialog">
+    <div class="ui-dialog-icon ${type === 'err' ? 'err' : type === 'warn' ? 'warn' : type === 'ok' ? 'ok' : ''}">${icons[type] || icons.info}</div>
+    <div class="ui-dialog-title">${titles[type] || titles.info}</div>
+    <div class="ui-dialog-body">${esc(msg)}</div>
+    <div class="ui-dialog-actions"><button class="btn btn-primary">确 定</button></div>
+  </div>`;
+  const close = () => { mask.remove(); document.removeEventListener('keydown', onKey); };
+  const onKey = e => { if (e.key === 'Enter' || e.key === 'Escape') close(); };
+  mask.addEventListener('click', e => { if (e.target === mask) close(); });
+  mask.querySelector('button').addEventListener('click', close);
+  document.addEventListener('keydown', onKey);
+  document.body.appendChild(mask);
+  mask.querySelector('.ui-dialog button').focus();
+}
+/* 全局接管原生 alert：所有提示统一走自定义弹窗 */
+window.alert = (msg) => showUiDialog(String(msg ?? ''), 'info');
+
+function today(){
+  const d = new Date();
+  return `${d.getFullYear()}-${p2(d.getMonth()+1)}-${p2(d.getDate())}`;
+}
+function nowStr(){
+  const d = new Date();
+  return `${d.getFullYear()}-${p2(d.getMonth()+1)}-${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}`;
+}
+function addDays(dateStr, n){
+  const d = new Date(dateStr + 'T00:00:00');
+  d.setDate(d.getDate() + n);
+  return `${d.getFullYear()}-${p2(d.getMonth()+1)}-${p2(d.getDate())}`;
+}
+function addMonths(dateStr, n){
+  const d = new Date(dateStr + 'T00:00:00');
+  const day = d.getDate();
+  d.setMonth(d.getMonth() + n);
+  if (d.getDate() < day) d.setDate(0);
+  return `${d.getFullYear()}-${p2(d.getMonth()+1)}-${p2(d.getDate())}`;
+}
+function daysBetween(a, b){
+  const d1 = new Date(a + 'T00:00:00');
+  const d2 = new Date(b + 'T00:00:00');
+  return Math.max(1, Math.round((d2 - d1) / 86400000));
+}
+function monthStart(dateStr){ return dateStr.slice(0, 7) + '-01'; }
+function curMonth(){ return today().slice(0, 7); }
+
+/* ==================================================================
+ *  1. 币种 / 金额
+ * ================================================================== */
+function getCurrency(){ return (DB.data && DB.data.settings.currency) || 'USD'; }
+function getRate(){ const r = Number(DB.data && DB.data.settings.rate); return r > 0 ? r : 7.2; }
+function currencySymbol(){ return getCurrency() === 'USD' ? '$' : '¥'; }
+function money(v){
+  const n = Number(v) || 0;
+  if (getCurrency() === 'USD') return '$' + (n / getRate()).toFixed(2);
+  return '¥' + n.toFixed(2);
+}
+function toDisplayMoney(cny){
+  const n = Number(cny) || 0;
+  return getCurrency() === 'USD' ? (n / getRate()).toFixed(2) : n.toFixed(2);
+}
+function fromDisplayMoney(v){
+  const n = Number(v) || 0;
+  return getCurrency() === 'USD' ? n * getRate() : n;
+}
+/* 数字输入框禁用键盘上下键增减数值 */
+document.addEventListener('keydown', function(e){
+  if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && e.target && e.target.type === 'number') e.preventDefault();
+});
+
+/* ==================================================================
+ *  2. 全局设置（模式 / 币种 / 汇率 / 网费单价，启动时从后端加载）
+ * ================================================================== */
+const DB = { data: { settings: { mode: 'hotel', currency: 'USD', rate: 7.2, net_price_per_mb: 1, water_price: 4.5, elec_price: 1 } } };
+
+/* ==================================================================
+ *  3. 常量
+ * ================================================================== */
+const MODE_NAME = { rental:'租房', hotel:'酒店', property:'物业综合管理' };
+const MODE_TAB = { rental:'租房', hotel:'酒店', property:'物业' };
+const DEFAULT_PAGE = { rental:'dashboard', hotel:'roommap', property:'dashboard' };
+/* 三个系统：租房 / 酒店 / 物业 */
+const MODES = ['rental', 'hotel', 'property'];
+
+let ME = null;
+
+const STATUS_TEXT = {
+  vacant:      { rental:'空置',   hotel:'空闲',   property:'空置' },
+  rented:      { rental:'已出租', hotel:'已入住', property:'已入住' },
+  booked:      { rental:'已预订', hotel:'已预订', property:'已预订' },
+  cleaning:    { rental:'待清洁', hotel:'待清洁', property:'空置' },
+  maintenance: { rental:'维修中', hotel:'维修中', property:'维修中' }
+};
+const STATUS_COLOR = { vacant:'secondary', rented:'success', booked:'primary',
+                       cleaning:'warning', maintenance:'danger' };
+const STATUS_HEX = { vacant:'#6b7280', rented:'#16a34a', booked:'#2563eb',
+                     cleaning:'#f59e0b', maintenance:'#dc2626' };
+const ORDER_STATUS = {
+  booked:['已预订','primary'], checked_in:['已入住','success'],
+  checked_out:['已退房','secondary'], cancelled:['已取消','dark']
+};
+const BILL_STATUS = {
+  unpaid:['未支付','danger'], partial:['部分支付','warning'], paid:['已结清','success']
+};
+const BILL_SOURCE = {
+  rental:['租金','secondary'], utility:['水电','info'], hotel:['酒店','info'],
+  property:['物业','warning'], network:['网费','primary'],
+  net_repair:['网维修','danger'], install:['设备安装','success'],
+  repair:['维修','warning'], other:['其它','secondary']
+};
+const CONTRACT_STATUS = {
+  active:['履行中','success'], expired:['已到期','secondary'], terminated:['已终止','dark']
+};
+const REPAIR_STATUS = {
+  pending:['待处理','danger'], processing:['处理中','warning'], done:['已完成','success']
+};
+const COMPLAINT_STATUS = {
+  pending:['待处理','danger'], processing:['处理中','warning'], done:['已办结','success']
+};
+
+function statusBadge(s, mode){
+  mode = mode || curMode();
+  const txt = (STATUS_TEXT[s] && STATUS_TEXT[s][mode]) || s;
+  const c = STATUS_COLOR[s] || 'secondary';
+  return `<span class="badge bg-${c}${c === 'warning' ? ' text-dark' : ''}">${txt}</span>`;
+}
+function mkBadge(map){
+  return s => {
+    const it = map[s] || [s, 'secondary'];
+    return `<span class="badge bg-${it[1]}${it[1] === 'warning' ? ' text-dark' : ''}">${it[0]}</span>`;
+  };
+}
+const orderBadge      = mkBadge(ORDER_STATUS);
+const billBadge       = mkBadge(BILL_STATUS);
+const contractBadge   = mkBadge(CONTRACT_STATUS);
+const repairBadge     = mkBadge(REPAIR_STATUS);
+const complaintBadge  = mkBadge(COMPLAINT_STATUS);
+const cycleText = n => ({ 1:'月付', 3:'季付', 6:'半年付', 12:'年付' }[n] || n + '个月');
+
+
+
+/* ==================================================================
+ *  5. 后端 API 封装（真实请求 Node.js + MariaDB）
+ * ================================================================== */
+function curUser(){ return ME; }
+
+async function api(path, method = 'GET', data){
+  const opt = { method, headers: {} };
+  const token = sessionStorage.getItem('house_token');
+  if (token) opt.headers.Authorization = 'Bearer ' + token;
+  if (data !== undefined && data !== null && method.toUpperCase() !== 'GET'){
+    opt.headers['Content-Type'] = 'application/json';
+    opt.body = JSON.stringify(data);
+  }
+  const res = await fetch(path, opt);
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || '请求失败（' + res.status + '）');
+  return body;
+}
+
+/* 安全请求：加载失败时明确弹窗提示并返回 null（避免"点击无反应"式静默失败） */
+async function safeApi(path, method, data){
+  try { return await api(path, method, data); }
+  catch(e){ alert(e.message); return null; }
+}
+
+/* ==================================================================
+ *  6. 通用 UI 组件
+ * ================================================================== */
+function openForm(title, fields, values, onSubmit, onMount){
+  values = values || {};
+  const mid = 'fm' + Date.now();
+  /* 含明细清单的弹窗自动加宽，避免商品/型号等字段显示不完整（固定宽度，不随视口退化） */
+  const wide = fields.some(f => f.type === 'items') ? ' style="max-width:920px"' : '';
+  let html = `<div class="modal fade" id="${mid}" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered"${wide}>
+      <div class="modal-content">
+        <div class="modal-header"><h5 class="modal-title">${esc(title)}</h5>
+          <button class="btn-close" data-bs-dismiss="modal"></button></div>
+        <div class="modal-body"><form id="${mid}_f">`;
+
+  fields.forEach(f => {
+    let v = values[f.name];
+    if (v === undefined || v === null || v === '') v = f.default !== undefined ? f.default : '';
+    if (f.money && v !== '' && v !== null) v = toDisplayMoney(v);
+    const label = esc(f.label) + (f.money ? ` <span class="text-muted">(${currencySymbol()})</span>` : '')
+                + (f.required ? ' <span class="text-danger">*</span>' : '');
+
+    html += `<div class="mb-3"><label class="form-label">${label}</label>`;
+    if (f.type === 'select'){
+      html += `<select class="form-select" name="${f.name}" ${f.required ? 'required' : ''}>`;
+      if (!f.required) html += `<option value="">-- 请选择 --</option>`;
+      (f.options || []).forEach(o => {
+        html += `<option value="${esc(o.value)}" ${String(o.value) === String(v) ? 'selected' : ''}>${esc(o.label)}</option>`;
+      });
+      html += `</select>`;
+    } else if (f.type === 'textarea'){
+      html += `<textarea class="form-control" name="${f.name}" rows="2">${esc(v)}</textarea>`;
+    } else if (f.type === 'checklist'){
+      html += `<div class="d-flex flex-wrap gap-1">`;
+      (f.options || []).forEach(o => {
+        if (o.type === 'group'){
+          html += `<div class="w-100 op-group-title mt-1 mb-0">${esc(o.label)}</div>`;
+          return;
+        }
+        const checked = (Array.isArray(v) && v.includes(o.value)) ? 'checked' : '';
+        html += `<label class="form-check me-3 op-item">
+          <input class="form-check-input" type="checkbox" name="${f.name}" value="${esc(o.value)}" ${checked}>
+          <span class="form-check-label">${esc(o.label)}</span></label>`;
+      });
+      html += `</div>`;
+    } else if (f.type === 'items'){
+      /* 明细清单：动态行（商品/型号/数量/单价），金额自动合计；勾选说明行则不计金额
+         cat: ''=全部类别 | 'net'=网络商品 | 'util'=水电商品（按入口过滤商品库） */
+      const libBtn = (typeof canOp === 'function' && canOp('itemlib_use'))
+        ? `<button type="button" class="btn btn-sm btn-outline-primary" onclick="openLibPicker('${mid}_${f.name}')"><i class="bi bi-journal-text"></i> 从商品库添加</button>` : '';
+      html += `<div class="item-wrap" data-cat="${esc(f.cat || '')}">
+        <div class="table-responsive"><table class="table table-sm table-bordered align-middle mb-1">
+          <thead class="table-light text-center"><tr>
+            <th style="min-width:150px">商品</th>
+            <th style="min-width:120px">型号</th>
+            <th style="width:80px">数量</th>
+            <th style="width:110px">单价(${currencySymbol()})</th>
+            <th style="width:96px">金额</th>
+            <th style="width:56px">说明</th>
+            <th style="width:76px"></th></tr></thead>
+          <tbody id="${mid}_${f.name}_tb"></tbody>
+        </table></div>
+        <div class="d-flex justify-content-between align-items-center">
+          <div class="d-flex gap-2">
+            <button type="button" class="btn btn-sm btn-outline-secondary" onclick="addItemRow('${mid}_${f.name}')">+ 添加明细行</button>
+            ${libBtn}
+          </div>
+          <span class="fw-bold item-sum">合计：${currencySymbol()}0.00</span>
+        </div>
+        ${f.hint ? `<div class="form-text">${esc(f.hint)}</div>` : ''}
+      </div>`;
+    } else if (f.type === 'file'){
+      /* 图片上传：选文件后转 base64 上传，URL 存入 hidden 随表单提交 */
+      html += `<input class="form-control" type="file" accept="image/jpeg,image/png,image/webp"
+                onchange="uploadPhoto(this, document.getElementById('${mid}_${f.name}'), document.getElementById('${mid}_${f.name}_img'))">`;
+      html += `<input type="hidden" name="${f.name}" id="${mid}_${f.name}" value="${esc(v)}">`;
+      html += `<img id="${mid}_${f.name}_img" src="${esc(v)}" class="mt-1 rounded border"
+                style="max-height:90px;max-width:140px;object-fit:cover;${v ? '' : 'display:none'}">`;
+    } else if (f.type === 'checkbox'){
+      html += `<input class="form-check-input" type="checkbox" name="${f.name}" value="1" ${v ? 'checked' : ''}>`;
+    } else {
+      html += `<input class="form-control" type="${f.type || 'text'}" name="${f.name}"
+        value="${esc(f.type === 'number' && !f.money && v !== '' && v != null ? Number(v) : v)}" ${f.required ? 'required' : ''}
+        ${f.step ? `step="${f.step}"` : (f.money ? 'step="0.01"' : '')}
+        ${f.readonly ? 'readonly' : ''}
+        ${f.placeholder ? `placeholder="${esc(f.placeholder)}"` : ''}>`;
+    }
+    if (f.hint) html += `<div class="form-text">${esc(f.hint)}</div>`;
+    html += `</div>`;
+  });
+
+  html += `</form></div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+          <button class="btn btn-primary" id="${mid}_ok">保存</button>
+        </div></div></div></div>`;
+
+  $('#modalHost').insertAdjacentHTML('beforeend', html);
+  const el = document.getElementById(mid);
+  const modal = new bootstrap.Modal(el);
+
+  el.querySelector(`#${mid}_ok`).onclick = async () => {
+    const form = el.querySelector(`#${mid}_f`);
+    if (!form.checkValidity()){ form.reportValidity(); return; }
+    const data = {};
+    new FormData(form).forEach((val, key) => { data[key] = val === '' ? null : val; });
+    fields.forEach(f => {
+      if (f.type === 'checklist'){
+        data[f.name] = [...el.querySelectorAll(`input[name="${f.name}"]:checked`)].map(i => i.value);
+        return;
+      }
+      if (f.type === 'items'){
+        data[f.name] = collectItems(el.querySelector(`#${mid}_${f.name}_tb`));
+        return;
+      }
+      if (data[f.name] === null) return;
+      if (f.type === 'number') data[f.name] = Number(data[f.name]);
+      if (f.money) data[f.name] = fromDisplayMoney(data[f.name]);
+    });
+    try { await onSubmit(data, modal); }
+    catch(e){ alert(e.message || '操作失败'); }
+  };
+
+  el.addEventListener('hidden.bs.modal', () => el.remove());
+  /* 明细控件初始空行 */
+  fields.forEach(f => {
+    if (f.type === 'items'){
+      const tb = el.querySelector(`#${mid}_${f.name}_tb`);
+      if (tb && !tb.children.length) addItemRow(`${mid}_${f.name}`);
+    }
+  });
+  modal.show();
+  if (onMount) onMount(el);
+}
+
+/* ===== 账单明细清单（维修/安装/其它类） ===== */
+function addItemRow(id){
+  const tb = document.getElementById(id + '_tb');
+  if (!tb) return;
+  if (tb.children.length >= 50){ alert('明细最多 50 行'); return; }
+  const tr = document.createElement('tr');
+  const suggestAttr = (typeof canOp === 'function' && canOp('itemlib_use'))
+    ? 'oninput="libSuggest(this)" onfocus="libSuggest(this)"' : '';
+  tr.innerHTML = `
+    <td><input class="form-control form-control-sm" data-f="name" placeholder="商品名称" ${suggestAttr}></td>
+    <td><input class="form-control form-control-sm" data-f="model" placeholder="型号"></td>
+    <td><input class="form-control form-control-sm" data-f="qty" type="number" min="1" step="1" placeholder="数量"></td>
+    <td><input class="form-control form-control-sm" data-f="price" type="number" min="0" step="0.01" placeholder="单价"></td>
+    <td class="text-end item-amt text-muted">-</td>
+    <td class="text-center"><input type="checkbox" class="form-check-input" data-f="free" title="说明行：只记说明不计金额" onchange="toggleItemFree(this)"></td>
+    <td class="text-center text-nowrap">
+      <button type="button" class="btn btn-sm btn-outline-secondary py-0 px-1" title="复制上一行" onclick="copyPrevRow(this)">⧉</button>
+      <button type="button" class="btn btn-sm btn-outline-secondary py-0 px-1" title="删除该行" onclick="delItemRow(this)">×</button></td>`;
+  tb.appendChild(tr);
+  tr.querySelectorAll('input[data-f]').forEach(inp => {
+    inp.addEventListener('input', () => updateItemRow(tb));
+  });
+  updateItemRow(tb);
+}
+function toggleItemFree(cb){
+  const tr = cb.closest('tr');
+  const qInp = tr.querySelector('[data-f="qty"]'), pInp = tr.querySelector('[data-f="price"]');
+  qInp.disabled = cb.checked; pInp.disabled = cb.checked;
+  if (cb.checked){ qInp.value = ''; pInp.value = ''; }
+  updateItemRow(tr.closest('tbody'));
+}
+function delItemRow(btn){
+  const tb = btn.closest('tbody');
+  btn.closest('tr').remove();
+  updateItemRow(tb);
+}
+/* ===== 常用商品库：联想 / 复制上一行 / 从商品库批量添加（按经营主体隔离） ===== */
+let _libSuggest = null;
+function itemLib(){ return (DB.data.settings && DB.data.settings.item_lib) || []; }
+/* 当前明细弹窗允许的商品库类别：''=全部 | 'net' | 'util'（从 .item-wrap data-cat 读取） */
+function libCat(inp){
+  const wrap = inp ? inp.closest('.item-wrap') : null;
+  return (wrap && wrap.getAttribute('data-cat')) || '';
+}
+function libFiltered(cat){
+  const lib = itemLib();
+  if (!cat) return lib;                          /* 全部入口：网络+水电两类都显示 */
+  if (cat === 'util') return lib.filter(it => it.cat === 'util');
+  /* 网络入口：网络商品 + 历史未分类商品（默认归网络） */
+  return lib.filter(it => it.cat !== 'util');
+}
+function hideLibSuggest(){ if (_libSuggest){ _libSuggest.remove(); _libSuggest = null; } }
+function libSuggest(inp){
+  hideLibSuggest();
+  const kw = (inp.value || '').trim();
+  const cat = libCat(inp);
+  const lib = libFiltered(cat);
+  if (!kw || !lib.length) return;
+  const list = lib.filter(it => it.name.includes(kw) || ((it.model || '') && it.model.includes(kw))).slice(0, 8);
+  if (!list.length) return;
+  const r = inp.getBoundingClientRect();
+  const div = document.createElement('div');
+  div.className = 'lib-suggest';
+  div.style.cssText = `position:fixed;z-index:2000;background:#fff;border:1px solid #d0d7de;border-radius:6px;box-shadow:0 4px 14px rgba(0,0,0,.15);max-height:260px;overflow:auto;min-width:${Math.max(r.width, 280)}px;top:${r.bottom + 4}px;left:${r.left}px;`;
+  list.forEach(it => {
+    const row = document.createElement('div');
+    row.style.cssText = 'cursor:pointer;display:flex;justify-content:space-between;gap:10px;align-items:center;padding:6px 10px;font-size:13px;';
+    row.innerHTML = `<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(it.name)}${it.model ? '<span class="text-muted"> · ' + esc(it.model) + '</span>' : ''}</span><span class="text-muted text-nowrap">${money(it.price)}</span>`;
+    row.onmouseenter = () => row.style.background = '#f1f5f9';
+    row.onmouseleave = () => row.style.background = '';
+    row.onmousedown = (e) => { e.preventDefault(); pickLibItem(inp, it); };
+    div.appendChild(row);
+  });
+  document.body.appendChild(div);
+  _libSuggest = div;
+}
+function pickLibItem(inp, it){
+  hideLibSuggest();
+  const tr = inp.closest('tr');
+  const nameInp = tr.querySelector('[data-f="name"]');
+  nameInp.value = it.name;
+  const m = tr.querySelector('[data-f="model"]'); if (m) m.value = it.model || '';
+  const p = tr.querySelector('[data-f="price"]');
+  if (p){ p.value = toDisplayMoney(it.price); p.dispatchEvent(new Event('input', { bubbles:true })); }
+  nameInp.dispatchEvent(new Event('input', { bubbles:true }));
+  updateItemRow(tr.closest('tbody'));
+}
+function copyPrevRow(btn){
+  const tr = btn.closest('tr');
+  const tb = tr.closest('tbody');
+  const idx = [...tb.rows].indexOf(tr);
+  if (idx < 1) return;
+  const prev = tb.rows[idx - 1];
+  const pv = n => (prev.querySelector('[data-f="' + n + '"]') || {}).value || '';
+  const qv = n => (prev.querySelector('[data-f="' + n + '"]') || {}).disabled;
+  tr.querySelector('[data-f="name"]').value = pv('name');
+  const m = tr.querySelector('[data-f="model"]'); if (m) m.value = pv('model');
+  const q = tr.querySelector('[data-f="qty"]'), p = tr.querySelector('[data-f="price"]');
+  q.value = ''; q.disabled = qv('qty');
+  p.value = pv('price'); p.disabled = qv('price');
+  const cb = tr.querySelector('[data-f="free"]');
+  if (cb) cb.checked = !!(prev.querySelector('[data-f="free"]') || {}).checked;
+  q.dispatchEvent(new Event('input', { bubbles:true }));
+  p.dispatchEvent(new Event('input', { bubbles:true }));
+  updateItemRow(tb);
+}
+async function openLibPicker(id){
+  /* 实时刷新商品库：主管理员刚保存后，本会话/其他会话无需重新登录即可看到最新数据 */
+  try {
+    const st = await api('/api/settings');
+    if (Array.isArray(st.item_lib)) DB.data.settings.item_lib = st.item_lib;
+  } catch(e){ /* 拉取失败时沿用会话内缓存 */ }
+  const tb = document.getElementById(id + '_tb');
+  const wrap = tb && tb.closest('.item-wrap');
+  const cat = (wrap && wrap.getAttribute('data-cat')) || '';
+  const lib = libFiltered(cat);
+  if (!lib.length){ alert(cat === 'net' ? '网络商品库暂无数据，请主管理员在「系统设置」中添加' : cat === 'util' ? '水电商品库暂无数据，请主管理员在「系统设置」中添加' : '商品库暂无数据，请主管理员在「系统设置」中先添加常用商品'); return; }
+  hideLibSuggest();
+  const host = document.getElementById('modalHost') || document.body;
+  const mid = 'libpk' + Date.now();
+  const catTxt = cat === 'net' ? '（网络商品）' : cat === 'util' ? '（水电商品）' : '';
+  const html = `
+    <div class="modal fade" id="${mid}" tabindex="-1">
+      <div class="modal-dialog modal-dialog-centered modal-lg"><div class="modal-content">
+        <div class="modal-header py-2"><h6 class="modal-title">从商品库添加${catTxt}</h6>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+        <div class="modal-body p-2">
+          <div class="table-responsive" style="max-height:420px"><table class="table table-sm table-hover align-middle mb-0">
+            <thead class="table-light"><tr><th style="width:40px"></th><th>商品</th><th style="width:150px">型号</th><th style="width:110px">单价(${currencySymbol()})</th></tr></thead>
+            <tbody>
+              ${lib.map((it, i) => `<tr>
+                <td class="text-center"><input type="checkbox" class="form-check-input lib-chk" data-idx="${i}"></td>
+                <td style="word-break:break-all">${esc(it.name)}</td>
+                <td class="text-muted" style="word-break:break-all">${esc(it.model || '-')}</td>
+                <td>${money(it.price)}</td></tr>`).join('')}
+            </tbody></table></div>
+          <div class="form-text mt-1">勾选后点击「添加所选」自动生成明细行，型号与单价自动带出，数量请自行填写。</div>
+        </div>
+        <div class="modal-footer py-2">
+          <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">取消</button>
+          <button type="button" class="btn btn-primary btn-sm" onclick="libPickConfirm('${mid}','${id}')">添加所选</button>
+        </div>
+      </div></div></div>`;
+  host.insertAdjacentHTML('beforeend', html);
+  const el = document.getElementById(mid);
+  el.addEventListener('hidden.bs.modal', () => el.remove());
+  bootstrap.Modal.getOrCreateInstance(el).show();
+}
+function libPickConfirm(mid, id){
+  const lib = itemLib();
+  const sel = [...document.querySelectorAll('#' + mid + ' .lib-chk')].filter(c => c.checked)
+    .map(c => lib[Number(c.dataset.idx)]);
+  if (!sel.length){ alert('请先勾选商品'); return; }
+  const tb = document.getElementById(id + '_tb');
+  const tr0 = tb.rows[0];
+  if (tr0 && !(tr0.querySelector('[data-f="name"]').value.trim())) tb.rows[0].remove();
+  sel.forEach(it => {
+    addItemRow(id);
+    const tr = tb.rows[tb.rows.length - 1];
+    tr.querySelector('[data-f="name"]').value = it.name;
+    const m = tr.querySelector('[data-f="model"]'); if (m) m.value = it.model || '';
+    const p = tr.querySelector('[data-f="price"]');
+    if (p){ p.value = toDisplayMoney(it.price); p.dispatchEvent(new Event('input', { bubbles:true })); }
+    tr.querySelector('[data-f="qty"]').dispatchEvent(new Event('input', { bubbles:true }));
+  });
+  const inst = bootstrap.Modal.getInstance(document.getElementById(mid));
+  if (inst) inst.hide();
+  updateItemRow(tb);
+}
+/* 点击页面其它处关闭联想 */
+document.addEventListener('click', e => {
+  if (!e.target.closest('.lib-suggest')) hideLibSuggest();
+});
+function updateItemRow(tb){
+  if (!tb) return;
+  let sum = 0;
+  [...tb.rows].forEach(tr => {
+    const qInp = tr.querySelector('[data-f="qty"]'), pInp = tr.querySelector('[data-f="price"]');
+    const aTd = tr.querySelector('.item-amt');
+    if (!qInp || !pInp || !aTd) return;
+    const q = qInp.disabled ? 0 : (Number(qInp.value) || 0);
+    const p = pInp.disabled ? 0 : (Number(pInp.value) || 0);
+    const row = q * p;
+    aTd.textContent = row ? currencySymbol() + row.toFixed(2) : '-';
+    sum += row;
+  });
+  const wrap = tb.closest('.item-wrap');
+  const sumEl = wrap && wrap.querySelector('.item-sum');
+  if (sumEl) sumEl.textContent = '合计：' + currencySymbol() + sum.toFixed(2);
+  const amt = tb.closest('form') && tb.closest('form').querySelector('[name="amount"]');
+  if (amt){
+    amt.value = sum ? sum.toFixed(2) : '';
+    amt.readOnly = tb.rows.length > 0;
+  }
+}
+function collectItems(tb){
+  if (!tb) return null;
+  const arr = [];
+  [...tb.rows].forEach(tr => {
+    const nameInp = tr.querySelector('[data-f="name"]');
+    const name = (nameInp && nameInp.value || '').trim();
+    if (!name) return;
+    const modelInp = tr.querySelector('[data-f="model"]');
+    const model = (modelInp && modelInp.value || '').trim();
+    const free = (tr.querySelector('[data-f="free"]') || {}).checked;
+    if (free){ arr.push(model ? { name, model } : { name }); return; }
+    const q = Number(tr.querySelector('[data-f="qty"]').value) || 0;
+    const p = Number(tr.querySelector('[data-f="price"]').value) || 0;
+    if (q <= 0 || p <= 0) return; /* 缺数量或单价的行不入明细 */
+    const it = { name, qty: q, price: Math.round(fromDisplayMoney(p) * 100) / 100 };
+    if (model) it.model = model;
+    arr.push(it);
+  });
+  return arr.length ? arr : null;
+}
+function fmtItems(items){
+  if (!Array.isArray(items) || !items.length) return '';
+  const rows = items.map(it => {
+    const model = it.model ? `<div class="text-muted" style="font-size:12px">型号：${esc(it.model)}</div>` : '';
+    if (it.qty == null && it.price == null){
+      return `<tr class="text-muted"><td colspan="3" style="word-break:break-all">${esc(it.name)}${model}</td><td class="text-end">说明</td></tr>`;
+    }
+    return `<tr><td style="word-break:break-all">${esc(it.name)}${model}</td><td class="text-nowrap">${it.qty}</td><td class="text-nowrap">${money(it.price)}</td>
+      <td class="text-end text-nowrap">${money((Number(it.qty) || 0) * (Number(it.price) || 0))}</td></tr>`;
+  }).join('');
+  const total = items.reduce((s, it) => s + ((Number(it.qty) || 0) * (Number(it.price) || 0)), 0);
+  return `<table class="table table-sm table-bordered mt-1 mb-1" style="max-width:100%">
+    <thead class="table-light"><tr><th style="min-width:120px">商品</th><th style="width:60px">数量</th><th style="width:96px">单价(${currencySymbol()})</th><th class="text-end" style="width:96px">金额</th></tr></thead>
+    <tbody>${rows}</tbody>
+    <tfoot><tr class="fw-bold"><td colspan="3">合计</td><td class="text-end">${money(total)}</td></tr></tfoot>
+    </table>`;
+}
+
+/* 图片上传：转 base64 → /api/upload（jpg/png/webp ≤2MB）→ 回填 hidden 并预览 */
+async function uploadPhoto(input, hidden, preview){
+  const f = input.files && input.files[0];
+  if (!f) return;
+  if (!/^image\/(jpeg|png|webp)$/.test(f.type)){ alert('仅支持 jpg / png / webp 图片'); input.value = ''; return; }
+  if (f.size > 2 * 1024 * 1024){ alert('图片不能超过 2MB'); input.value = ''; return; }
+  const reader = new FileReader();
+  reader.onload = async () => {
+    try {
+      const r = await api('/api/upload', 'POST', { data: reader.result });
+      hidden.value = r.url;
+      preview.src = r.url;
+      preview.style.display = '';
+    } catch(e){ alert(e.message); input.value = ''; }
+  };
+  reader.readAsDataURL(f);
+}
+
+function openActions(title, items){
+  const mid = 'ac' + Date.now();
+  const html = `<div class="modal fade" id="${mid}"><div class="modal-dialog modal-dialog-centered modal-sm">
+    <div class="modal-content">
+      <div class="modal-header py-2"><h6 class="modal-title">${esc(title)}</h6>
+        <button class="btn-close" data-bs-dismiss="modal"></button></div>
+      <div class="modal-body d-grid gap-2">
+        ${items.map((it, i) => `<button class="btn btn-sm ${it.cls || 'btn-outline-primary'}" data-i="${i}">${esc(it.label)}</button>`).join('')}
+      </div>
+    </div></div></div>`;
+  $('#modalHost').insertAdjacentHTML('beforeend', html);
+  const el = document.getElementById(mid);
+  const modal = new bootstrap.Modal(el);
+  el.querySelectorAll('[data-i]').forEach(btn => {
+    btn.onclick = () => { modal.hide(); items[Number(btn.dataset.i)].fn(); };
+  });
+  el.addEventListener('hidden.bs.modal', () => el.remove());
+  modal.show();
+}
+
+function openInfo(title, bodyHtml, width){
+  const mid = 'in' + Date.now();
+  const html = `<div class="modal fade" id="${mid}"><div class="modal-dialog modal-dialog-centered ${width || ''}">
+    <div class="modal-content">
+      <div class="modal-header py-2"><h6 class="modal-title">${esc(title)}</h6>
+        <button class="btn-close" data-bs-dismiss="modal"></button></div>
+      <div class="modal-body">${bodyHtml}</div>
+      <div class="modal-footer py-2">
+        <button class="btn btn-secondary btn-sm" data-bs-dismiss="modal">关闭</button>
+      </div>
+    </div></div></div>`;
+  $('#modalHost').insertAdjacentHTML('beforeend', html);
+  const el = document.getElementById(mid);
+  const modal = new bootstrap.Modal(el);
+  el.addEventListener('hidden.bs.modal', () => el.remove());
+  modal.show();
+}
+
+/* ==================================================================
+ *  7. 登录（租房 / 酒店 / 物业 / 超级管理员 四个独立登录页）
+ *    三系统独立运营：各系统管理员与员工均从本系统窗口登录，超管单独入口。
+ * ================================================================== */
+let LOGIN_MODE = null; /* 当前登录入口：rental / hotel / property / super */
+const LOGIN_HASHES = { 'login-rental':1, 'login-hotel':1, 'login-property':1, 'login-super':1 };
+/* 全局配置缓存（超管在「系统设置」中修改；登录页仅读取） */
+let APP_CFG = null;
+async function getAppConfig(){
+  if (APP_CFG) return APP_CFG;
+  try {
+    const r = await fetch('/api/app-config');
+    APP_CFG = await r.json();
+  } catch(e){ APP_CFG = { login_selector: 'show', login_default: 'rental' }; }
+  return APP_CFG;
+}
+async function showLogin(){
+  const h = location.hash.slice(1);
+  if (LOGIN_HASHES[h]){ LOGIN_MODE = h.slice(6); renderLoginPage(LOGIN_MODE); return; }
+  LOGIN_MODE = null;
+  /* 超管隐藏入口选择后：打开站点直达默认登录窗口（#login-xxx 仍可地址直达） */
+  const cfg = await getAppConfig();
+  if (cfg.login_selector === 'hide'){
+    location.hash = LOGIN_HASHES['login-' + cfg.login_default]
+      ? '#login-' + cfg.login_default : '#login-rental';
+    return;
+  }
+  renderLoginHome();
+}
+function renderLoginHome(){
+  const cur = getCurrency();
+  const entry = (m, label, icon, desc) => `
+    <div class="col"><div class="card shadow-sm h-100 text-center">
+      <div class="card-body">
+        <i class="bi bi-${icon} display-5 text-primary"></i>
+        <h5 class="mt-2 mb-1">${label}登录</h5>
+        <p class="text-muted small mb-2">${desc}</p>
+        <a class="btn btn-sm btn-outline-primary" href="#login-${m}">进入登录</a>
+      </div></div></div>`;
+  $('#root').innerHTML = `
+  <div class="d-flex align-items-center justify-content-center" style="height:100vh">
+    <div class="w-100" style="max-width:860px">
+      <div class="text-center mb-4">
+        <h3 class="mb-1"><i class="bi bi-buildings text-primary"></i> 房屋管理系统</h3>
+        <p class="text-muted">租房 · 酒店 · 物业，请选择对应的登录入口</p>
+      </div>
+      <div class="row g-3">
+        ${entry('rental', '租房', 'house-door', '租房系统：房源 · 租客 · 合同 · 账单')}
+        ${entry('hotel', '酒店', 'building', '酒店系统：房态 · 订单 · 房客 · 账单')}
+        ${entry('property', '物业综合管理', 'hdd-network', '物业综合管理系统：房产 · 企业 · 水电抄表 · 网费')}
+      </div>
+    </div>
+  </div>`;
+}
+async function renderLoginPage(m){
+  const cfg = await getAppConfig();
+  const isSuper = m === 'super';
+  /* 仅超管入口预填初始超管账号；各系统窗口留空 */
+  const defUser = isSuper ? 'superadmin' : '';
+  const defPwd = isSuper ? 'super123' : '';
+  $('#root').innerHTML = `
+  <div class="d-flex align-items-center justify-content-center" style="height:100vh">
+    <div class="card shadow" style="width:400px">
+      <div class="card-body p-4">
+        <h4 class="text-center mb-1"><i class="bi bi-${isSuper ? 'shield-lock' : 'buildings'} text-primary"></i>
+          ${isSuper ? '超级管理员登录' : MODE_NAME[m] + '系统登录'}</h4>
+        <p class="text-center text-muted small mb-3">
+          ${isSuper ? '统一管理三个系统 · 开通主管理员（经营主体）并监控全系统运行'
+          : MODE_NAME[m] + '系统 · 主管理员 / 员工账号登录'}</p>
+        <div class="mb-3"><label class="form-label">用户名</label>
+          <input id="lgUser" class="form-control" value="${defUser}" placeholder="请输入用户名"></div>
+        <div class="mb-3"><label class="form-label">密码</label>
+          <input id="lgPwd" type="password" class="form-control" value="${defPwd}" placeholder="请输入密码"
+                 onkeydown="if(event.key==='Enter')doLogin()"></div>
+        <button class="btn btn-primary w-100" onclick="doLogin()">登 录</button>
+        ${cfg.login_selector === 'hide' ? ''
+          : '<div class="text-center mt-3"><a class="small" href="#login">← 返回选择登录入口</a></div>'}
+      </div>
+    </div>
+  </div>`;
+}
+
+async function doLogin(){
+  const username = $('#lgUser').value.trim();
+  const password = $('#lgPwd').value;
+  try {
+    const body = { username, password, mode: LOGIN_MODE };
+    const u = await api('/api/login', 'POST', body);
+    ME = u; /* 含 role_name / level / mode / pages */
+    sessionStorage.setItem('house_token', u.token);
+    /* 登录后立即加载本主体设置（默认币种/汇率/单价），避免用前端初始默认值 */
+    try {
+      const st = await api('/api/settings');
+      DB.data.settings = {
+        mode: u.mode || 'rental',
+        currency: st.currency || 'USD',
+        rate: Number(st.rate) || 7.2,
+        prices: !!st.prices,
+        net_price_per_mb: (st.net_price_per_mb !== undefined && st.net_price_per_mb !== null)
+          ? Number(st.net_price_per_mb) : 1,
+        water_price: (st.water_price !== undefined && st.water_price !== null)
+          ? Number(st.water_price) : 4.5,
+        elec_price: (st.elec_price !== undefined && st.elec_price !== null)
+          ? Number(st.elec_price) : 1,
+        remind_enable: Number(st.remind_enable === undefined ? 1 : st.remind_enable),
+        remind_days: Number(st.remind_days === undefined ? 3 : st.remind_days),
+        item_lib: Array.isArray(st.item_lib) ? st.item_lib : []
+      };
+    } catch(e){ console.error('settings 加载失败', e); }
+    history.replaceState(null, '', '#' + ((u.level === 'staff' || u.level === 'manager') ? 'home' : firstAllowedPage(u.mode) || DEFAULT_PAGE[u.mode]));
+    renderApp();
+  } catch(e){ alert(e.message); }
+}
+
+async function doLogout(){
+  if (!confirm('确定退出登录？')) return;
+  try { await api('/api/logout', 'POST'); } catch(e){}
+  ME = null;
+  sessionStorage.removeItem('house_token');
+  history.replaceState(null, '', '#login');
+  showLogin();
+}
+
+const NAV = {
+  rental: [
+    ['dashboard','speedometer2','仪表盘'],
+    ['rooms','door-open','房源管理'],
+    ['tenants','people','租客管理'],
+    ['contracts','file-earmark-text','合同管理'],
+    ['meters','lightning-charge','水电抄表'],
+    ['network','ethernet','网络管理'],
+    ['bills','cash-coin','账单收费'],
+    ['repairs','tools','报修管理'],
+    ['buildings','building','楼栋管理'],
+    ['users','person-gear','员工管理', 'admin'],
+    ['roles','shield-lock','角色管理', 'admin'],
+    ['settings','gear','系统设置', 'admin']
+  ],
+  hotel: [
+    ['dashboard','speedometer2','仪表盘'],
+    ['roommap','grid-3x3-gap','房态图'],
+    ['orders','journal-check','订单管理'],
+    ['rooms','door-open','房间管理'],
+    ['tenants','people','房客管理'],
+    ['bills','cash-coin','账单收费'],
+    ['repairs','tools','报修管理'],
+    ['buildings','building','楼栋管理'],
+    ['users','person-gear','员工管理', 'admin'],
+    ['roles','shield-lock','角色管理', 'admin'],
+    ['settings','gear','系统设置', 'admin']
+  ],
+  property: [
+    ['dashboard','speedometer2','仪表盘'],
+    ['buildings','building','楼栋管理'],
+    ['properties','houses','房产管理'],
+    ['owners','building','企业管理'],
+    ['dorm','house-heart','宿舍管理'],
+    ['meters','lightning-charge','水电抄表'],
+    ['network','ethernet','网络管理'],
+    ['bills','cash-coin','账单收费'],
+    ['complaints','chat-square-text','投诉建议'],
+    ['repairs','tools','报修管理'],
+    ['users','person-gear','员工管理', 'admin'],
+    ['roles','shield-lock','角色管理', 'admin'],
+    ['settings','gear','系统设置', 'admin']
+  ]
+};
+
+/* 当前数据系统：会话系统（管理员/员工固定为所属系统） */
+const curMode = () => (ME && ME.mode) || (DB.data.settings ? DB.data.settings.mode : 'rental');
+
+/* 计费房间：物业=已绑定企业；租房=已出租；酒店=全部（无水电网，不使用） */
+function billableRooms(rooms){
+  const mode = curMode();
+  if (mode === 'property') return rooms.filter(r => r.owner_id);
+  if (mode === 'rental') return rooms.filter(r => r.status === 'rented');
+  return rooms;
+}
+/* 计费对象称谓：物业=企业，租房=租客 */
+function personLabel(){ return curMode() === 'property' ? '企业' : '租客'; }
+function roomPerson(r){ return curMode() === 'property' ? (r.owner_name || '') : (r.tenant_name || r.owner_name || ''); }
+function roomPersonPhone(r){ return r.owner_phone || ''; }
+
+function pageAllowed(p){
+  if (ME.level === 'super' || ME.level === 'admin') return true;
+  return (ME.pages || []).includes(p);
+}
+/* 操作权限：主管理员全有；员工/企业管理员按角色 ops 判定 */
+const canOp = (op) => ME.level === 'admin' || (ME.ops || []).includes(op);
+
+/* 操作权限功能点清单（动作级，按功能模块分组；租房/酒店/物业各自独立） */
+const OP_DEFS = {
+  rental: [
+    { g:'楼栋管理', items:[['building_add','新增'],['building_edit','编辑'],['building_delete','删除']] },
+    { g:'房源管理', items:[['room_add','新增'],['room_edit','编辑/状态'],['room_delete','删除']] },
+    { g:'租客管理', items:[['tenant_add','新增'],['tenant_edit','编辑'],['tenant_delete','删除']] },
+    { g:'合同管理', items:[['contract_add','签订'],['contract_edit','编辑'],['contract_delete','终止/删除']] },
+    { g:'水电抄表', items:[['meter_add','录入'],['meter_edit','编辑'],['meter_delete','删除']] },
+    { g:'网络管理', items:[['netline_add','新增线路'],['netline_edit','编辑线路'],['netline_bandwidth','加兆/减兆'],['netline_status','停用/启用']] },
+    { g:'账单收费', items:[['bill_add','手动添加'],['bill_generate','生成'],['bill_delete','删除'],['bill_pay','收款'],['bill_print','打印账单'],['bill_remind','账单提醒']] },
+    { g:'报修管理', items:[['repair_add','登记'],['repair_handle','处理'],['repair_delete','删除']] },
+    { g:'商品库', items:[['itemlib_use','使用商品库（联想/批量添加）']] }
+  ],
+  hotel: [
+    { g:'楼栋管理', items:[['building_add','新增'],['building_edit','编辑'],['building_delete','删除']] },
+    { g:'房间管理', items:[['room_add','新增'],['room_edit','编辑/状态'],['room_delete','删除']] },
+    { g:'订单管理', items:[['order_add','预订/开房'],['order_edit','编辑'],['order_status','入住/退房/取消'],['order_delete','删除']] },
+    { g:'房客管理', items:[['tenant_add','新增'],['tenant_edit','编辑'],['tenant_delete','删除']] },
+    { g:'账单收费', items:[['bill_add','手动添加'],['bill_generate','生成'],['bill_delete','删除'],['bill_pay','收款'],['bill_print','打印账单'],['bill_remind','账单提醒']] },
+    { g:'报修管理', items:[['repair_add','登记'],['repair_handle','处理'],['repair_delete','删除']] }
+  ],
+  property: [
+    { g:'楼栋管理', items:[['building_add','新增'],['building_edit','编辑'],['building_delete','删除']] },
+    { g:'房产管理', items:[['room_add','新增'],['room_edit','编辑/状态'],['room_delete','删除']] },
+    { g:'企业管理', items:[['tenant_add','新增'],['tenant_edit','编辑/设管理员'],['tenant_delete','删除']] },
+    { g:'企业员工', items:[['orgemp_add','新增'],['orgemp_edit','编辑'],['orgemp_delete','删除']] },
+    { g:'宿舍管理', items:[['dorm_assign','分配/调宿/退宿']] },
+    { g:'水电抄表', items:[['meter_add','录入'],['meter_edit','编辑'],['meter_delete','删除']] },
+    { g:'网络管理', items:[['netline_add','新增线路'],['netline_edit','编辑线路'],['netline_bandwidth','加兆/减兆'],['netline_status','停用/启用']] },
+    { g:'账单收费', items:[['bill_add','手动添加'],['bill_generate','生成'],['bill_delete','删除'],['bill_pay','收款'],['bill_print','打印账单'],['bill_remind','账单提醒']] },
+    { g:'报修管理', items:[['repair_add','登记'],['repair_handle','处理'],['repair_delete','删除']] },
+    { g:'投诉建议', items:[['complaint_add','登记'],['complaint_handle','处理'],['complaint_delete','删除']] },
+    { g:'商品库', items:[['itemlib_use','使用商品库（联想/批量添加）']] }
+  ]
+};
+const opLabel = (op) => {
+  const groups = OP_DEFS[curMode()] || [];
+  for (const g of groups){
+    const it = g.items.find(x => x[0] === op);
+    if (it) return g.g + '：' + it[1];
+  }
+  return op;
+};
+/* 操作权限按模块分组显示：["楼栋管理：新增 删除 编辑", "水电抄表：录入"] */
+const groupOps = (ops) => {
+  const m = {};
+  (ops || []).forEach(op => {
+    const l = opLabel(op);
+    const i = l.indexOf('：');
+    const mod = i > 0 ? l.slice(0, i) : l;
+    const act = i > 0 ? l.slice(i + 1) : l;
+    (m[mod] = m[mod] || []).push(act);
+  });
+  return Object.keys(m).map(mod => `${mod}：${m[mod].join(' ')}`);
+};
+/* 任一操作权限即显示对应操作列（管理员全 true） */
+const canAnyOp = (...ops) => ops.some(op => canOp(op));
+
+/* 按角色取导航：超管=控制台（系统监控 / 开通主管理员）；主管理员=所属系统全部管理页；员工=工作台+授权页；企业管理员=本企业数据页（只读） */
+function curNav(){
+  if (!ME) return [];
+  if (ME.level === 'super') return [
+    ['monitor','activity','系统监控'],
+    ['fee','cash-stack','系统使用费'],
+    ['orgs','person-gear','主管理员管理'],
+    ['appcfg','gear','系统设置']
+  ];
+  if (ME.level === 'staff' || ME.level === 'manager') return [['home','house','工作台'],
+    ...NAV[curMode()].filter(n => pageAllowed(n[0]) && n[3] === undefined)];
+  if (ME.level === 'company_admin') return NAV.property.filter(n =>
+    pageAllowed(n[0]) && n[3] === undefined);
+  return NAV[curMode()].filter(n => pageAllowed(n[0]) && (n[3] === undefined || n[3] === 'admin'));
+}
+function firstAllowedPage(mode){
+  const nav = curNav();
+  return (nav.find(n => pageAllowed(n[0])) || [null])[0]
+      || (pageAllowed(DEFAULT_PAGE[mode]) ? DEFAULT_PAGE[mode] : null);
+}
+
+function renderApp(){
+  const mode = curMode();
+  const cur = getCurrency();
+  const isSuper = ME.level === 'super';
+  /* 员工/管理员（manager）统一走工作台分支，界面与权限配置一致 */
+  const isStaff = ME.level === 'staff' || ME.level === 'manager';
+  /* 标签页标题只显示当前系统 */
+  document.title = '房屋管理系统 · ' + (isSuper ? '管理控制台' : isStaff ? MODE_NAME[mode] + '工作台' : MODE_NAME[mode] + '系统');
+  const nav = curNav();
+  $('#root').innerHTML = `
+  <div class="d-flex">
+    <aside class="sidebar p-3">
+      <h5 class="text-white mb-3"><i class="bi bi-${isSuper ? 'shield-lock' : isStaff ? 'person-badge' : 'buildings'}"></i>
+        ${isSuper ? '管理控制台' : isStaff ? '工作台' : MODE_NAME[mode] + '系统'}</h5>
+      ${isSuper ? `
+      <div class="mode-lock mb-1 text-white-50 small">
+        <i class="bi bi-globe2"></i> 开通各系统主管理员（经营主体），并监控全系统运行
+      </div>` : ''}
+      ${(!isSuper && !isStaff) ? `
+      <div class="mode-lock mb-1 text-white-50 small">
+        <i class="bi bi-building"></i> ${esc(ME.level === 'company_admin' ? (ME.company_name || '') : (ME.org_name || ''))}
+      </div>
+      <div class="mode-lock mb-1 text-white-50 small">
+        <i class="bi bi-lock"></i> ${esc(ME.level === 'company_admin' ? '企业管理员' : (ME.role_name || ME.role))}
+      </div>` : ''}
+      ${isStaff ? `
+      <div class="mode-lock mb-1 text-white-50 small">
+        <i class="bi bi-lock"></i> ${MODE_NAME[mode]} · 员工工作台
+      </div>` : ''}
+      ${ME.level === 'admin' ? `
+      <div class="cur-row mb-3">
+        <select onchange="switchCurrency(this.value)">
+          <option value="CNY" ${cur === 'CNY' ? 'selected' : ''}>¥ 人民币</option>
+          <option value="USD" ${cur === 'USD' ? 'selected' : ''}>$ 美元</option>
+        </select>
+      </div>` : ''}
+      <nav class="nav flex-column" id="nav">
+        ${nav.map(n => `<a class="nav-link" data-page="${n[0]}" onclick="go('${n[0]}')">
+          <i class="bi bi-${n[1]}"></i> ${n[2]}</a>`).join('')}
+      </nav>
+      <div class="mt-auto pt-3 small text-white-50">
+        <div class="mb-2"><i class="bi bi-person-circle"></i> ${esc(ME.name || ME.real_name || ME.username)}
+          <span class="badge bg-secondary">${esc(ME.level === 'company_admin' ? '企业管理员' : (ME.role_name || ME.role))}</span></div>
+        <button class="btn btn-sm btn-outline-light w-100" onclick="doLogout()">退出登录</button>
+      </div>
+    </aside>
+    <main class="flex-grow-1 p-4">
+      <h4 id="pageTitle" class="mb-3"></h4>
+      <div id="page"></div>
+    </main>
+  </div>`;
+  go(location.hash.slice(1) || firstAllowedPage(mode) || DEFAULT_PAGE[mode]);
+  checkBillReminder();
+  if (ME.level === 'super') checkSuperFeeNotice();
+  else checkFeeNotice();
+  startFeePolling();
+}
+
+/* 系统使用费提醒（主管理员可见）：超期/临期/已关闭时顶部横幅提醒；
+ * 登录时检查一次，并在登录期间每 5 分钟轮询 /me 刷新状态，到期状态出现或变化时再次提醒 */
+let _feeRemindShown = false;
+let _feeNotifiedKey = '';
+function checkFeeNotice(){
+  try {
+    if (!ME || ME.level !== 'admin' || !ME.fee_notice) return;
+    const n = ME.fee_notice;
+    const key = n.status + ':' + n.days + ':' + n.due;
+    if (key === _feeNotifiedKey) return; /* 同一到期状态只提醒一次 */
+    _feeNotifiedKey = key;
+    _feeRemindShown = true;
+    const txt = n.status === 'closed'
+      ? '<b>系统使用费</b>：本系统已被超管关闭，请联系管理员处理'
+      : n.status === 'overdue'
+        ? `<b>系统使用费</b>：已超期 <b class="text-danger">${n.days}</b> 天（到期日 ${n.due}），请尽快续费，否则系统将停用`
+        : `<b>系统使用费</b>：将于 <b>${n.days}</b> 天后到期（${n.due}），请及时续费`;
+    const bar = document.createElement('div');
+    bar.className = 'fee-remind-bar alert alert-danger d-flex align-items-center rounded-0 mb-0';
+    bar.style.cssText = 'position:sticky;top:0;z-index:1050';
+    bar.innerHTML = `<div class="ms-2"><i class="bi bi-cash-stack"></i> ${txt}</div>
+      <div class="ms-auto d-flex gap-2">
+        <button class="btn btn-sm btn-outline-danger" onclick="this.closest('.fee-remind-bar').remove()">知道了</button>
+      </div>`;
+    const main = document.querySelector('main');
+    if (main) main.prepend(bar);
+    else document.body.prepend(bar);
+  } catch(e){ /* 提醒失败不影响使用 */ }
+}
+let _feePollingStarted = false;
+function startFeePolling(){
+  if (!ME || _feePollingStarted) return;
+  _feePollingStarted = true;
+  setInterval(async () => {
+    try {
+      if (ME.level === 'admin'){
+        const me = await api('/api/me');
+        if (me && me.fee_notice){ ME.fee_notice = me.fee_notice; checkFeeNotice(); }
+      } else if (ME.level === 'super'){
+        checkSuperFeeNotice();
+      }
+    } catch(e){ /* 网络或会话异常时跳过本轮 */ }
+  }, 5 * 60 * 1000);
+}
+/* 超管到期提醒：聚合所有经营主体，有超期/临期/已关闭时顶部横幅提醒 */
+let _superFeeKey = '';
+async function checkSuperFeeNotice(){
+  try {
+    if (!ME || ME.level !== 'super') return;
+    const [orgs, cfg] = await Promise.all([api('/api/fee-orgs'), api('/api/fee-config')]);
+    const t = today();
+    const dDue = o => Math.round((new Date(o.fee_due + 'T00:00:00') - new Date(t + 'T00:00:00')) / 86400000); /* 到期-今天：负=超期，0~remind 天内=临期 */
+    const ovd = orgs.filter(o => o.fee_status !== 'closed' && o.fee_due && dDue(o) < 0);
+    const soon = orgs.filter(o => o.fee_status !== 'closed' && o.fee_due && dDue(o) >= 0 && dDue(o) <= cfg.remind_days);
+    const closed = orgs.filter(o => o.fee_status === 'closed');
+    const key = JSON.stringify([ovd.map(o=>o.id+':'+o.fee_due), soon.map(o=>o.id+':'+o.fee_due), closed.map(o=>o.id)]);
+    if (key === _superFeeKey) return;
+    if (!ovd.length && !soon.length && !closed.length){ _superFeeKey = key; return; }
+    _superFeeKey = key;
+    const parts = [];
+    if (ovd.length) parts.push(`<span class="text-danger fw-bold">${ovd.length}</span> 个经营主体已超期`);
+    if (soon.length) parts.push(`${soon.length} 个即将到期`);
+    if (closed.length) parts.push(`${closed.length} 个已关闭`);
+    const bar = document.createElement('div');
+    bar.className = 'fee-remind-bar alert alert-danger d-flex align-items-center rounded-0 mb-0';
+    bar.style.cssText = 'position:sticky;top:0;z-index:1050';
+    bar.innerHTML = `<div class="ms-2"><i class="bi bi-cash-stack"></i> <b>系统使用费</b>：${parts.join('、')}</div>
+      <div class="ms-auto d-flex gap-2">
+        <button class="btn btn-sm btn-outline-danger" onclick="go('#fee')">去查看</button>
+        <button class="btn btn-sm btn-outline-secondary" onclick="this.closest('.fee-remind-bar').remove()">知道了</button>
+      </div>`;
+    const main = document.querySelector('main');
+    if (main) main.prepend(bar);
+    else document.body.prepend(bar);
+  } catch(e){ /* 提醒失败不影响使用 */ }
+}
+
+/* 账单到期提醒横幅：主管理员开启后，存在符合条件的未收账单即提醒；
+   可见性受角色权限「账单提醒」控制（主管理员默认可见，员工/企业管理员需角色勾选）；
+   页面生命周期内（不刷新）仅弹一次，点「知道了」只关闭当前横幅 */
+let _remindShown = false;
+async function checkBillReminder(){
+  try {
+    if (_remindShown || !ME || ME.level === 'super') return;
+    if (typeof canOp === 'function' && !canOp('bill_remind')) return;
+    const r = await api('/api/bill-reminders');
+    if (!r || !r.enabled || !r.total) return;
+    _remindShown = true;
+    const bar = document.createElement('div');
+    bar.className = 'bill-remind-bar alert alert-warning d-flex align-items-center rounded-0 mb-0';
+    bar.style.cssText = 'position:sticky;top:0;z-index:1050';
+    const sumLabel = ME.level === 'company_admin' ? '未付合计' : '未收合计';
+    bar.innerHTML = `<div class="ms-2"><i class="bi bi-bell-fill"></i> <b>账单提醒</b>：有 ${r.total} 张账单待收
+      ${r.overdue ? `<span class="badge bg-danger ms-1">已逾期 ${r.overdue}</span>` : ''}
+      ${r.due_soon ? `<span class="badge bg-warning text-dark ms-1">临期 ${r.due_soon}</span>` : ''}
+      · ${sumLabel} <b>${money(r.amount)}</b></div>
+      <div class="ms-auto d-flex gap-2">
+        <button class="btn btn-sm btn-outline-primary" onclick="go('bills')">去查看</button>
+        <button class="btn btn-sm btn-outline-secondary" onclick="this.closest('.bill-remind-bar').remove()">知道了</button>
+      </div>`;
+    const main = document.querySelector('main');
+    if (main) main.prepend(bar);
+    else document.body.prepend(bar);
+  } catch(e){ /* 提醒失败不影响使用 */ }
+}
+
+async function switchCurrency(c, silent){
+  if (!DB.data.settings) return;
+  if (DB.data.settings.currency === c) return;
+  DB.data.settings.currency = c;
+  /* 登录页（无 token）仅本地切换，登录后以后端该主体设置为准 */
+  const token = sessionStorage.getItem('house_token');
+  if (token){ try { await api('/api/settings', 'PUT', { currency: c }); } catch(e){ console.error(e); } }
+  if (silent) return;
+  renderApp();
+}
+
+/* 系统设置：主管理员配置本经营主体（酒店仅汇率/币种；租房、物业另含网费/水电单价） */
+function editSettings(){
+  if (ME.level !== 'admin'){ alert('仅主管理员可修改系统设置'); return; }
+  const mode = curMode();
+  const withPrices = mode !== 'hotel';
+  const s = DB.data.settings || {};
+  const fields = [
+    { name:'currency', label:'记账/显示币种', type:'select', required:true, options:[
+      { value:'USD', label:'$ 美元' }, { value:'CNY', label:'¥ 人民币' } ] },
+    { name:'rate', label:'1 美元 = ? 人民币', type:'number', required:true, step:'0.0001',
+      hint:'系统内部统一以人民币存储金额；切换到美元后按此汇率换算显示。' }
+  ];
+  if (withPrices){
+    fields.push(
+      { name:'net_price_per_mb', label:'网费单价默认（/兆/月）', type:'number', step:'0.01', money:true,
+        hint:'新增房间时「每兆月租」自动填入该值；已建房间单价不受影响。' },
+      { name:'water_price', label:'水价默认（/吨）', type:'number', step:'0.01', money:true,
+        hint:'新增房间时「水费单价」自动填入该值；已建房间单价不受影响。' },
+      { name:'elec_price', label:'电价默认（/度）', type:'number', step:'0.01', money:true,
+        hint:'新增房间时「电费单价」自动填入该值；已建房间单价不受影响。' }
+    );
+  }
+  fields.push(
+    { name:'remind_enable', label:'账单到期提醒', type:'select', required:true, options:[
+      { value:1, label:'开启（登录后提醒未收款账单）' }, { value:0, label:'关闭' }] },
+    { name:'remind_days', label:'提前提醒天数', type:'number', required:true, step:'1', min:0,
+      hint:'应缴日期距今天数 ≤ 该值即提醒；填 0 表示仅提醒已逾期账单。' }
+  );
+  openForm('系统设置 · ' + MODE_NAME[mode], fields,
+    {
+      currency: s.currency || 'USD', rate: getRate(),
+      net_price_per_mb: s.net_price_per_mb, water_price: s.water_price, elec_price: s.elec_price,
+      remind_enable: Number(s.remind_enable === undefined ? 1 : s.remind_enable),
+      remind_days: Number(s.remind_days === undefined ? 3 : s.remind_days)
+    },
+    async (d, modal) => {
+      const payload = { currency: d.currency, rate: Number(d.rate), remind_enable: Number(d.remind_enable), remind_days: Number(d.remind_days) };
+      if (withPrices){
+        payload.net_price_per_mb = Number(d.net_price_per_mb) || 0;
+        payload.water_price = Number(d.water_price) || 0;
+        payload.elec_price = Number(d.elec_price) || 0;
+      }
+      const saved = await api('/api/settings', 'PUT', payload);
+      DB.data.settings = {
+        mode, currency: saved.currency, rate: Number(saved.rate),
+        net_price_per_mb: saved.net_price_per_mb, water_price: saved.water_price,
+        elec_price: saved.elec_price, prices: saved.prices,
+        remind_enable: Number(saved.remind_enable === undefined ? 1 : saved.remind_enable),
+        remind_days: Number(saved.remind_days === undefined ? 3 : saved.remind_days),
+        item_lib: (DB.data.settings && DB.data.settings.item_lib) || []
+      };
+      modal.hide();
+      renderApp();
+    });
+}
+
+async function renderSettings(){
+  const mode = curMode();
+  $('#page').innerHTML = `
+  <div class="card"><div class="card-body" style="max-width:720px">
+    <h5><i class="bi bi-gear text-primary"></i> 系统设置</h5>
+    <p class="text-muted mb-2">配置本经营主体（<b>${esc(ME.org_name || '')}</b>）的记账币种与汇率${mode === 'hotel' ? '' : '、网费及水电单价'}。</p>
+    <ul class="small text-muted ps-3 mb-3">
+      <li>金额内部以人民币存储，按汇率换算为美元显示；各经营主体的汇率与单价相互独立。</li>
+      ${mode === 'hotel' ? '<li>酒店仅涉及房费，无网费/水电单价设置。</li>'
+        : '<li>网费/水电单价作为新增房间的默认值，已建房间单价不受影响。</li>'}
+      <li>账单到期提醒：${Number(DB.data.settings.remind_enable === undefined ? 1 : DB.data.settings.remind_enable) ? '已开启，提前 ' + Number(DB.data.settings.remind_days === undefined ? 3 : DB.data.settings.remind_days) + ' 天提醒未收款账单' : '已关闭'}</li>
+    </ul>
+    <button class="btn btn-primary" onclick="editSettings()"><i class="bi bi-sliders"></i> 打开设置</button>
+  </div></div>
+  <div class="card mt-3"><div class="card-body" style="max-width:720px">
+    <div class="d-flex justify-content-between align-items-center mb-1">
+      <h6 class="mb-0"><i class="bi bi-journal-text text-primary"></i> 常用商品库</h6>
+      <button class="btn btn-sm btn-outline-secondary" onclick="libAddRow()"><i class="bi bi-plus-lg"></i> 添加</button>
+    </div>
+    <p class="small text-muted mb-2">明细录入时输入商品名可联想带出型号与单价，也可在明细弹窗点「从商品库添加」批量生成；数据仅本经营主体可见。</p>
+    <div class="table-responsive"><table class="table table-sm table-bordered align-middle mb-2">
+      <thead class="table-light text-center"><tr><th style="width:13%">类别</th><th style="width:33%">商品</th><th style="width:28%">型号</th><th style="width:16%">单价(${currencySymbol()})</th><th style="width:48px"></th></tr></thead>
+      <tbody id="lib_tb"></tbody>
+    </table></div>
+    <button class="btn btn-sm btn-primary" onclick="saveItemLib()">保存商品库</button>
+    <span id="lib_save_msg" class="small text-success ms-2"></span>
+  </div></div>`;
+  libRender();
+}
+/* ===== 常用商品库维护（系统设置页，仅主管理员可见） ===== */
+let _libDraft = [];
+function libRender(){
+  _libDraft = (DB.data.settings.item_lib || []).map(it => ({
+    cat: it.cat === 'util' ? 'util' : 'net',
+    name: it.name, model: it.model || '', price: toDisplayMoney(it.price)
+  }));
+  libPaint();
+}
+function libPaint(){
+  const tb = document.getElementById('lib_tb');
+  if (!tb) return;
+  if (!_libDraft.length){
+    tb.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-3">暂无商品，点击右上角「添加」录入</td></tr>';
+    return;
+  }
+  tb.innerHTML = _libDraft.map((it, i) => `<tr>
+    <td style="min-width:90px"><select class="form-select form-select-sm" style="min-width:86px" data-lib="cat" data-i="${i}">
+      <option value="net" ${it.cat === 'net' ? 'selected' : ''}>网络</option>
+      <option value="util" ${it.cat === 'util' ? 'selected' : ''}>水电</option>
+    </select></td>
+    <td><input class="form-control form-control-sm" data-lib="name" data-i="${i}" value="${esc(it.name)}"></td>
+    <td><input class="form-control form-control-sm" data-lib="model" data-i="${i}" value="${esc(it.model)}"></td>
+    <td><input class="form-control form-control-sm" data-lib="price" data-i="${i}" type="number" min="0" step="0.01" value="${esc(it.price)}"></td>
+    <td class="text-center"><button type="button" class="btn btn-sm btn-outline-danger py-0 px-1" title="删除" onclick="libDel(${i})">×</button></td>
+  </tr>`).join('');
+}
+function libAddRow(){ _libDraft.push({ cat:'net', name:'', model:'', price:'' }); libPaint(); }
+function libDel(i){ _libDraft.splice(i, 1); libPaint(); }
+async function saveItemLib(){
+  const tb = document.getElementById('lib_tb');
+  if (!tb) return;
+  const arr = [];
+  for (const tr of tb.rows){
+    const name = (tr.querySelector('[data-lib="name"]').value || '').trim();
+    if (!name) continue;
+    const model = (tr.querySelector('[data-lib="model"]').value || '').trim();
+    const price = Number(tr.querySelector('[data-lib="price"]').value);
+    if (!Number.isFinite(price) || price < 0){ alert('商品「' + name + '」单价不合法'); return; }
+    const cat = tr.querySelector('[data-lib="cat"]').value === 'util' ? 'util' : 'net';
+    arr.push({ cat, name, model, price: Math.round(fromDisplayMoney(price) * 100) / 100 });
+  }
+  try {
+    const saved = await api('/api/settings', 'PUT', { item_lib: arr });
+    DB.data.settings.item_lib = saved.item_lib || [];
+    _libDraft = (saved.item_lib || []).map(it => ({ cat: it.cat === 'util' ? 'util' : 'net', name: it.name, model: it.model || '', price: toDisplayMoney(it.price) }));
+    libPaint();
+    const msg = document.getElementById('lib_save_msg');
+    if (msg){ msg.textContent = '已保存 ' + saved.item_lib.length + ' 条'; setTimeout(() => msg.textContent = '', 2500); }
+  } catch(e){ alert(e.message); }
+}
+
+async function go(page){
+  const mode = curMode();
+  const nav = curNav();
+  /* 企业管理员未配置任何页面权限：提示联系主管理员 */
+  if (ME.level === 'company_admin' && !nav.length){
+    history.replaceState(null, '', '#');
+    $('#pageTitle').textContent = '权限未配置';
+    $('#page').innerHTML = `<div class="card"><div class="card-body text-center py-5">
+      <i class="bi bi-shield-lock" style="font-size:3rem;color:#adb5bd"></i>
+      <p class="mt-3 mb-1 fw-bold">企业管理员权限未配置</p>
+      <p class="text-muted small mb-0">请联系物业主管理员：在「角色管理」配置页面权限并为你分配角色后重新登录。</p>
+    </div></div>`;
+    return;
+  }
+  /* 企业员工：管理页内 Tab（物业，参与权限配置；员工无权限时会被 pageAllowed 拦在导航外） */
+  if (page === 'orgemp'){ ORG_TAB = 'orgemp'; page = 'owners'; }
+  else if (page === 'owners'){ ORG_TAB = 'owners'; }
+  let item = nav.find(n => n[0] === page);
+  if (!item){
+    page = firstAllowedPage(mode) || DEFAULT_PAGE[mode];
+    item = nav.find(n => n[0] === page);
+  }
+  if (location.hash.slice(1) !== page) history.replaceState(null, '', '#' + page);
+  document.querySelectorAll('#nav .nav-link').forEach(a =>
+    a.classList.toggle('active', a.dataset.page === page));
+  $('#pageTitle').textContent = item[2];
+  $('#page').innerHTML = '<div class="text-muted p-4"><span class="spinner-border spinner-border-sm"></span> 加载中…</div>';
+  try { await PAGES[page].render(); }
+  catch(e){ console.error(e); $('#page').innerHTML = `<div class="alert alert-danger">加载失败：${esc(e.message)}</div>`; }
+}
+
+/* ==================================================================
+ *  8. 仪表盘（三模式）
+ * ================================================================== */
+async function renderDashboard(){
+  const s = await api('/api/stats');
+  const mode = curMode();
+
+  let cards, tables;
+
+  if (mode === 'rental'){
+    cards = [
+      ['总房间数', s.total_rooms, 'door-open', 'primary'],
+      ['已出租', s.rented, 'check-circle', 'success'],
+      ['空置', s.vacant, 'dash-circle', 'secondary'],
+      ['入住率', s.occupancy + '%', 'graph-up-arrow', 'info'],
+      ['本月应收', money(s.month_receivable), 'wallet2', 'warning'],
+      ['本月已收', money(s.month_received), 'cash-coin', 'success'],
+      ['累计欠费', money(s.arrears), 'exclamation-triangle', 'danger'],
+      ['待处理报修', s.pending_repairs, 'tools', 'danger']
+    ];
+    tables = `
+    <div class="row g-3">
+      <div class="col-lg-6">
+        <div class="card h-100">
+          <div class="card-header bg-white fw-bold">
+            <i class="bi bi-alarm text-danger"></i> 30 天内到期合同（${s.expiring.length}）</div>
+          <div class="table-responsive" style="max-height:320px">
+            <table class="table table-hover mb-0">
+              <thead class="table-light"><tr>
+                <th>房间</th><th>租客</th><th>电话</th><th>到期日</th><th>剩余</th></tr></thead>
+              <tbody>
+                ${s.expiring.map(e => `<tr>
+                  <td>${esc(e.building_name)} ${esc(e.room_no)}</td>
+                  <td>${esc(e.tenant_name)}</td>
+                  <td>${esc(e.phone || '-')}</td>
+                  <td class="text-danger">${e.end_date}</td>
+                  <td><span class="badge bg-${e.days_left <= 7 ? 'danger' : 'warning text-dark'}">${e.days_left} 天</span></td>
+                </tr>`).join('') || '<tr><td colspan="5" class="text-center text-muted py-4">暂无即将到期合同</td></tr>'}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+      <div class="col-lg-6">
+        <div class="card h-100">
+          <div class="card-header bg-white fw-bold"><i class="bi bi-receipt"></i> 最近账单</div>
+          <div class="table-responsive" style="max-height:320px">
+            <table class="table table-hover mb-0">
+              <thead class="table-light"><tr>
+                <th>房间</th><th>租客</th><th>金额</th><th>状态</th></tr></thead>
+              <tbody>
+                ${s.recent_bills.map(b => `<tr>
+                  <td>${esc(b.room_no || '-')}</td>
+                  <td>${esc(b.tenant_name || '-')}</td>
+                  <td>${money(b.amount)}</td>
+                  <td>${billBadge(b.status)}</td>
+                </tr>`).join('') || '<tr><td colspan="4" class="text-center text-muted py-4">暂无账单</td></tr>'}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  else if (mode === 'hotel'){
+    cards = [
+      ['房间总数', s.total_rooms, 'door-open', 'primary'],
+      ['空闲', s.vacant, 'dash-circle', 'secondary'],
+      ['已入住', s.rented, 'person-check', 'success'],
+      ['已预订', s.booked, 'calendar-check', 'info'],
+      ['今日入住', s.today_checkin, 'box-arrow-in-right', 'primary'],
+      ['今日退房', s.today_checkout, 'box-arrow-right', 'warning'],
+      ['今日营收', money(s.today_revenue), 'cash-coin', 'success'],
+      ['待处理报修', s.pending_repairs, 'tools', 'danger']
+    ];
+    tables = `
+    <div class="row g-3">
+      <div class="col-lg-6">
+        <div class="card h-100">
+          <div class="card-header bg-white fw-bold">
+            <i class="bi bi-journal-check text-primary"></i> 最近订单</div>
+          <div class="table-responsive" style="max-height:320px">
+            <table class="table table-hover mb-0">
+              <thead class="table-light"><tr>
+                <th>房间</th><th>房客</th><th>入离</th><th>金额</th><th>状态</th></tr></thead>
+              <tbody>
+                ${s.recent_orders.map(o => `<tr>
+                  <td>${esc(o.building_name || '')} ${esc(o.room_no || '')}</td>
+                  <td>${esc(o.guest_name)}</td>
+                  <td><small>${o.check_in_date} ~ ${o.check_out_date}</small></td>
+                  <td>${money(o.total)}</td>
+                  <td>${orderBadge(o.status)}</td>
+                </tr>`).join('') || '<tr><td colspan="5" class="text-center text-muted py-4">暂无订单</td></tr>'}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+      <div class="col-lg-6">
+        <div class="card h-100">
+          <div class="card-header bg-white fw-bold">
+            <i class="bi bi-stars text-warning"></i> 待清洁房间（${s.dirty_rooms.length}）</div>
+          <div class="table-responsive" style="max-height:320px">
+            <table class="table table-hover mb-0">
+              <thead class="table-light"><tr>
+                <th>楼栋</th><th>房间号</th><th>房型</th><th>操作</th></tr></thead>
+              <tbody>
+                ${s.dirty_rooms.map(r => `<tr>
+                  <td>${esc(r.building_name)}</td>
+                  <td><b>${esc(r.room_no)}</b></td>
+                  <td>${esc(r.room_type || '-')}</td>
+                  <td><button class="btn btn-sm btn-outline-success"
+                        onclick="finishClean(${r.id})">清洁完成</button></td>
+                </tr>`).join('') || '<tr><td colspan="4" class="text-center text-muted py-4">暂无待清洁房间</td></tr>'}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  else {
+    cards = [
+      ['总户数', s.total_rooms, 'houses', 'primary'],
+      ['企业数', s.owner_count, 'building', 'info'],
+      ['企业员工数', s.emp_count, 'person-vcard', 'success'],
+      ['本月应收物业费', money(s.property_receivable), 'wallet2', 'warning'],
+      ['本月已收', money(s.property_received), 'cash-coin', 'success'],
+      ['当月收缴率', s.pay_rate + '%', 'graph-up-arrow', 'success'],
+      ['累计欠费', money(s.property_arrears + s.net_arrears), 'exclamation-triangle', 'danger'],
+      ['本月网费', money(s.net_receivable), 'ethernet', 'primary'],
+      ['待处理投诉', s.pending_complaints, 'chat-square-text', 'danger']
+    ];
+    tables = `
+    <div class="row g-3 mb-3">
+      <div class="col-lg-4">
+        <div class="card h-100"><div class="card-body">
+          <h6 class="fw-bold mb-3"><i class="bi bi-lightning-charge text-primary"></i>
+            本月 ${curMonth()} 费用汇总</h6>
+          <div class="d-flex justify-content-between mb-2">
+            <span class="text-muted">本月网费预估</span>
+            <b class="text-primary">${money(s.net_estimate_month)}</b>
+          </div>
+          <div class="d-flex justify-content-between mb-2">
+            <span class="text-muted">总带宽</span>
+            <b>${s.total_bandwidth} 兆</b>
+          </div>
+          <div class="d-flex justify-content-between mb-2">
+            <span class="text-muted">本月带宽变更</span>
+            <b>${s.net_change_month} 次</b>
+          </div>
+          <hr class="my-2">
+          <div class="d-flex justify-content-between mb-2">
+            <span class="text-muted">水费</span>
+            <b>${money(s.meter_water_fee)}</b>
+            <small class="text-muted">${s.meter_water_usage} 吨</small>
+          </div>
+          <div class="d-flex justify-content-between mb-2">
+            <span class="text-muted">电费</span>
+            <b>${money(s.meter_elec_fee)}</b>
+            <small class="text-muted">${s.meter_elec_usage} 度</small>
+          </div>
+          <div class="d-flex justify-content-between">
+            <span class="text-muted">网费欠收</span>
+            <b class="text-danger">${money(s.net_arrears)}</b>
+          </div>
+        </div></div>
+      </div>
+      <div class="col-lg-8">
+        <div class="card h-100">
+          <div class="card-header bg-white fw-bold">
+            <i class="bi bi-exclamation-triangle text-danger"></i> 欠费明细（${s.arrears_rooms.length} 户）</div>
+          <div class="table-responsive" style="max-height:220px">
+            <table class="table table-hover mb-0">
+              <thead class="table-light"><tr>
+                <th>房间</th><th>企业</th><th>电话</th>
+                <th>物业欠费</th><th>网费欠费</th><th>合计</th></tr></thead>
+              <tbody>
+                ${s.arrears_rooms.map(r => `<tr>
+                  <td>${esc(r.building_name)} ${esc(r.room_no)}</td>
+                  <td>${esc(r.owner_name || '-')}</td>
+                  <td>${esc(r.owner_phone || '-')}</td>
+                  <td>${r.owe_property > 0 ? money(r.owe_property) : '-'}</td>
+                  <td>${r.owe_network > 0 ? money(r.owe_network) : '-'}</td>
+                  <td class="text-danger fw-bold">${money(r.owe)}</td>
+                </tr>`).join('') || '<tr><td colspan="6" class="text-center text-muted py-4">暂无欠费</td></tr>'}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-header bg-white fw-bold">
+        <i class="bi bi-chat-square-text text-primary"></i> 最近投诉建议</div>
+      <div class="table-responsive" style="max-height:300px">
+        <table class="table table-hover mb-0">
+          <thead class="table-light"><tr>
+            <th>房间</th><th>企业</th><th>类型</th><th>标题</th><th>状态</th></tr></thead>
+          <tbody>
+            ${s.recent_complaints.map(c => `<tr>
+              <td>${esc(c.building_name || '')} ${esc(c.room_no || '-')}</td>
+              <td>${esc(c.owner_name || '-')}</td>
+              <td><span class="badge bg-light text-dark">${esc(c.type)}</span></td>
+              <td>${esc(c.title)}</td>
+              <td>${complaintBadge(c.status)}</td>
+            </tr>`).join('') || '<tr><td colspan="5" class="text-center text-muted py-4">暂无记录</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+  }
+
+  const cardHtml = cards.map(c => `
+    <div class="col-6 col-md-3">
+      <div class="card stat-card"><div class="card-body py-3">
+        <div class="d-flex justify-content-between align-items-center">
+          <div>
+            <div class="text-muted small">${c[0]}</div>
+            <div class="num text-${c[3]}">${c[1]}</div>
+          </div>
+          <i class="bi bi-${c[2]} fs-2 text-${c[3]} opacity-50"></i>
+        </div>
+      </div></div>
+    </div>`).join('');
+
+  $('#page').innerHTML = `<div class="row g-3 mb-4">${cardHtml}</div>${tables}`;
+}
+
+async function finishClean(roomId){
+  try { await api('/api/rooms/' + roomId, 'PUT', { status:'vacant' }); renderDashboard(); }
+  catch(e){ alert(e.message); }
+}
+
+/* ==================================================================
+ *  9. 房间 / 房产管理
+ * ================================================================== */
+let roomFilter = { building_id:'', status:'', keyword:'' };
+
+async function renderRooms(){
+  const mode = curMode();
+  const buildings = await api('/api/buildings');
+  const qs = new URLSearchParams(
+    Object.entries(roomFilter).filter(([, v]) => v !== '' && v !== null)
+  ).toString();
+  const rooms = await api('/api/rooms' + (qs ? '?' + qs : ''));
+
+  const bOpts = buildings.map(b =>
+    `<option value="${b.id}" ${String(roomFilter.building_id) === String(b.id) ? 'selected' : ''}>${esc(b.name)}</option>`).join('');
+
+  let statusOpts, head, body, addLabel;
+
+  if (mode === 'rental'){
+    statusOpts = [['vacant','空置'], ['rented','已出租'], ['maintenance','维修中']];
+    addLabel = '新增房间';
+    head = '<th>楼栋</th><th>房间号</th><th>楼层</th><th>面积</th><th>月租</th><th>押金</th><th>状态</th><th>当前租客</th><th>合同到期</th>' + (canAnyOp('room_add','room_edit','room_delete') ? '<th width="170">操作</th>' : '');
+    body = rooms.map(r => `<tr>
+      <td>${esc(r.building_name)}</td>
+      <td><b>${esc(r.room_no)}</b></td>
+      <td>${r.floor ?? '-'}</td>
+      <td>${r.area ? r.area + '㎡' : '-'}</td>
+      <td>${money(r.rent)}</td>
+      <td>${money(r.deposit)}</td>
+      <td>${statusBadge(r.status, 'rental')}</td>
+      <td>${r.tenant_name ? esc(r.tenant_name) : '<span class="text-muted">-</span>'}</td>
+      <td>${r.end_date || '-'}</td>
+      <td>${canAnyOp('room_add','room_edit','room_delete') ? `
+        ${canOp('room_edit') ? `<button class="btn btn-sm btn-outline-primary" onclick="editRoom(${r.id})">编辑</button>` : ''}
+        ${canOp('room_delete') ? `<button class="btn btn-sm btn-outline-danger" onclick="delRoom(${r.id})">删除</button>` : ''}` : ''}</td></tr>`).join('');
+  }
+  else if (mode === 'hotel'){
+    statusOpts = [['vacant','空闲'], ['rented','已入住'], ['booked','已预订'], ['cleaning','待清洁'], ['maintenance','维修中']];
+    addLabel = '新增房间';
+    head = '<th>楼栋</th><th>房间号</th><th>房型</th><th>楼层</th><th>日房价</th><th>状态</th><th>当前客人</th><th>离店日</th>' + (canAnyOp('room_add','room_edit','room_delete') ? '<th width="170">操作</th>' : '');
+    body = rooms.map(r => `<tr>
+      <td>${esc(r.building_name)}</td>
+      <td><b>${esc(r.room_no)}</b></td>
+      <td>${esc(r.room_type || '-')}</td>
+      <td>${r.floor ?? '-'}</td>
+      <td>${money(r.day_price)}</td>
+      <td>${statusBadge(r.status, 'hotel')}</td>
+      <td>${r.tenant_name ? esc(r.tenant_name) : '<span class="text-muted">-</span>'}</td>
+      <td>${r.end_date || '-'}</td>
+      <td>${canAnyOp('room_add','room_edit','room_delete') ? `
+        ${canOp('room_edit') ? `<button class="btn btn-sm btn-outline-primary" onclick="editRoom(${r.id})">编辑</button>` : ''}
+        ${canOp('room_delete') ? `<button class="btn btn-sm btn-outline-danger" onclick="delRoom(${r.id})">删除</button>` : ''}` : ''}</td></tr>`).join('');
+  }
+  else {
+    statusOpts = [['vacant','空置'], ['rented','已入住'], ['maintenance','维修中']];
+    addLabel = '新增房产';
+    head = '<th>楼栋</th><th>房号</th><th>面积</th><th>状态</th><th>企业</th><th>电话</th><th>物业费/月</th><th>水价</th><th>电价</th><th>欠费</th>' + (canAnyOp('room_add','room_edit','room_delete') ? '<th width="170">操作</th>' : '');
+    const allBills = await api('/api/bills');
+    const oweMap = {};
+    allBills.forEach(b => {
+      if (b.source === 'property' || b.source === 'network'){
+        oweMap[b.room_id] = (oweMap[b.room_id] || 0) + (b.amount - (b.paid_amount || 0));
+      }
+    });
+    body = rooms.map(r => {
+      const owe = oweMap[r.id] || 0;
+      return `<tr>
+        <td>${esc(r.building_name)}</td>
+        <td><b>${esc(r.room_no)}</b></td>
+        <td>${r.area ? r.area + '㎡' : '-'}</td>
+        <td>${statusBadge(r.status, 'property')}</td>
+        <td>${r.owner_name ? esc(r.owner_name) : '<span class="text-muted">未绑定</span>'}</td>
+        <td>${esc(r.owner_phone || '-')}</td>
+        <td>${money(r.property_fee)}</td>
+        <td>${money(r.water_price)}/吨</td>
+        <td>${money(r.elec_price)}/度</td>
+        <td>${owe > 0 ? `<span class="text-danger fw-bold">${money(owe)}</span>` : '<span class="text-muted">-</span>'}</td>
+        <td>${canAnyOp('room_add','room_edit','room_delete') ? `
+          ${canOp('room_edit') ? `<button class="btn btn-sm btn-outline-primary" onclick="editRoom(${r.id})">编辑</button>` : ''}
+          ${canOp('room_delete') ? `<button class="btn btn-sm btn-outline-danger" onclick="delRoom(${r.id})">删除</button>` : ''}` : ''}</td></tr>`;
+    }).join('');
+  }
+
+  $('#page').innerHTML = `
+  <div class="card mb-3"><div class="card-body py-2">
+    <div class="row g-2 align-items-center">
+      <div class="col-auto">
+        <select class="form-select form-select-sm" onchange="roomFilter.building_id=this.value;renderRooms()">
+          <option value="">全部楼栋</option>${bOpts}
+        </select>
+      </div>
+      <div class="col-auto">
+        <select class="form-select form-select-sm" onchange="roomFilter.status=this.value;renderRooms()">
+          <option value="">全部状态</option>
+          ${statusOpts.map(o => `<option value="${o[0]}" ${roomFilter.status === o[0] ? 'selected' : ''}>${o[1]}</option>`).join('')}
+        </select>
+      </div>
+      <div class="col-auto">
+        <input class="form-control form-control-sm" placeholder="搜索房号，回车确认"
+               value="${esc(roomFilter.keyword)}"
+               onkeydown="if(event.key==='Enter'){roomFilter.keyword=this.value;renderRooms()}">
+      </div>
+      <div class="col-auto">
+        ${canOp('room_add') ? `<button class="btn btn-sm btn-primary" onclick="editRoom()">+ ${addLabel}</button>` : ''}
+      </div>
+      <div class="col-auto text-muted small">共 ${rooms.length} 间</div>
+    </div>
+  </div></div>
+  <div class="card"><div class="table-responsive"><table class="table table-hover mb-0">
+    <thead class="table-light"><tr>${head}</tr></thead>
+    <tbody>${body || `<tr><td colspan="11" class="text-center text-muted py-4">暂无数据</td></tr>`}</tbody>
+  </table></div></div>`;
+}
+
+async function editRoom(id, after, dorm){
+  const mode = curMode();
+  const [buildings, tenants] = await Promise.all([
+    api('/api/buildings'),
+    mode === 'property' ? api('/api/tenants') : Promise.resolve([])
+  ]);
+  if (!buildings.length){ alert('请先创建楼栋'); return; }
+
+  let data = {
+    status:'vacant', rent:0, deposit:0, day_price:0,
+    property_fee:0,
+    water_price: (DB.data.settings && DB.data.settings.water_price !== undefined)
+      ? DB.data.settings.water_price : 4.5,
+    elec_price: (DB.data.settings && DB.data.settings.elec_price !== undefined)
+      ? DB.data.settings.elec_price : 1,
+    owner_id:null, building_id: buildings[0].id
+  };
+  if (dorm) data.is_dorm = true;
+  if (id){
+    const rooms = await safeApi('/api/rooms');
+    if (!rooms) return;
+    data = rooms.find(r => r.id === id) || data;
+  }
+
+  const fields = [
+    { name:'building_id', label:'所属楼栋', type:'select', required:true,
+      options: buildings.map(b => ({ value:b.id, label:b.name })) },
+    { name:'room_no', label: mode === 'property' ? '房号' : '房间号',
+      required:true, placeholder:'如：101' },
+    { name:'room_type', label:'房型', placeholder:'如：一居室 / 标准间' },
+    { name:'floor', label:'楼层', type:'number' },
+    { name:'area', label:'面积(㎡)', type:'number', step:'0.1' }
+  ];
+
+  if (mode === 'rental'){
+    fields.push({ name:'rent', label:'月租金', type:'number', required:true, money:true });
+    fields.push({ name:'deposit', label:'押金', type:'number', money:true });
+    fields.push({ name:'water_price', label:'水费单价(/吨)', type:'number', step:'0.01', money:true });
+    fields.push({ name:'elec_price', label:'电费单价(/度)', type:'number', step:'0.01', money:true });
+    fields.push({ name:'status', label:'房间状态', type:'select', options:[
+      { value:'vacant', label:'空置' }, { value:'rented', label:'已出租' },
+      { value:'maintenance', label:'维修中' }] });
+  } else if (mode === 'hotel'){
+    fields.push({ name:'day_price', label:'日房价(/天)', type:'number', required:true, money:true });
+    fields.push({ name:'status', label:'房间状态', type:'select', options:[
+      { value:'vacant', label:'空闲' }, { value:'rented', label:'已入住' },
+      { value:'booked', label:'已预订' }, { value:'cleaning', label:'待清洁' },
+      { value:'maintenance', label:'维修中' }] });
+  } else {
+    fields.push({ name:'owner_id', label:'绑定企业', type:'select',
+      options: tenants.map(t => ({ value:t.id, label:`${t.name} ${t.phone || ''}` })) });
+    fields.push({ name:'property_fee', label:'物业费(/月)', type:'number', money:true });
+    fields.push({ name:'water_price', label:'水费单价(/吨)', type:'number', step:'0.01', money:true });
+    fields.push({ name:'elec_price', label:'电费单价(/度)', type:'number', step:'0.01', money:true });
+    fields.push({ name:'is_dorm', label:'作为宿舍', type:'checkbox', hint:'勾选后该房间作为宿舍，可在宿舍管理中分配员工入住' });
+    fields.push({ name:'capacity', label:'宿舍容量(人)', type:'number', hint:'0 表示不限制；仅作为宿舍时生效' });
+    fields.push({ name:'status', label:'房屋状态', type:'select', options:[
+      { value:'vacant', label:'空置' }, { value:'rented', label:'已入住' },
+      { value:'maintenance', label:'维修中' }] });
+  }
+  fields.push({ name:'remark', label:'备注', type:'textarea' });
+
+  const title = mode === 'property' ? (id ? '编辑房产' : '新增房产')
+                                    : (id ? '编辑房间' : '新增房间');
+
+  openForm(title, fields, data, async (d, modal) => {
+    await api(id ? '/api/rooms/' + id : '/api/rooms', id ? 'PUT' : 'POST', d);
+    modal.hide(); (typeof after === 'function' ? after : renderRooms)();
+  });
+}
+
+async function delRoom(id){
+  const mode = curMode();
+  if (!confirm(mode === 'property' ? '确定删除该房产？' : '确定删除该房间？')) return;
+  try { await api('/api/rooms/' + id, 'DELETE'); renderRooms(); }
+  catch(e){ alert(e.message); }
+}
+
+/* ==================================================================
+ * 10. 房态图
+ * ================================================================== */
+async function renderRoomMap(){
+  const [buildings, rooms] = await Promise.all([api('/api/buildings'), api('/api/rooms')]);
+  const mode = curMode();
+  const legendKeys = ['vacant','booked','rented','cleaning','maintenance'];
+  const legend = legendKeys.map(k =>
+    `<span class="me-3"><span class="legend-dot" style="background:${STATUS_HEX[k]}"></span>
+      ${STATUS_TEXT[k][mode] || STATUS_TEXT[k].hotel}</span>`).join('');
+
+  let html = `<div class="card mb-3"><div class="card-body py-2 small">${legend}</div></div>`;
+
+  buildings.forEach(b => {
+    const rs = rooms.filter(r => r.building_id === b.id);
+    if (!rs.length) return;
+    html += `<h6 class="mt-3 mb-2 text-muted"><i class="bi bi-building"></i> ${esc(b.name)}
+      <span class="badge bg-light text-dark">${rs.length} 间</span></h6><div class="row g-2">`;
+    rs.forEach(r => {
+      const color = STATUS_HEX[r.status] || '#6b7280';
+      html += `<div class="col-6 col-md-4 col-lg-3 col-xl-2">
+        <div class="card room-card border-${STATUS_COLOR[r.status] || 'secondary'}"
+             onclick="roomMenu(${r.id})">
+          <div class="card-body p-2 text-center">
+            <div class="rno" style="color:${color}">${esc(r.room_no)}</div>
+            <div class="small text-muted">${esc(r.room_type || '')}</div>
+            <div class="mt-1">${statusBadge(r.status)}</div>
+            <div class="small text-truncate mt-1" style="min-height:18px">
+              ${r.tenant_name ? esc(r.tenant_name) : '<span class="text-muted">-</span>'}
+            </div>
+            <div class="small text-muted text-truncate">${r.end_date || ''}</div>
+          </div>
+        </div>
+      </div>`;
+    });
+    html += `</div>`;
+  });
+
+  $('#page').innerHTML = html || '<div class="text-muted">暂无房间数据</div>';
+}
+
+async function roomMenu(roomId){
+  const rooms = await safeApi('/api/rooms');
+  if (!rooms) return;
+  const r = rooms.find(x => x.id === roomId);
+  if (!r) return;
+
+  const items = [];
+  const title = `${r.building_name} ${r.room_no}`;
+
+  if (r.status === 'vacant'){
+    if (canOp('order_add')) items.push({ label:'📝 新增预订', fn: () => editOrder(null, r.id) });
+    if (canOp('room_edit')) items.push({ label:'🔧 标记维修', cls:'btn-outline-danger', fn: async () => {
+      await api('/api/rooms/' + r.id, 'PUT', { status:'maintenance' }); renderRoomMap();
+    }});
+  }
+  if (r.status === 'booked'){
+    const orders = await safeApi('/api/orders?status=booked');
+    if (!orders) return;
+    const o = orders.find(o => o.room_id === r.id);
+    if (o){
+      if (canOp('order_status')){
+      items.push({ label:'✅ 办理入住', cls:'btn-outline-success', fn: async () => {
+        await api(`/api/orders/${o.id}/checkin`, 'POST'); renderRoomMap();
+      }});
+      items.push({ label:'❌ 取消预订', cls:'btn-outline-secondary', fn: async () => {
+        if (!confirm('确定取消该预订？')) return;
+        await api(`/api/orders/${o.id}/cancel`, 'POST'); renderRoomMap();
+      }});
+      }
+    }
+  }
+  if (r.status === 'rented'){
+    const orders = await safeApi('/api/orders?status=checked_in');
+    if (!orders) return;
+    const o = orders.find(o => o.room_id === r.id);
+    if (o){
+      if (canOp('order_status')) items.push({ label:'🚪 办理退房', cls:'btn-outline-warning', fn: async () => {
+        if (!confirm('办理退房？将自动生成房费账单，房间进入待清洁状态。')) return;
+        await api(`/api/orders/${o.id}/checkout`, 'POST'); renderRoomMap();
+      }});
+    }
+  }
+  if (r.status === 'cleaning'){
+    if (canOp('room_edit')) items.push({ label:'✨ 清洁完成', cls:'btn-outline-success', fn: async () => {
+      await api('/api/rooms/' + r.id, 'PUT', { status:'vacant' }); renderRoomMap();
+    }});
+  }
+  if (r.status === 'maintenance'){
+    if (canOp('room_edit')) items.push({ label:'🔨 结束维修', cls:'btn-outline-success', fn: async () => {
+      await api('/api/rooms/' + r.id, 'PUT', { status:'vacant' }); renderRoomMap();
+    }});
+  }
+  if (canOp('room_edit')) items.push({ label:'✏️ 编辑房间', cls:'btn-outline-secondary', fn: () => editRoom(r.id) });
+
+  openActions(title, items);
+}
+
+/* ==================================================================
+ * 11. 租客 / 房客 / 企业（物业：企业管理 = 企业 Tab + 企业员工 Tab）
+ * ================================================================== */
+let tenantKeyword = '';
+let ORG_TAB = 'owners';   /* 物业企业管理页 Tab：owners=企业列表，orgemp=企业员工 */
+
+async function renderTenants(){
+  const mode = curMode();
+  if (mode === 'property') return renderPropertyCompanies();
+  const qs = tenantKeyword ? '?keyword=' + encodeURIComponent(tenantKeyword) : '';
+  const list = await api('/api/tenants' + qs);
+
+  const label = mode === 'hotel' ? '房客' : '租客';
+  const roomCol = mode === 'hotel' ? '在住房间' : '在租房间';
+
+  $('#page').innerHTML = `
+  <div class="card mb-3"><div class="card-body py-2">
+    <div class="row g-2 align-items-center">
+      <div class="col-auto">
+        <input class="form-control form-control-sm" placeholder="姓名 / 电话，回车搜索" value="${esc(tenantKeyword)}"
+               onkeydown="if(event.key==='Enter'){tenantKeyword=this.value;renderTenants()}">
+      </div>
+      <div class="col-auto">${canOp('tenant_add') ? `<button class="btn btn-sm btn-primary" onclick="editTenant()">+ 新增${label}</button>` : ''}</div>
+      <div class="col-auto text-muted small">共 ${list.length} 人</div>
+    </div>
+  </div></div>
+  <div class="card"><div class="table-responsive"><table class="table table-hover mb-0">
+    <thead class="table-light"><tr>
+      <th>姓名</th><th>性别</th><th>电话</th><th>身份证号</th>
+      <th>${roomCol}</th><th>备注</th>${canAnyOp('tenant_add','tenant_edit','tenant_delete') ? '<th width="160">操作</th>' : ''}</tr></thead>
+    <tbody>${list.map(t => `<tr>
+      <td><b>${esc(t.name)}</b></td><td>${esc(t.gender || '-')}</td>
+      <td>${esc(t.phone || '-')}</td><td>${esc(t.id_card || '-')}</td>
+      <td>${t.rooms ? esc(t.rooms) : '<span class="text-muted">-</span>'}</td>
+      <td>${esc(t.remark || '-')}</td>
+      <td>${canAnyOp('tenant_add','tenant_edit','tenant_delete') ? `
+        ${canOp('tenant_edit') ? `<button class="btn btn-sm btn-outline-primary" onclick="editTenant(${t.id})">编辑</button>` : ''}
+        ${canOp('tenant_delete') ? `<button class="btn btn-sm btn-outline-danger" onclick="delTenant(${t.id})">删除</button>` : ''}` : ''}</td></tr>`).join('') || '<tr><td colspan="7" class="text-center text-muted py-4">暂无数据</td></tr>'}
+    </tbody></table></div></div>`;
+}
+
+/* ---------- 物业：企业管理（企业 Tab + 企业员工 Tab，数据按主体隔离） ---------- */
+async function renderPropertyCompanies(){
+  const qs = tenantKeyword ? '?keyword=' + encodeURIComponent(tenantKeyword) : '';
+  const canEmp = pageAllowed('orgemp');   /* 主管理员恒 true；员工需被授权 */
+  const companies = await api('/api/tenants' + qs);
+  const empList = (canEmp && ORG_TAB === 'orgemp') ? await api('/api/org-employees') : [];
+  const tab = (id, name, icon) => `
+    <button class="btn btn-sm ${ORG_TAB === id ? 'btn-primary' : 'btn-outline-secondary'}"
+            onclick="ORG_TAB='${id}';renderTenants()">
+      <i class="bi bi-${icon}"></i> ${name}</button>`;
+  if (ORG_TAB === 'orgemp'){
+    /* ---------- 企业员工 Tab ---------- */
+    const roomsByOwner = {};
+    const roomOpts = companies;
+    $('#page').innerHTML = `
+    <div class="card mb-3"><div class="card-body py-2">
+      <div class="row g-2 align-items-center">
+        <div class="col-auto"><div class="btn-group">${tab('owners','企业','building')}${canEmp ? tab('orgemp','企业员工','person-vcard') : ''}</div></div>
+        <div class="col-auto">${canOp('orgemp_add') ? `<button class="btn btn-sm btn-primary" onclick="editOrgEmp()">+ 新增企业员工</button>` : ''}</div>
+        <div class="col-auto text-muted small">共 ${empList.length} 名企业员工</div>
+      </div>
+    </div></div>
+    <div class="card"><div class="table-responsive"><table class="table table-hover mb-0">
+      <thead class="table-light"><tr>
+        <th>照片</th><th>所属企业</th><th>姓名</th><th>身份证/护照</th><th>电话</th>
+        <th>部门</th><th>职位</th><th>门禁卡</th><th>绑定房号</th>${canAnyOp('orgemp_add','orgemp_edit','orgemp_delete') ? '<th width="160">操作</th>' : ''}</tr></thead>
+      <tbody>${empList.map(e => `<tr>
+        <td>${e.photo_url ? `<img src="${esc(e.photo_url)}" class="rounded" style="width:36px;height:36px;object-fit:cover">`
+                           : '<span class="text-muted">-</span>'}</td>
+        <td><b>${esc(e.company)}</b></td>
+        <td>${esc(e.name)}</td>
+        <td>${esc(e.id_number || '-')}</td>
+        <td>${esc(e.phone || '-')}</td>
+        <td>${esc(e.department || '-')}</td>
+        <td>${esc(e.position || '-')}</td>
+        <td>${esc(e.card_no || '-')}</td>
+        <td>${e.room_no ? esc((e.building_name || '') + ' ' + e.room_no) : (e.owner_name ? `<span class="text-muted">（${esc(e.owner_name)}）</span>` : '-')}</td>
+        ${canAnyOp('orgemp_add','orgemp_edit','orgemp_delete') ? `<td>
+          ${canOp('orgemp_edit') ? `<button class="btn btn-sm btn-outline-primary" onclick="editOrgEmp(${e.id})">编辑</button>` : ''}
+          ${canOp('orgemp_delete') ? `<button class="btn btn-sm btn-outline-danger" onclick="delOrgEmp(${e.id})">删除</button>` : ''}
+        </td>` : ''}</tr>`).join('') || '<tr><td colspan="10" class="text-center text-muted py-4">暂无企业员工</td></tr>'}
+      </tbody></table></div></div>`;
+    return;
+  }
+  /* ---------- 企业 Tab（物业业主 = 企业客户） ---------- */
+  $('#page').innerHTML = `
+  <div class="card mb-3"><div class="card-body py-2">
+    <div class="row g-2 align-items-center">
+      <div class="col-auto"><div class="btn-group">${tab('owners','企业','building')}${canEmp ? tab('orgemp','企业员工','person-vcard') : ''}</div></div>
+      <div class="col-auto">
+        <input class="form-control form-control-sm" placeholder="企业名称 / 电话，回车搜索" value="${esc(tenantKeyword)}"
+               onkeydown="if(event.key==='Enter'){tenantKeyword=this.value;renderTenants()}">
+      </div>
+      <div class="col-auto">${canOp('tenant_add') ? `<button class="btn btn-sm btn-primary" onclick="editTenant()">+ 新增企业</button>` : ''}</div>
+      <div class="col-auto text-muted small">共 ${companies.length} 家企业</div>
+    </div>
+  </div></div>
+  <div class="card"><div class="table-responsive"><table class="table table-hover mb-0">
+    <thead class="table-light"><tr>
+      <th>企业名称</th><th>联系人</th><th>电话</th><th>营业执照/信用代码</th>
+      <th>名下房产</th><th>企业员工</th><th>备注</th>${canAnyOp('tenant_add','tenant_edit','tenant_delete') ? '<th width="280">操作</th>' : ''}</tr></thead>
+    <tbody>${companies.map(t => `<tr>
+      <td><b>${esc(t.name)}</b></td>
+      <td>${esc(t.contact || '-')}</td>
+      <td>${esc(t.phone || '-')}</td>
+      <td>${esc(t.license_no || '-')}</td>
+      <td>${t.rooms ? esc(t.rooms) : '<span class="text-muted">-</span>'}</td>
+      <td>${t.emp_count !== undefined ? t.emp_count : 0}</td>
+      <td>${esc(t.remark || '-')}</td>
+      ${canAnyOp('tenant_add','tenant_edit','tenant_delete') ? `<td>
+        ${canOp('tenant_edit') ? `<button class="btn btn-sm btn-outline-primary" onclick="editTenant(${t.id})">编辑</button>` : ''}
+        ${canOp('tenant_delete') ? `<button class="btn btn-sm btn-outline-danger" onclick="delTenant(${t.id})">删除</button>` : ''}
+        ${canOp('tenant_edit') ? `<button class="btn btn-sm btn-outline-success" onclick="setCompanyAdmin(${t.id})">
+          ${t.admin_username ? '管理员：' + esc(t.admin_username) : '设管理员'}</button>` : ''}
+      </td>` : ''}</tr>`).join('') || '<tr><td colspan="8" class="text-center text-muted py-4">暂无企业</td></tr>'}
+    </tbody></table></div></div>`;
+}
+
+/* ---------- 企业管理员账号设置（仅主管理员；企业管理员登录后只读本企业数据） ---------- */
+async function setCompanyAdmin(id){
+  const companies = await api('/api/tenants');
+  const comp = companies.find(c => c.id === id);
+  if (!comp) return alert('企业不存在');
+  const has = !!comp.admin_username;
+  const data = { username: comp.admin_username || '', real_name: '', password: '' };
+  openForm(has ? '重置企业管理员（' + comp.name + '）' : '设置企业管理员（' + comp.name + '）',
+    [
+      { name:'username', label:'登录用户名', required:true, hint: has ? '当前账号，可修改' : '以字母开头，3-20位字母/数字/下划线' },
+      { name:'real_name', label:'姓名' },
+      { name:'password', label:'密码', type:'password', required:true, hint:'至少 6 位；企业管理员仅可查看本企业数据（只读）' }
+    ], data, async (d, modal) => {
+      await api('/api/tenants/' + id + '/company-admin', 'POST', d);
+      modal.hide(); renderTenants();
+    });
+}
+
+/* ---------- 企业员工表单（照片上传 + 绑定企业房号联动） ---------- */
+async function editOrgEmp(id){
+  const [companies, allRooms] = await Promise.all([api('/api/tenants'), api('/api/rooms')]);
+  const empList = id ? await api('/api/org-employees') : [];
+  let data = { company:'', owner_id:'', room_id:'', name:'', id_number:'', phone:'',
+               department:'', position:'', card_no:'', photo_url:'', id_photo_url:'', remark:'' };
+  if (id) data = empList.find(x => x.id === id) || data;
+  /* 绑定房号：仅列所选企业名下房产（rooms.owner_id 关联企业） */
+  const byOwner = {};
+  allRooms.forEach(r => {
+    if (r.owner_id) (byOwner[r.owner_id] = byOwner[r.owner_id] || [])
+      .push({ value:String(r.id), label:(r.building_name || '') + ' ' + r.room_no });
+  });
+  const roomSelect = { name:'room_id', label:'绑定房号', type:'select',
+    options: [{ value:'', label:'-- 不绑定 --' }] };
+  const fields = [
+    { name:'company', label:'所属企业', required:true, placeholder:'企业名称，不存在将自动创建该企业',
+      hint:'企业将自动记录到「企业」列表，并在企业名下房产绑定房号' },
+    { name:'name', label:'姓名', required:true },
+    { name:'id_number', label:'身份证 / 护照' },
+    { name:'phone', label:'电话' },
+    { name:'department', label:'部门' },
+    { name:'position', label:'职位' },
+    { name:'card_no', label:'门禁卡号' },
+    { name:'photo_url', label:'本人照片', type:'file' },
+    { name:'id_photo_url', label:'身份证/护照照片', type:'file' },
+    roomSelect,
+    { name:'remark', label:'备注', type:'textarea' }
+  ];
+  openForm(id ? '编辑企业员工' : '新增企业员工', fields, data, async (d, modal) => {
+    await api(id ? '/api/org-employees/' + id : '/api/org-employees', id ? 'PUT' : 'POST', d);
+    modal.hide(); renderTenants();
+  }, (el) => {
+    /* 企业名变化 → 匹配企业 → 刷新房号下拉（仅该企业名下房产） */
+    const companyIn = el.querySelector('input[name=company]');
+    const roomSel = el.querySelector('select[name=room_id]');
+    if (!companyIn || !roomSel) return;
+    const fillRooms = (company) => {
+      const c = companies.find(x => x.name === company);
+      const opts = [{ value:'', label:'-- 不绑定 --' }];
+      if (c && byOwner[c.id]) opts.push(...byOwner[c.id]);
+      const cur = roomSel.value;
+      roomSel.innerHTML = opts.map(o => `<option value="${esc(o.value)}" ${o.value === cur ? 'selected' : ''}>${esc(o.label)}</option>`).join('');
+    };
+    companyIn.addEventListener('input', () => fillRooms(companyIn.value.trim()));
+    fillRooms(data.company);
+  });
+}
+
+async function delOrgEmp(id){
+  if (!confirm('确定删除该企业员工？')) return;
+  try { await api('/api/org-employees/' + id, 'DELETE'); renderTenants(); }
+  catch(e){ alert(e.message); }
+}
+
+async function editTenant(id){
+  const mode = curMode();
+  if (mode === 'property'){
+    let data = { name:'', contact:'', phone:'', license_no:'', remark:'' };
+    if (id){ const list = await api('/api/tenants'); data = list.find(x => x.id === id) || data; }
+    openForm(id ? '编辑企业' : '新增企业', [
+      { name:'name', label:'企业名称', required:true },
+      { name:'contact', label:'联系人' },
+      { name:'phone', label:'联系电话' },
+      { name:'license_no', label:'营业执照 / 统一信用代码' },
+      { name:'remark', label:'备注', type:'textarea' }
+    ], data, async (d, modal) => {
+      await api(id ? '/api/tenants/' + id : '/api/tenants', id ? 'PUT' : 'POST', d);
+      modal.hide(); renderTenants();
+    });
+    return;
+  }
+  let data = { gender:'男' };
+  if (id){ const list = await api('/api/tenants'); data = list.find(x => x.id === id) || data; }
+  openForm(id ? '编辑资料' : '新增资料', [
+    { name:'name', label:'姓名', required:true },
+    { name:'gender', label:'性别', type:'select', options:[
+      { value:'男', label:'男' }, { value:'女', label:'女' }] },
+    { name:'phone', label:'联系电话', required:true },
+    { name:'id_card', label:'身份证号' },
+    { name:'remark', label:'备注', type:'textarea' }
+  ], data, async (d, modal) => {
+    await api(id ? '/api/tenants/' + id : '/api/tenants', id ? 'PUT' : 'POST', d);
+    modal.hide(); renderTenants();
+  });
+}
+
+async function delTenant(id){
+  if (!confirm('确定删除该记录？')) return;
+  try { await api('/api/tenants/' + id, 'DELETE'); renderTenants(); }
+  catch(e){ alert(e.message); }
+}
+
+/* ==================================================================
+ * 12. 合同
+ * ================================================================== */
+let contractFilter = '';
+
+async function renderContracts(){
+  const qs = contractFilter ? '?status=' + contractFilter : '';
+  const list = await api('/api/contracts' + qs);
+
+  $('#page').innerHTML = `
+  <div class="card mb-3"><div class="card-body py-2">
+    <div class="row g-2 align-items-center">
+      <div class="col-auto">
+        <select class="form-select form-select-sm" onchange="contractFilter=this.value;renderContracts()">
+          <option value="">全部合同</option>
+          <option value="active"     ${contractFilter === 'active' ? 'selected' : ''}>履行中</option>
+          <option value="expired"    ${contractFilter === 'expired' ? 'selected' : ''}>已到期</option>
+          <option value="terminated" ${contractFilter === 'terminated' ? 'selected' : ''}>已终止</option>
+        </select>
+      </div>
+      <div class="col-auto">${canOp('contract_add') ? `<button class="btn btn-sm btn-primary" onclick="editContract()">+ 新签合同</button>` : ''}</div>
+      <div class="col-auto text-muted small">共 ${list.length} 份</div>
+    </div>
+  </div></div>
+  <div class="card"><div class="table-responsive"><table class="table table-hover mb-0">
+    <thead class="table-light"><tr>
+      <th>合同编号</th><th>楼栋/房间</th><th>租客</th><th>电话</th><th>租期</th>
+      <th>月租</th><th>押金</th><th>付款方式</th><th>状态</th>${canAnyOp('contract_add','contract_edit','contract_delete') ? '<th width="220">操作</th>' : ''}
+    </tr></thead>
+    <tbody>${list.map(c => `<tr>
+      <td><small>${esc(c.contract_no)}</small></td>
+      <td><b>${esc(c.building_name || '')} ${esc(c.room_no || '')}</b></td>
+      <td>${esc(c.tenant_name)}</td>
+      <td>${esc(c.tenant_phone || '-')}</td>
+      <td><small>${c.start_date} ~ ${c.end_date}</small></td>
+      <td>${money(c.rent)}</td>
+      <td>${money(c.deposit)}</td>
+      <td>${cycleText(c.pay_cycle)}</td>
+      <td>${contractBadge(c.status)}</td>
+      <td>${canAnyOp('contract_add','contract_edit','contract_delete') ? `
+        ${c.status === 'active' && canOp('contract_delete')
+          ? `<button class="btn btn-sm btn-outline-danger" onclick="terminateContract(${c.id})">终止</button>` : ''}
+        ${canOp('contract_edit') ? `<button class="btn btn-sm btn-outline-primary" onclick="editContract(${c.id})">编辑</button>` : ''}` : ''}</td></tr>`).join('') || '<tr><td colspan="10" class="text-center text-muted py-4">暂无数据</td></tr>'}
+    </tbody></table></div></div>`;
+}
+
+async function editContract(id, presetRoomId){
+  const [rooms, tenants] = await Promise.all([api('/api/rooms'), api('/api/tenants')]);
+  if (!tenants.length){ alert('请先添加租客'); return; }
+
+  const t = today();
+  let data = { pay_cycle: 1, sign_date: t, start_date: t,
+               end_date: addMonths(t, 12), rent: 0, deposit: 0 };
+  if (id){
+    const list = await safeApi('/api/contracts');
+    if (!list) return;
+    data = list.find(x => x.id === id) || data;
+  }
+  if (presetRoomId) data.room_id = presetRoomId;
+
+  const avail = rooms.filter(r => r.status === 'vacant' || r.id === Number(data.room_id));
+  if (!avail.length){ alert('没有空置房间可签约'); return; }
+  if (!data.room_id) data.room_id = avail[0].id;
+  if (!data.rent){
+    const r = rooms.find(r => r.id === Number(data.room_id));
+    data.rent = r ? r.rent : 0;
+    data.deposit = r ? r.deposit : 0;
+  }
+
+  openForm(id ? '编辑合同' : '新签合同', [
+    { name:'room_id', label:'房间', type:'select', required:true,
+      options: avail.map(r => ({ value:r.id,
+        label:`${r.building_name || ''} ${r.room_no}（${money(r.rent)}/月）` })) },
+    { name:'tenant_id', label:'租客', type:'select', required:true,
+      options: tenants.map(x => ({ value:x.id, label:`${x.name} ${x.phone || ''}` })) },
+    { name:'start_date', label:'起租日期', type:'date', required:true },
+    { name:'end_date', label:'到期日期', type:'date', required:true },
+    { name:'rent', label:'月租金', type:'number', required:true, step:'0.01', money:true },
+    { name:'deposit', label:'押金', type:'number', step:'0.01', money:true },
+    { name:'pay_cycle', label:'付款周期', type:'select', options:[
+      { value:1, label:'月付' }, { value:3, label:'季付' },
+      { value:6, label:'半年付' }, { value:12, label:'年付' }] },
+    { name:'sign_date', label:'签约日期', type:'date' },
+    { name:'remark', label:'备注', type:'textarea' }
+  ], data, async (d, modal) => {
+    if (d.end_date <= d.start_date){ alert('到期日期必须晚于起租日期'); return; }
+    await api(id ? '/api/contracts/' + id : '/api/contracts', id ? 'PUT' : 'POST', d);
+    modal.hide(); renderContracts();
+  });
+}
+
+async function terminateContract(id){
+  if (!confirm('确定终止该合同？房间将变为空置状态。')) return;
+  await api(`/api/contracts/${id}/terminate`, 'POST');
+  renderContracts();
+}
+
+/* ==================================================================
+ * 13. 订单
+ * ================================================================== */
+let orderFilter = '';
+
+async function renderOrders(){
+  const qs = orderFilter ? '?status=' + orderFilter : '';
+  const list = await api('/api/orders' + qs);
+
+  $('#page').innerHTML = `
+  <div class="card mb-3"><div class="card-body py-2">
+    <div class="row g-2 align-items-center">
+      <div class="col-auto">
+        <select class="form-select form-select-sm" onchange="orderFilter=this.value;renderOrders()">
+          <option value="">全部订单</option>
+          <option value="booked"      ${orderFilter === 'booked' ? 'selected' : ''}>已预订</option>
+          <option value="checked_in"  ${orderFilter === 'checked_in' ? 'selected' : ''}>已入住</option>
+          <option value="checked_out" ${orderFilter === 'checked_out' ? 'selected' : ''}>已退房</option>
+          <option value="cancelled"   ${orderFilter === 'cancelled' ? 'selected' : ''}>已取消</option>
+        </select>
+      </div>
+      <div class="col-auto">${canOp('order_add') ? `<button class="btn btn-sm btn-primary" onclick="editOrder()">+ 新增预订</button>` : ''}</div>
+      <div class="col-auto text-muted small">共 ${list.length} 单</div>
+    </div>
+  </div></div>
+  <div class="card"><div class="table-responsive"><table class="table table-hover mb-0">
+    <thead class="table-light"><tr>
+      <th>订单号</th><th>楼栋/房间</th><th>房客</th><th>入住</th><th>退房</th>
+      <th>天数</th><th>房价/天</th><th>总价</th><th>押金</th><th>状态</th>${canAnyOp('order_add','order_edit','order_status','order_delete') ? '<th width="230">操作</th>' : ''}
+    </tr></thead>
+    <tbody>${list.map(o => `<tr>
+      <td><small>${esc(o.order_no)}</small></td>
+      <td><b>${esc(o.building_name || '')} ${esc(o.room_no || '')}</b></td>
+      <td>${esc(o.guest_name)}</td>
+      <td>${o.check_in_date}</td>
+      <td>${o.check_out_date}</td>
+      <td>${o.days} 天</td>
+      <td>${money(o.day_price)}</td>
+      <td><b class="text-primary">${money(o.total)}</b></td>
+      <td>${money(o.deposit)}</td>
+      <td>${orderBadge(o.status)}</td>
+      <td>${canAnyOp('order_add','order_edit','order_status','order_delete') ? `
+        ${o.status === 'booked' ? `
+          ${canOp('order_status') ? `<button class="btn btn-sm btn-success" onclick="checkinOrder(${o.id})">入住</button>
+          <button class="btn btn-sm btn-outline-secondary" onclick="cancelOrder(${o.id})">取消</button>` : ''}
+          ${canOp('order_edit') ? `<button class="btn btn-sm btn-outline-primary" onclick="editOrder(${o.id})">编辑</button>` : ''}` : ''}
+        ${o.status === 'checked_in' ? `
+          ${canOp('order_status') ? `<button class="btn btn-sm btn-warning" onclick="checkoutOrder(${o.id})">退房</button>` : ''}` : ''}
+        ${o.status === 'checked_out' || o.status === 'cancelled' ? `
+          ${canOp('order_delete') ? `<button class="btn btn-sm btn-outline-danger" onclick="delOrder(${o.id})">删除</button>` : ''}` : ''}` : ''}
+      </td></tr>`).join('') || '<tr><td colspan="11" class="text-center text-muted py-4">暂无数据</td></tr>'}
+    </tbody></table></div></div>`;
+}
+
+async function editOrder(id, presetRoomId){
+  const [rooms, guests] = await Promise.all([api('/api/rooms'), api('/api/tenants')]);
+  if (!guests.length){ alert('请先添加房客'); return; }
+
+  const t = today();
+  let data = { check_in_date: t, check_out_date: addDays(t, 1), day_price: 0, deposit: 0 };
+  if (id){
+    const list = await api('/api/orders');
+    data = list.find(x => x.id === id) || data;
+  }
+  if (presetRoomId) data.room_id = presetRoomId;
+
+  const avail = rooms.filter(r =>
+    r.status === 'vacant' || r.status === 'booked' || r.id === Number(data.room_id));
+  if (!avail.length){ alert('没有可预订的房间'); return; }
+  if (!data.room_id) data.room_id = avail[0].id;
+  if (!data.day_price){
+    const r = rooms.find(r => r.id === Number(data.room_id));
+    data.day_price = r ? (r.day_price || r.rent || 0) : 0;
+  }
+
+  openForm(id ? '编辑订单' : '新增预订', [
+    { name:'room_id', label:'房间', type:'select', required:true,
+      options: avail.map(r => ({ value:r.id,
+        label:`${r.building_name || ''} ${r.room_no}（${money(r.day_price)}/天）` })) },
+    { name:'guest_id', label:'房客', type:'select', required:true,
+      options: guests.map(g => ({ value:g.id, label:`${g.name} ${g.phone || ''}` })) },
+    { name:'check_in_date', label:'入住日期', type:'date', required:true },
+    { name:'check_out_date', label:'退房日期', type:'date', required:true },
+    { name:'day_price', label:'房价(/天)', type:'number', required:true, step:'0.01', money:true },
+    { name:'deposit', label:'押金', type:'number', step:'0.01', money:true },
+    { name:'remark', label:'备注', type:'textarea' }
+  ], data, async (d, modal) => {
+    if (d.check_out_date <= d.check_in_date){ alert('退房日期必须晚于入住日期'); return; }
+    await api(id ? '/api/orders/' + id : '/api/orders', id ? 'PUT' : 'POST', d);
+    modal.hide(); renderOrders();
+  });
+}
+
+async function checkinOrder(id){
+  if (!confirm('确认为该订单办理入住？')) return;
+  await api(`/api/orders/${id}/checkin`, 'POST');
+  renderOrders();
+}
+
+async function checkoutOrder(id){
+  if (!confirm('确认为该订单办理退房？\n将自动生成房费账单，房间进入待清洁状态。')) return;
+  await api(`/api/orders/${id}/checkout`, 'POST');
+  alert('退房成功，账单已生成');
+  renderOrders();
+}
+
+async function cancelOrder(id){
+  if (!confirm('确定取消该预订？')) return;
+  await api(`/api/orders/${id}/cancel`, 'POST');
+  renderOrders();
+}
+
+async function delOrder(id){
+  if (!confirm('确定删除该订单？')) return;
+  try { await api('/api/orders/' + id, 'DELETE'); renderOrders(); }
+  catch(e){ alert(e.message); }
+}
+
+/* ==================================================================
+ * 14. 账单收费
+ * ================================================================== */
+let billFilter = { status:'', source:'', owner:'' };
+let billCompanies = [];
+/* 企业筛选：输入关键字联想（只显示包含关键字的选项），选择后按企业过滤 */
+function billOwnerInput(el){
+  const wrap = document.getElementById('billOwnerWrap');
+  if (!wrap) return;
+  if (!el.value){
+    if (billFilter.owner){ billFilter.owner = ''; renderBills(); }
+    wrap.style.display = 'none'; return;
+  }
+  const kw = el.value.trim();
+  const hits = (billCompanies || []).filter(c => c.name.includes(kw));
+  wrap.innerHTML = hits.slice(0, 8).map(c =>
+    `<div class="sug-item" data-id="${c.id}" data-name="${esc(c.name)}"
+        onmousedown="billOwnerPickItem(this)">${esc(c.name)}</div>`).join('')
+    || '<div class="sug-item text-muted">无匹配企业</div>';
+  wrap.style.display = 'block';
+}
+function billOwnerPickItem(el){
+  billFilter.owner = el.dataset.id;
+  const q = document.getElementById('billOwnerQ');
+  if (q) q.value = el.dataset.name;
+  const wrap = document.getElementById('billOwnerWrap');
+  if (wrap) wrap.style.display = 'none';
+  renderBills();
+}
+function billOwnerBlur(){
+  setTimeout(() => { const w = document.getElementById('billOwnerWrap'); if (w) w.style.display = 'none'; }, 150);
+}
+
+async function renderBills(){
+  const mode = curMode();
+  const qs = new URLSearchParams(
+    Object.entries(billFilter).filter(([, v]) => v)
+  ).toString();
+  const list = await api('/api/bills' + (qs ? '?' + qs : ''));
+  const unpaid = list.filter(b => b.status !== 'paid')
+                     .reduce((s, b) => s + (b.amount - (b.paid_amount || 0)), 0);
+
+  const personCol = mode === 'hotel' ? '房客' : (mode === 'property' ? '企业' : '租客');
+
+  /* 物业：企业筛选（输入企业名关键字联想，选中后按企业过滤） */
+  let ownerOpts = '';
+  if (mode === 'property'){
+    let companies = [];
+    try { companies = await api('/api/tenants'); } catch(e){}
+    billCompanies = companies;
+    const curName = billFilter.owner ? (companies.find(c => String(c.id) === String(billFilter.owner)) || {}).name || '' : '';
+    ownerOpts = `
+      <div class="col-auto" style="position:relative">
+        <input class="form-control form-control-sm" id="billOwnerQ" placeholder="搜索企业"
+          value="${esc(curName)}" autocomplete="off"
+          oninput="billOwnerInput(this)" onfocus="billOwnerInput(this)" onblur="billOwnerBlur()">
+        <div id="billOwnerWrap" class="sug-drop"></div>
+      </div>`;
+  }
+
+  let genBtns = '';
+  if (mode === 'rental' && canOp('bill_generate')){
+    genBtns = `
+      <button class="btn btn-sm btn-outline-success" onclick="generateBills('rental')">生成租金</button>
+      <button class="btn btn-sm btn-outline-info" onclick="generateBills('utility')">生成水电</button>
+      <button class="btn btn-sm btn-outline-primary" onclick="generateBills('network')">生成网费</button>
+      <button class="btn btn-sm btn-success" onclick="generateBills('all')"><i class="bi bi-magic"></i> 全部生成</button>`;
+  } else if (mode === 'hotel' && canOp('bill_generate')){
+    genBtns = `<button class="btn btn-sm btn-success" onclick="generateBills('hotel')">
+      <i class="bi bi-magic"></i> 补生成账单</button>`;
+  } else if (canOp('bill_generate')){
+    genBtns = `
+      <button class="btn btn-sm btn-success" onclick="generateBills('property')">
+        <i class="bi bi-magic"></i> 生成物业账单</button>
+      <button class="btn btn-sm btn-primary" onclick="generateBills('network')">
+        <i class="bi bi-ethernet"></i> 生成网费账单</button>
+      <button class="btn btn-sm btn-outline-success" onclick="generateBills('all')">
+        全部生成</button>`;
+  }
+
+  let srcOpts = '';
+  if (mode === 'property'){
+    srcOpts = `
+      <div class="col-auto">
+        <select class="form-select form-select-sm" onchange="billFilter.source=this.value;renderBills()">
+          <option value="">全部来源</option>
+          <option value="property"   ${billFilter.source === 'property' ? 'selected' : ''}>物业费</option>
+          <option value="utility"    ${billFilter.source === 'utility' ? 'selected' : ''}>水电费</option>
+          <option value="network"    ${billFilter.source === 'network' ? 'selected' : ''}>网费</option>
+          <option value="net_repair" ${billFilter.source === 'net_repair' ? 'selected' : ''}>网维修费</option>
+          <option value="install"    ${billFilter.source === 'install' ? 'selected' : ''}>设备安装费</option>
+          <option value="repair"     ${billFilter.source === 'repair' ? 'selected' : ''}>维修费</option>
+          <option value="other"      ${billFilter.source === 'other' ? 'selected' : ''}>其它</option>
+        </select>
+      </div>`;
+  } else if (mode === 'rental'){
+    srcOpts = `
+      <div class="col-auto">
+        <select class="form-select form-select-sm" onchange="billFilter.source=this.value;renderBills()">
+          <option value="">全部来源</option>
+          <option value="rental"     ${billFilter.source === 'rental' ? 'selected' : ''}>租金</option>
+          <option value="utility"    ${billFilter.source === 'utility' ? 'selected' : ''}>水电</option>
+          <option value="network"    ${billFilter.source === 'network' ? 'selected' : ''}>网费</option>
+          <option value="net_repair" ${billFilter.source === 'net_repair' ? 'selected' : ''}>网维修费</option>
+          <option value="install"    ${billFilter.source === 'install' ? 'selected' : ''}>设备安装费</option>
+          <option value="repair"     ${billFilter.source === 'repair' ? 'selected' : ''}>维修费</option>
+          <option value="other"      ${billFilter.source === 'other' ? 'selected' : ''}>其它</option>
+        </select>
+      </div>`;
+  }
+
+  $('#page').innerHTML = `
+  <div class="card mb-3"><div class="card-body py-2">
+    <div class="row g-2 align-items-center">
+      <div class="col-auto">
+        <select class="form-select form-select-sm" onchange="billFilter.status=this.value;renderBills()">
+          <option value="">全部状态</option>
+          <option value="unpaid"  ${billFilter.status === 'unpaid' ? 'selected' : ''}>未支付</option>
+          <option value="partial" ${billFilter.status === 'partial' ? 'selected' : ''}>部分支付</option>
+          <option value="paid"    ${billFilter.status === 'paid' ? 'selected' : ''}>已结清</option>
+        </select>
+      </div>
+      ${srcOpts}
+      ${ownerOpts}
+      <div class="col-auto">${genBtns}</div>
+      <div class="col-auto">${canOp('bill_add') ? `<button class="btn btn-sm btn-outline-primary" onclick="editBill()">+ 手动添加</button>` : ''}</div>
+      <div class="col-auto text-muted small">${ME.level === 'company_admin'
+        ? `未付合计 <span class="text-danger fw-bold">${money(unpaid)}</span>`
+        : `共 ${list.length} 条 · 未收合计 <span class="text-danger fw-bold">${money(unpaid)}</span>`}</div>
+    </div>
+  </div></div>
+  <div class="card"><div class="table-responsive"><table class="table table-hover mb-0">
+    <thead class="table-light"><tr>
+      <th>来源</th><th>楼栋/房间</th><th>${personCol}</th>
+      <th>费用周期</th><th>应缴日期</th><th>应缴</th><th>已缴</th>
+      <th>状态</th><th>缴费方式</th>${canAnyOp('bill_add','bill_generate','bill_delete','bill_pay','bill_print') ? '<th width="250">操作</th>' : ''}
+    </tr></thead>
+    <tbody>${list.map(b => {
+      const src = BILL_SOURCE[b.source] || [b.source, 'secondary'];
+      return `<tr>
+      <td><span class="badge bg-${src[1]}${src[1] === 'warning' ? ' text-dark' : ''}">${src[0]}</span></td>
+      <td><b>${esc(b.building_name || '')} ${esc(b.room_no || '-')}</b></td>
+      <td>${esc(b.tenant_name || '-')}</td>
+      <td><small>${b.period_start} ~ ${b.period_end}</small>
+          ${b.remark ? `<div class="text-muted" style="font-size:12px">${esc(b.remark)}</div>` : ''}
+          ${fmtItems(b.items)}</td>
+      <td>${b.due_date}</td>
+      <td>${money(b.amount)}</td>
+      <td>${money(b.paid_amount)}</td>
+      <td>${billBadge(b.status)}</td>
+      <td>${esc(b.pay_method || '-')}</td>
+      <td>
+        ${canAnyOp('bill_add','bill_generate','bill_delete','bill_pay','bill_print') ? 
+          (canOp('bill_print') ? `<button class="btn btn-sm btn-outline-secondary" onclick="printBill(${b.id})">打印</button>` : '')
+          + (b.status !== 'paid' && canOp('bill_pay')
+          ? `<button class="btn btn-sm btn-success"
+               onclick="payBill(${b.id}, ${(b.amount - (b.paid_amount || 0)).toFixed(2)})">收款</button>` : '')
+          + (canOp('bill_delete') ? `<button class="btn btn-sm btn-outline-danger" onclick="delBill(${b.id})">删除</button>` : '') : ''}
+      </td></tr>`;
+    }).join('') || '<tr><td colspan="10" class="text-center text-muted py-4">暂无数据</td></tr>'}
+    </tbody></table></div></div>`;
+}
+
+async function generateBills(kind){
+  const tips = {
+    rental:'为所有履行中的合同生成下一期租金账单？',
+    utility:'为所有已出租房产生成当月水电费账单（按本月抄表读数）？',
+    hotel:'补生成已退房但未结算的账单？',
+    property:'为所有已绑定企业的房产生成当月物业账单（物业费 + 水费 + 电费，不含网费）？',
+    network:'为所有计费房产生成当月网费账单？\n（按兆数 × 每兆月租 × 天数分段计算）',
+    all: curMode() === 'rental'
+      ? '生成所有符合条件的账单？（租金 + 水电 + 网费）'
+      : '生成所有符合条件的账单？（物业账单 + 网费账单）'
+  };
+  if (!confirm(tips[kind] || '确定生成账单？')) return;
+  try {
+    const r = await api('/api/bills/generate', 'POST', { kind });
+    const extra = (r.detail && r.detail.length)
+      ? '\n\n跳过明细：\n' + r.detail.map(d => '· ' + d.room + ' — ' + d.reason).join('\n') : '';
+    alert(r.msg + extra);
+    renderBills();
+  } catch(e){ alert(e.message); }
+}
+
+async function editBill(){
+  const mode = curMode();
+  const t = today();
+  const ym = curMonth();
+
+  if (mode === 'rental'){
+    const contracts = await safeApi('/api/contracts?status=active');
+    if (!contracts) return;
+    if (!contracts.length){ alert('没有履行中的合同'); return; }
+    openForm('手动添加账单', [
+      { name:'contract_id', label:'合同', type:'select', required:true,
+        options: contracts.map(c => ({ value:c.id,
+          label:`${c.contract_no} | ${c.room_no} | ${c.tenant_name}` })) },
+      { name:'period_start', label:'费用起始日', type:'date', required:true, default:t },
+      { name:'period_end',   label:'费用截止日', type:'date', required:true, default:t },
+      { name:'due_date',     label:'应缴日期',   type:'date', required:true, default:t },
+      { name:'amount',       label:'金额', type:'number', required:true, step:'0.01',
+        money:true, default: contracts[0].rent },
+      { name:'remark', label:'备注', type:'textarea' }
+    ], {}, async (d, modal) => {
+      const c = contracts.find(x => x.id === Number(d.contract_id));
+      await api('/api/bills', 'POST', {
+        ...d, source:'rental', room_id: c.room_id,
+        tenant_id: c.tenant_id, contract_id: c.id
+      });
+      modal.hide(); renderBills();
+    });
+    return;
+  }
+
+  if (mode === 'hotel'){
+    const rooms = await safeApi('/api/rooms');
+    if (!rooms) return;
+    if (!rooms.length){ alert('请先创建房间'); return; }
+    openForm('手动添加账单', [
+      { name:'room_id', label:'房间', type:'select', required:true,
+        options: rooms.map(r => ({ value:r.id, label:`${r.building_name || ''} ${r.room_no}` })) },
+      { name:'period_start', label:'起始日', type:'date', required:true, default:t },
+      { name:'period_end',   label:'截止日', type:'date', required:true, default:t },
+      { name:'due_date',     label:'应缴日期', type:'date', required:true, default:t },
+      { name:'amount',       label:'金额', type:'number', required:true, step:'0.01', money:true },
+      { name:'remark', label:'备注', type:'textarea' }
+    ], {}, async (d, modal) => {
+      await api('/api/bills', 'POST', { ...d, source:'hotel' });
+      modal.hide(); renderBills();
+    });
+    return;
+  }
+
+  /* 物业模式：让用户选择来源 */
+  const rooms = await safeApi('/api/rooms');
+  if (!rooms) return;
+  const owned = rooms.filter(r => r.owner_id);
+  if (!owned.length){ alert('请先在房产管理中为房屋绑定企业'); return; }
+
+  openForm('手动添加账单', [
+    { name:'source', label:'账单来源', type:'select', required:true, options:[
+      { value:'property', label:'物业费' },
+      { value:'utility',  label:'水电费' },
+      { value:'network',  label:'网费' },
+      { value:'net_repair', label:'网维修费' },
+      { value:'install',    label:'设备安装费' },
+      { value:'repair',     label:'维修费' },
+      { value:'other',      label:'其它' }] },
+    { name:'room_id', label:'房产', type:'select', required:true,
+      options: owned.map(r => ({ value:r.id,
+        label:`${r.building_name || ''} ${r.room_no}｜${r.owner_name || ''}` })) },
+    { name:'period_start', label:'费用起始日', type:'date', required:true, default: monthStart(t) },
+    { name:'period_end',   label:'费用截止日', type:'date', required:true,
+      default: addDays(addMonths(monthStart(t), 1), -1) },
+    { name:'due_date',     label:'应缴日期', type:'date', required:true, default: ym + '-10' },
+    { name:'amount',       label:'金额', type:'number', required:true, step:'0.01', money:true, default:0 },
+    { name:'items', label:'明细清单', type:'items', hint:'维修/安装/其它类可录入明细行，合计自动填入金额' },
+    { name:'remark', label:'备注', type:'textarea' }
+  ], { source:'property' }, async (d, modal) => {
+    if (d.source === 'other' && !(d.remark || '').trim()){ alert('选择「其它」来源时请填写备注说明'); return; }
+    const r = owned.find(x => x.id === Number(d.room_id));
+    await api('/api/bills', 'POST', {
+      ...d, room_id: r.id, tenant_id: r.owner_id
+    });
+    modal.hide(); renderBills();
+  }, (el) => {
+    /* 明细清单仅对维修/安装/其它类来源显示 */
+    const $ = n => el.querySelector(`[name="${n}"]`);
+    const src = $('source'), wrap = el.querySelector('.item-wrap'), amt = $('amount');
+    if (!wrap) return;
+    const sync = () => {
+      const show = ['net_repair','install','repair','other'].includes(src.value);
+      wrap.style.display = show ? '' : 'none';
+      if (!show){ amt.readOnly = false; amt.value = ''; }
+    };
+    src.addEventListener('change', sync);
+    sync();
+  });
+}
+
+async function payBill(id, rest){
+  const t = today();
+  openForm('收款登记', [
+    { name:'amount', label:'收款金额', type:'number', required:true, step:'0.01',
+      money:true, default: rest },
+    { name:'pay_date', label:'收款日期', type:'date', default:t },
+    { name:'pay_method', label:'收款方式', type:'select', options:[
+      { value:'现金', label:'现金' }, { value:'微信', label:'微信' },
+      { value:'支付宝', label:'支付宝' }, { value:'银行转账', label:'银行转账' },
+      { value:'其他', label:'其他' }] }
+  ], {}, async (d, modal) => {
+    await api(`/api/bills/${id}/pay`, 'POST', d);
+    modal.hide(); renderBills();
+  });
+}
+
+async function delBill(id){
+  if (!confirm('确定删除该账单？')) return;
+  await api('/api/bills/' + id, 'DELETE');
+  renderBills();
+}
+
+/* 打印账单（A4 排版，含明细清单与收款信息；弹窗被拦时提示放行） */
+async function printBill(id){
+  const all = await api('/api/bills');
+  const b = all.find(x => x.id === id);
+  if (!b){ alert('未找到该账单'); return; }
+  const w = window.open('', '_blank', 'width=820,height=920');
+  if (!w){ alert('浏览器拦截了打印窗口，请允许本站弹窗后重试'); return; }
+  const src = (BILL_SOURCE[b.source] || [b.source])[0];
+  const due = Number(b.amount) - Number(b.paid_amount || 0);
+  const itemsHtml = (Array.isArray(b.items) && b.items.length) ? `
+    <table>
+      <tr><th style="width:36%">商品</th><th style="width:24%">型号</th><th class="c" style="width:10%">数量</th><th class="c" style="width:15%">单价</th><th class="c" style="width:15%">金额</th></tr>
+      ${b.items.map(it => (it.qty == null && it.price == null)
+        ? `<tr><td colspan="5" class="note">${esc(it.name)}（说明）</td></tr>`
+        : `<tr><td>${esc(it.name)}</td><td>${esc(it.model || '-')}</td>
+            <td class="c">${it.qty}</td><td class="c">${money(it.price)}</td>
+            <td class="c">${money((Number(it.qty) || 0) * (Number(it.price) || 0))}</td></tr>`).join('')}
+    </table>` : '<div class="muted">（无明细）</div>';
+  const h = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>账单 #${b.id}</title>
+  <style>
+    body{font-family:'Microsoft YaHei',Arial,sans-serif;color:#222;max-width:720px;margin:24px auto;padding:0 16px;font-size:13px}
+    .head{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2px solid #333;padding-bottom:10px;margin-bottom:14px}
+    h1{margin:0;font-size:20px}.sub{color:#555;font-size:12px}
+    table{width:100%;border-collapse:collapse;margin:8px 0 14px}
+    th,td{border:1px solid #999;padding:6px 8px;text-align:left}
+    th{background:#f0f0f0}.c{text-align:center}
+    .note{color:#777;font-style:italic}
+    .meta{display:flex;flex-wrap:wrap;gap:6px 30px;margin:8px 0 14px}
+    .meta span b{display:inline-block;min-width:70px;color:#555}
+    .sum{display:flex;justify-content:flex-end;gap:18px;font-size:14px;margin-top:6px}
+    .sum .amt{font-weight:bold;font-size:16px}
+    .foot{margin-top:30px;display:flex;justify-content:space-between;color:#555;font-size:12px;border-top:1px dashed #999;padding-top:8px}
+    .btn-bar{text-align:center;margin:16px 0}
+    .btn-bar button{padding:8px 30px;font-size:14px;cursor:pointer}
+    @media print{.btn-bar{display:none}body{margin:8px}}
+  </style></head><body>
+  <div class="btn-bar"><button onclick="window.print()">打印 / 另存为 PDF</button></div>
+  <div class="head">
+    <div><h1>${esc(MODE_NAME[curMode()] || '')}系统 · 账单</h1>
+      <div class="sub">${esc(ME.org_name || '')} · 账单号 #${b.id}</div></div>
+    <div class="sub">状态：<b>${b.status === 'paid' ? '已收款' : '未收款'}</b> · 来源：${esc(src)}</div>
+  </div>
+  <div class="meta">
+    <span><b>楼栋/房号</b>${esc(b.building_name || '')} ${esc(b.room_no || '-')}</span>
+    <span><b>客户</b>${esc(b.tenant_name || '-')}</span>
+    <span><b>费用周期</b>${b.period_start} ~ ${b.period_end}</span>
+    <span><b>应缴日期</b>${b.due_date || '-'}</span>
+    <span><b>收款方式</b>${esc(b.pay_method || '-')}</span>
+    ${b.pay_date ? `<span><b>收款日期</b>${b.pay_date}</span>` : ''}
+  </div>
+  ${itemsHtml}
+  <div class="sum">
+    <span>应缴：<span class="amt">${money(b.amount)}</span></span>
+    <span>已缴：${money(b.paid_amount || 0)}</span>
+    <span>未缴：<b>${money(Math.max(due, 0))}</b></span>
+  </div>
+  ${b.remark ? `<div class="muted" style="color:#555">备注：${esc(b.remark)}</div>` : ''}
+  <div class="foot"><span>生成时间：${new Date().toLocaleString()}</span><span>${esc(ME.org_name || '')} · ${MODE_NAME[curMode()] || ''}系统</span></div>
+  </body></html>`;
+  w.document.write(h);
+  w.document.close();
+  setTimeout(() => { try { w.print(); } catch(e){} }, 350);
+}
+
+/* ==================================================================
+ * 15. 水电抄表
+ * ================================================================== */
+let meterFilter = { month:'', building_id:'' };
+
+async function renderMeters(){
+  const t = today();
+  if (!meterFilter.month) meterFilter.month = t.slice(0, 7);
+
+  const buildings = await api('/api/buildings');
+  const qs = new URLSearchParams(
+    Object.entries(meterFilter).filter(([, v]) => v)
+  ).toString();
+  const list = await api('/api/meters' + (qs ? '?' + qs : ''));
+
+  const sumWater = list.reduce((s, m) => s + Number(m.water_fee || 0), 0);
+  const sumElec  = list.reduce((s, m) => s + Number(m.elec_fee  || 0), 0);
+  const sumWaterUsage = list.reduce((s, m) => s + Number(m.water_usage || 0), 0);
+  const sumElecUsage  = list.reduce((s, m) => s + Number(m.elec_usage  || 0), 0);
+
+  const bOpts = buildings.map(b =>
+    `<option value="${b.id}" ${String(meterFilter.building_id) === String(b.id) ? 'selected' : ''}>${esc(b.name)}</option>`).join('');
+
+  $('#page').innerHTML = `
+  <div class="card mb-3"><div class="card-body py-2">
+    <div class="row g-2 align-items-center">
+      <div class="col-auto">
+        <label class="col-form-label col-form-label-sm me-1">月份</label>
+        <input type="month" class="form-control form-control-sm"
+               value="${esc(meterFilter.month)}"
+               onchange="meterFilter.month=this.value;renderMeters()" style="width:160px">
+      </div>
+      <div class="col-auto">
+        <select class="form-select form-select-sm" onchange="meterFilter.building_id=this.value;renderMeters()">
+          <option value="">全部楼栋</option>${bOpts}
+        </select>
+      </div>
+      <div class="col-auto">
+        ${canOp('meter_add') ? `<button class="btn btn-sm btn-primary" onclick="editMeter()">+ 新增抄表</button>` : ''}
+        ${canOp('bill_add') ? `<button class="btn btn-sm btn-outline-primary" onclick="addMeterBill()">+ 手动新增账单</button>` : ''}
+      </div>
+      <div class="col-auto text-muted small">共 ${list.length} 条</div>
+    </div>
+  </div></div>
+
+  <div class="row g-3 mb-3">
+    <div class="col-6 col-md-3">
+      <div class="card stat-card"><div class="card-body py-2">
+        <div class="text-muted small">水费合计</div>
+        <div class="num text-info">${money(sumWater)}</div>
+        <div class="small text-muted">用量 ${sumWaterUsage} 吨</div>
+      </div></div>
+    </div>
+    <div class="col-6 col-md-3">
+      <div class="card stat-card"><div class="card-body py-2">
+        <div class="text-muted small">电费合计</div>
+        <div class="num text-warning">${money(sumElec)}</div>
+        <div class="small text-muted">用量 ${sumElecUsage} 度</div>
+      </div></div>
+    </div>
+    <div class="col-6 col-md-3">
+      <div class="card stat-card"><div class="card-body py-2">
+        <div class="text-muted small">已抄表户数</div>
+        <div class="num text-primary">${list.length}</div>
+        <div class="small text-muted">共 ${buildings.length} 栋</div>
+      </div></div>
+    </div>
+    <div class="col-6 col-md-3">
+      <div class="card stat-card"><div class="card-body py-2">
+        <div class="text-muted small">水电合计</div>
+        <div class="num text-danger">${money(sumWater + sumElec)}</div>
+        <div class="small text-muted">网费请在网络管理页查看</div>
+      </div></div>
+    </div>
+  </div>
+
+  <div class="card"><div class="table-responsive"><table class="table table-hover mb-0">
+    <thead class="table-light"><tr>
+      <th>月份</th><th>楼栋/房号</th><th>${personLabel()}</th>
+      <th>水表(上→本)</th><th>用水</th><th>水费</th>
+      <th>电表(上→本)</th><th>用电</th><th>电费</th>
+      <th>合计</th>${canAnyOp('meter_add','meter_edit','meter_delete') ? '<th width="150">操作</th>' : ''}
+    </tr></thead>
+    <tbody>${list.map(m => `<tr>
+      <td><b>${esc(m.month)}</b></td>
+      <td>${esc(m.building_name || '')} ${esc(m.room_no || '')}</td>
+      <td>${esc(m.owner_name || '-')}</td>
+      <td><small>${m.water_prev} → ${m.water_curr}</small></td>
+      <td>${m.water_usage} 吨</td>
+      <td>${money(m.water_fee)}</td>
+      <td><small>${m.elec_prev} → ${m.elec_curr}</small></td>
+      <td>${m.elec_usage} 度</td>
+      <td>${money(m.elec_fee)}</td>
+      <td><b class="text-danger">${money((m.water_fee||0)+(m.elec_fee||0))}</b></td>
+      ${canAnyOp('meter_add','meter_edit','meter_delete') ? `<td>
+        ${canOp('meter_edit') ? `<button class="btn btn-sm btn-outline-primary" onclick="editMeter(${m.id})">编辑</button>` : ''}
+        ${canOp('meter_delete') ? `<button class="btn btn-sm btn-outline-danger" onclick="delMeter(${m.id})">删除</button>` : ''}
+      </td>` : ''}</tr>`).join('') || '<tr><td colspan="12" class="text-center text-muted py-4">暂无抄表记录</td></tr>'}
+    </tbody></table></div></div>
+
+  <div class="alert alert-info mt-3 small mb-0">
+    <i class="bi bi-info-circle"></i>
+    水费 = (本期水表 − 上期水表) × 房间水费单价；
+    电费 = (本期电表 − 上期电表) × 房间电费单价。
+    录入当月抄表后，在「账单收费」页点击「生成${curMode() === 'property' ? '物业' : '水电'}账单」即可${curMode() === 'property' ? '合并到物业费账单' : '生成水电费账单'}。
+    网费独立计算，请见「网络管理」。
+  </div>`;
+}
+
+/* 抄表页手动新增账单（维修费 / 其它维修） */
+async function addMeterBill(){
+  const rooms = await safeApi('/api/rooms');
+  if (!rooms) return;
+  const scoped = billableRooms(rooms);
+  if (!scoped.length){ alert(curMode() === 'property' ? '请先在房产管理中为房屋绑定企业' : '请先在合同管理中为房间办理出租'); return; }
+  const t = today(); const ym = curMonth();
+  openForm('手动新增账单', [
+    { name:'bill_type', label:'账单类型', type:'select', required:true, options:[
+      { value:'repair', label:'维修费' }, { value:'other', label:'其它维修' }] },
+    { name:'room_id', label:'房间', type:'select', required:true,
+      options: scoped.map(r => ({ value:r.id,
+        label:`${r.building_name || ''} ${r.room_no}｜${r.owner_name || ''}` })) },
+    { name:'period_start', label:'费用起始日', type:'date', required:true, default: ym + '-01' },
+    { name:'period_end',   label:'费用截止日', type:'date', required:true,
+      default: addDays(addMonths(ym + '-01', 1), -1) },
+    { name:'due_date',     label:'应缴日期', type:'date', required:true, default: ym + '-10' },
+    { name:'amount',       label:'金额', type:'number', required:true, step:'0.01', money:true },
+    { name:'items', label:'明细清单', type:'items', hint:'维修费/其它维修可录入明细行，合计自动填入金额', cat:'util' },
+    { name:'remark', label:'备注', type:'textarea' }
+  ], { bill_type:'repair' }, async (d, modal) => {
+    await api('/api/bills', 'POST', {
+      source: d.bill_type, room_id: Number(d.room_id),
+      period_start:d.period_start, period_end:d.period_end, due_date:d.due_date,
+      amount:d.amount, remark:d.remark || '', items:d.items
+    });
+    modal.hide(); renderMeters();
+  });
+}
+
+async function editMeter(id){
+  const rooms = await safeApi('/api/rooms');
+  if (!rooms) return;
+  const scoped = billableRooms(rooms);
+  if (!scoped.length){ alert(curMode() === 'property' ? '请先在房产管理中为房屋绑定企业' : '请先在合同管理中为房间办理出租'); return; }
+
+  const t = today();
+  let data = { month: t.slice(0, 7), water_prev:0, water_curr:0, elec_prev:0, elec_curr:0 };
+
+  if (id){
+    const list = await api('/api/meters');
+    const m = list.find(x => x.id === id);
+    if (m) data = m;
+  } else {
+    data.room_id = scoped[0].id;
+    const prev = (await api('/api/meters?room_id=' + scoped[0].id))
+      .sort((a, b) => (b.month || '').localeCompare(a.month || ''))[0];
+    if (prev){
+      data.water_prev = prev.water_curr;
+      data.elec_prev  = prev.elec_curr;
+    }
+  }
+
+  const roomOpts = scoped.map(r => ({
+    value: r.id,
+    label: `${r.building_name || ''} ${r.room_no}｜${roomPerson(r) || '未命名'}｜水${money(r.water_price)}/吨 电${money(r.elec_price)}/度`
+  }));
+
+  openForm(id ? '编辑抄表记录' : '新增抄表记录', [
+    { name:'room_id', label: curMode() === 'property' ? '房产' : '房间', type:'select', required:true, options: roomOpts },
+    { name:'month', label:'抄表月份', type:'month', required:true },
+    { name:'water_prev', label:'上期水表读数(吨)', type:'number', step:'0.01', required:true },
+    { name:'water_curr', label:'本期水表读数(吨)', type:'number', step:'0.01', required:true },
+    { name:'elec_prev',  label:'上期电表读数(度)', type:'number', step:'0.01', required:true },
+    { name:'elec_curr',  label:'本期电表读数(度)', type:'number', step:'0.01', required:true },
+    { name:'remark', label:'备注', type:'textarea' }
+  ], data, async (d, modal) => {
+    if (Number(d.water_curr) < Number(d.water_prev)){ alert('本期水表读数不能小于上期'); return; }
+    if (Number(d.elec_curr)  < Number(d.elec_prev)) { alert('本期电表读数不能小于上期'); return; }
+    await api(id ? '/api/meters/' + id : '/api/meters', id ? 'PUT' : 'POST', d);
+    modal.hide(); renderMeters();
+  });
+}
+
+async function delMeter(id){
+  if (!confirm('确定删除该抄表记录？')) return;
+  await api('/api/meters/' + id, 'DELETE');
+  renderMeters();
+}
+
+/* ==================================================================
+ * 16. 网络管理（物业模式）
+ * ================================================================== */
+let netFilter = { month:'', building_id:'' };
+
+async function renderNetwork(){
+  const t = today();
+  if (!netFilter.month) netFilter.month = t.slice(0, 7);
+
+  const buildings = await api('/api/buildings');
+  const qs = new URLSearchParams(
+    Object.entries(netFilter).filter(([, v]) => v)
+  ).toString();
+  const data = await api('/api/netfee' + (qs ? '?' + qs : ''));
+  const list = data.list || [];
+
+  /* 当月已生成的网费账单（用于每户「生成/删除账单」按钮） */
+  const nBills = (await api('/api/bills?source=network'))
+    .filter(b => b.period_start && String(b.period_start).startsWith(netFilter.month));
+  const billByRoom = {};
+  nBills.forEach(b => { billByRoom[b.room_id] = b; });
+
+  const bOpts = buildings.map(b =>
+    `<option value="${b.id}" ${String(netFilter.building_id) === String(b.id) ? 'selected' : ''}>${esc(b.name)}</option>`).join('');
+
+  const sum = data.summary || { sumFee:0, sumBandwidth:0, sumFull:0, count:0 };
+
+  $('#page').innerHTML = `
+  <div class="card mb-3"><div class="card-body py-2">
+    <div class="row g-2 align-items-center">
+      <div class="col-auto">
+        <label class="col-form-label col-form-label-sm me-1">月份</label>
+        <input type="month" class="form-control form-control-sm"
+               value="${esc(netFilter.month)}"
+               onchange="netFilter.month=this.value;renderNetwork()" style="width:160px">
+      </div>
+      <div class="col-auto">
+        <select class="form-select form-select-sm" onchange="netFilter.building_id=this.value;renderNetwork()">
+          <option value="">全部楼栋</option>${bOpts}
+        </select>
+      </div>
+      <div class="col-auto">
+        ${canOp('bill_generate') ? `<button class="btn btn-sm btn-success" onclick="generateBills('network')">
+          <i class="bi bi-magic"></i> 生成本月网费账单</button>` : ''}
+      </div>
+      <div class="col-auto">
+        ${canOp('bill_add') ? `<button class="btn btn-sm btn-outline-primary" onclick="editNetBill()">
+          <i class="bi bi-plus-lg"></i> 手动新增</button>` : ''}
+      </div>
+      <div class="col-auto text-muted small">共 ${list.length} 户</div>
+    </div>
+  </div></div>
+
+  <div class="row g-3 mb-3">
+    <div class="col-6 col-md-3">
+      <div class="card stat-card"><div class="card-body py-2">
+        <div class="text-muted small">本月网费合计（按天折算）</div>
+        <div class="num text-primary">${money(sum.sumFee)}</div>
+      </div></div>
+    </div>
+    <div class="col-6 col-md-3">
+      <div class="card stat-card"><div class="card-body py-2">
+        <div class="text-muted small">满月网费合计</div>
+        <div class="num text-secondary">${money(sum.sumFull)}</div>
+      </div></div>
+    </div>
+    <div class="col-6 col-md-3">
+      <div class="card stat-card"><div class="card-body py-2">
+        <div class="text-muted small">总带宽</div>
+        <div class="num text-info">${sum.sumBandwidth} 兆</div>
+      </div></div>
+    </div>
+    <div class="col-6 col-md-3">
+      <div class="card stat-card"><div class="card-body py-2">
+        <div class="text-muted small">当月天数</div>
+        <div class="num text-warning">${data.days_in_month || 30} 天</div>
+      </div></div>
+    </div>
+  </div>
+
+  <div class="card mb-3">
+    <div class="card-header bg-white fw-bold d-flex align-items-center">
+      <i class="bi bi-wifi text-primary me-1"></i> 宽带申请
+      <span class="small text-muted ms-2">企业管理员提交报装 / 加兆 / 减兆申请，主管理员审批后自动执行</span>
+      ${ME.level === 'company_admin' && canOp('netline_bandwidth')
+        ? '<button class="btn btn-sm btn-primary ms-auto" onclick="addNetRequest()">+ 申请上报</button>' : ''}
+    </div>
+    <div class="card-body py-2" id="netReqBox"><div class="text-muted">加载中…</div></div>
+  </div>
+
+  <div class="card mb-3"><div class="card-header bg-white fw-bold">
+    <i class="bi bi-ethernet text-primary"></i> 各房间网费明细（${esc(data.month)}）</div>
+    <div class="table-responsive" style="max-height:520px"><table class="table table-hover mb-0">
+    <thead class="table-light"><tr>
+      <th>楼栋/房号</th><th>${personLabel()}</th><th>电话</th>
+      <th>线路</th><th>月初带宽</th><th>当前带宽</th><th>每兆月租</th>
+      <th>本月变更</th><th>本月网费</th>${canAnyOp('bill_add','bill_generate','bill_delete','netline_add','netline_edit','netline_bandwidth','netline_status') ? '<th width="300">操作</th>' : ''}
+    </tr></thead>
+    <tbody>${list.map(r => {
+      const bill = billByRoom[r.room_id];
+      const billBtns = canOp('bill_delete') ? (bill
+        ? `${bill.status === 'paid'
+            ? '<span class="text-muted small" title="已收款账单不能更新">已收款</span>'
+            : (canOp('bill_generate') ? `<button class="btn btn-sm btn-outline-primary" onclick="updateRoomNetBill(${r.room_id}, '${esc(netFilter.month)}')">更新账单</button>` : '')}
+           <button class="btn btn-sm btn-outline-danger" onclick="delRoomNetBill(${bill.id})">删除账单</button>`
+        : ((r.bandwidth || 0) <= 0
+          ? '<span class="text-muted small">无带宽</span>'
+          : (canOp('bill_generate') ? `<button class="btn btn-sm btn-outline-warning" onclick="genRoomNetBill(${r.room_id}, '${esc(netFilter.month)}')">生成账单</button>` : ''))) : '';
+      const lines = r.lines || [];
+      const activeCount = lines.filter(l => l.status === 'active').length;
+      const lineRows = lines.map(l => {
+        const segTxt = (l.segments && l.segments.length)
+          ? `<span class="text-muted small">${l.segments.map(s => `${s.bandwidth}兆×${s.days}天`).join(' + ')}</span>`
+          : '';
+        const ops = !canAnyOp('netline_bandwidth','netline_edit','netline_status')
+          ? ''
+          : (l.status === 'active'
+            ? `${canOp('netline_bandwidth') ? `<button class="btn btn-sm btn-outline-success" onclick="changeBandwidth(${r.room_id}, ${l.id}, 'add')">加兆</button>
+               <button class="btn btn-sm btn-outline-danger"  onclick="changeBandwidth(${r.room_id}, ${l.id}, 'reduce')">减兆</button>` : ''}
+               ${canOp('netline_edit') ? `<button class="btn btn-sm btn-outline-secondary" onclick="editNetLine(${l.id})">编辑</button>` : ''}
+               ${canOp('netline_status') ? `<button class="btn btn-sm btn-outline-dark"    onclick="stopNetLine(${l.id})">停用</button>` : ''}`
+            : `<span class="text-muted">已停用（${esc(l.stop_date || '-')}）</span>
+               ${canOp('netline_status') ? `<button class="btn btn-sm btn-outline-success" onclick="startNetLine(${l.id})">重新启用</button>` : ''}`);
+        return `<tr class="table-light">
+          <td colspan="${canAnyOp('bill_add','bill_generate','bill_delete','netline_add','netline_edit','netline_bandwidth','netline_status') ? 10 : 9}" class="py-1">
+            <div class="d-flex align-items-center gap-2 flex-wrap" style="padding-left:28px">
+              <i class="bi bi-diagram-3 text-muted"></i>
+              <b>${esc(l.line_name)}</b>
+              <span class="bw-tag">${l.bandwidth} 兆</span>
+              ${l.status === 'active'
+                ? '<span class="badge bg-success">启用</span>'
+                : '<span class="badge bg-secondary">停用</span>'}
+              <small class="text-muted">开通 ${esc(l.start_date || '-')}${l.status === 'stopped' ? ' · 停用 ' + esc(l.stop_date || '-') : ''}</small>
+              <span class="ms-auto d-flex align-items-center gap-2 flex-wrap">
+                ${segTxt ? segTxt + ' ' : ''}${ops}
+              </span>
+            </div>
+          </td></tr>`;
+      }).join('');
+      return `
+      <tr class="align-middle">
+        <td><b>${esc(r.building_name || '')} ${esc(r.room_no || '')}</b></td>
+        <td>${esc(r.owner_name || '-')}</td>
+        <td>${esc(r.owner_phone || '-')}</td>
+        <td><span class="badge bg-light text-dark">${activeCount}/${lines.length} 条</span></td>
+        <td><span class="bw-tag">${r.month_start_bandwidth} 兆</span></td>
+        <td><span class="bw-tag">${r.bandwidth} 兆</span></td>
+        <td><span class="text-muted" title="统一取本经营主体系统设置的网费单价">${money(r.price)}/兆</span></td>
+        <td>${r.changes_in_month > 0
+              ? `<span class="badge bg-warning text-dark">${r.changes_in_month} 次</span>`
+              : '<span class="text-muted">-</span>'}</td>
+        <td><b class="text-primary">${money(r.month_fee)}</b>
+            <div class="text-muted" style="font-size:12px">
+              （满月 ${money(r.full_month_fee)}）
+            </div></td>
+        <td>
+          ${canOp('netline_add') ? `<button class="btn btn-sm btn-outline-primary" onclick="addNetLine(${r.room_id}, ${r.bandwidth || 0})">+ 线路</button>` : ''}
+          <button class="btn btn-sm btn-outline-info"    onclick="showNetSegments(${r.room_id}, '${esc(data.month)}')">明细</button>
+          <button class="btn btn-sm btn-outline-secondary" onclick="showNetHistory(${r.room_id})">历史</button>
+          ${billBtns}
+        </td>
+      </tr>${lineRows}`;
+    }).join('') || `<tr><td colspan="${canAnyOp('bill_add','bill_generate','bill_delete','netline_add','netline_edit','netline_bandwidth','netline_status') ? 10 : 9}" class="text-center text-muted py-4">暂无数据（${curMode() === 'property' ? '请先在房产管理为房屋绑定企业' : '请先在合同管理为房间办理出租'}）</td></tr>`}
+    </tbody></table></div>
+  </div>
+
+  <div class="card">
+    <div class="card-header bg-white fw-bold">
+      <i class="bi bi-clock-history"></i> 最近带宽变更记录</div>
+    <div class="table-responsive" style="max-height:280px" id="netChangesBox">
+      <div class="text-muted p-3">加载中…</div>
+    </div>
+  </div>`;
+
+  /* 加载最近变更 */
+  const changeQs = new URLSearchParams();
+  if (netFilter.building_id) changeQs.set('building_id', netFilter.building_id);
+  const changes = await api('/api/netChanges' + (changeQs.toString() ? '?' + changeQs.toString() : ''));
+  const box = document.getElementById('netChangesBox');
+  if (box){
+    box.innerHTML = `<table class="table table-hover mb-0">
+      <thead class="table-light"><tr>
+        <th>日期</th><th>楼栋/房号</th><th>${personLabel()}</th><th>类型</th>
+        <th>线路</th><th>带宽变更</th><th>备注</th>
+      </tr></thead>
+      <tbody>${changes.slice(0, 30).map(c => {
+        const typeLabel = c.change_type === 'add'
+          ? '<span class="badge bg-success">加兆</span>'
+          : '<span class="badge bg-danger">减兆</span>';
+        const delta = c.delta >= 0 ? `+${c.delta}` : c.delta;
+        return `<tr>
+          <td>${esc(c.change_date)}</td>
+          <td>${esc(c.building_name || '')} ${esc(c.room_no || '')}</td>
+          <td>${esc(c.owner_name || '-')}</td>
+          <td>${typeLabel}</td>
+          <td><small>${esc(c.line_name || '默认线路')}</small></td>
+          <td><span class="bw-tag">${c.old_bandwidth} → ${c.new_bandwidth} 兆</span>
+              <small class="text-muted">（${delta}）</small></td>
+          <td><small>${esc(c.remark || '-')}</small></td>
+        </tr>`;
+      }).join('') || '<tr><td colspan="7" class="text-center text-muted py-4">暂无变更记录</td></tr>'}
+      </tbody></table>`;
+  }
+
+  /* 宽带申请（上报）列表 */
+  renderNetRequests();
+}
+
+const NET_REQ_TYPE = {
+  install: '<span class="badge bg-primary">报装</span>',
+  add:     '<span class="badge bg-success">加兆</span>',
+  reduce:  '<span class="badge bg-danger">减兆</span>'
+};
+const NET_REQ_STATUS = {
+  pending:  '<span class="badge bg-warning text-dark">待处理</span>',
+  done:     '<span class="badge bg-success">已执行</span>',
+  rejected: '<span class="badge bg-secondary">已驳回</span>'
+};
+async function renderNetRequests(){
+  const box = document.getElementById('netReqBox');
+  if (!box) return;
+  let list = [];
+  try { list = await api('/api/netRequests'); } catch(e){ box.innerHTML = '<div class="text-muted">' + esc(e.message) + '</div>'; return; }
+  const canAudit = ME.level === 'admin';
+  box.innerHTML = `<div class="table-responsive" style="max-height:260px"><table class="table table-sm table-hover mb-0">
+    <thead class="table-light"><tr>
+      <th>提交时间</th><th>类型</th><th>楼栋/房号</th><th>企业</th>
+      <th>申请内容</th><th>说明</th><th>状态</th>${canAudit ? '<th width="180">处理</th>' : ''}
+    </tr></thead>
+    <tbody>${list.map(q => {
+      const content = q.type === 'install'
+        ? `<span class="bw-tag">报装 ${q.bandwidth} 兆</span>`
+        : `<span class="bw-tag">${esc(q.line_name || '线路')} ${q.type === 'add' ? '+' : '-'}${q.delta} 兆</span>`;
+      const audit = canAudit && q.status === 'pending'
+        ? `<button class="btn btn-sm btn-outline-success me-1" onclick="handleNetRequest(${q.id}, 'approve')">通过并执行</button>
+           <button class="btn btn-sm btn-outline-secondary" onclick="handleNetRequest(${q.id}, 'reject')">驳回</button>`
+        : (canAudit && q.handled_by ? `<small class="text-muted">${esc(q.handled_by)}<br>${esc(q.handle_note || '')}</small>` : '');
+      return `<tr>
+        <td><small>${esc((q.created_at || '').slice(0, 16))}</small></td>
+        <td>${NET_REQ_TYPE[q.type] || q.type}</td>
+        <td>${esc(q.building_name || '')} ${esc(q.room_no || '')}</td>
+        <td>${esc(q.company_name || '-')}</td>
+        <td>${content}</td>
+        <td><small>${esc(q.reason || '-')}</small></td>
+        <td>${NET_REQ_STATUS[q.status] || q.status}</td>
+        ${canAudit ? `<td>${audit}</td>` : ''}
+      </tr>`;
+    }).join('') || '<tr><td colspan="' + (canAudit ? 8 : 7) + '" class="text-center text-muted py-3">暂无申请</td></tr>'}
+    </tbody></table></div>`;
+}
+
+/* 企业管理员：提交宽带申请（上报） */
+async function addNetRequest(){
+  const rooms = await safeApi('/api/rooms');
+  if (!rooms) return;
+  if (!rooms.length){ alert('暂无本企业房产，请先由物业主管理员绑定'); return; }
+  const netLines = await safeApi('/api/netLines');
+  if (!netLines) return;
+  const roomOpts = rooms.map(r => ({ value: r.id,
+    label: `${r.building_name || ''} ${r.room_no}｜${r.owner_name || ''}` }));
+  openForm('上报宽带申请', [
+    { name:'type', label:'申请类型', type:'select', required:true,
+      options: [
+        { value:'install', label:'宽带报装（新开线路）' },
+        { value:'add',     label:'加兆（带宽增加）' },
+        { value:'reduce',  label:'减兆（带宽减少）' }
+      ] },
+    { name:'room_id', label:'房间', type:'select', required:true, options: roomOpts },
+    { name:'line_id', label:'宽带线路', type:'select', options: [] },
+    { name:'bandwidth', label:'报装带宽（兆）', type:'number', step:'1',
+      hint:'报装时填写目标带宽' },
+    { name:'delta', label:'增减兆数', type:'number', step:'1', hint:'加兆/减兆时填写增减数值' },
+    { name:'reason', label:'申请说明', type:'textarea', placeholder:'如：办公扩编需要提速' }
+  ], {}, async (d, modal) => {
+    await api('/api/netRequests', 'POST', {
+      type: d.type, room_id: Number(d.room_id),
+      line_id: d.line_id ? Number(d.line_id) : null,
+      bandwidth: d.bandwidth !== null && d.bandwidth !== undefined ? Number(d.bandwidth) : null,
+      delta: d.delta !== null && d.delta !== undefined ? Number(d.delta) : null,
+      reason: d.reason || ''
+    });
+    modal.hide(); renderNetwork();
+  }, (el) => {
+    const $ = n => el.querySelector(`[name="${n}"]`);
+    const typeSel = $('type'), roomSel = $('room_id'), lineSel = $('line_id'),
+          bwRow = $('bandwidth').closest('.mb-3'), deltaRow = $('delta').closest('.mb-3'),
+          lineRow = lineSel.closest('.mb-3');
+    const lineOpts = roomId => {
+      const ls = netLines.filter(l => l.room_id === Number(roomId) && l.status === 'active');
+      lineSel.innerHTML = '<option value="">-- 请选择线路 --</option>'
+        + ls.map(l => `<option value="${l.id}">${esc(l.line_name)}（${l.bandwidth} 兆）</option>`).join('');
+      lineSel.disabled = !ls.length;
+    };
+    const sync = () => {
+      const t = typeSel.value;
+      bwRow.style.display = t === 'install' ? '' : 'none';
+      deltaRow.style.display = (t === 'add' || t === 'reduce') ? '' : 'none';
+      lineRow.style.display = (t === 'add' || t === 'reduce') ? '' : 'none';
+      if (t !== 'install') lineOpts(roomSel.value);
+    };
+    typeSel.addEventListener('change', sync);
+    roomSel.addEventListener('change', () => { if (typeSel.value !== 'install') lineOpts(roomSel.value); });
+    sync();
+  });
+}
+
+/* 主管理员：审批申请（通过并执行 / 驳回） */
+async function handleNetRequest(id, action){
+  const note = action === 'approve'
+    ? (prompt('处理说明（可选）：') || '')
+    : (prompt('驳回原因（必填）：') || '');
+  if (action === 'reject' && !note){ alert('请填写驳回原因'); return; }
+  if (action === 'approve' && !confirm('确认通过该申请并立即执行线路变更？')) return;
+  try {
+    const r = await api('/api/netRequests/' + id, 'PUT', { action, handle_note: note });
+    alert(action === 'approve' ? '已通过并执行' : '已驳回');
+    renderNetwork();
+  } catch(e){ alert(e.message); }
+}
+
+/* 手动新增一条网费账单（租房按履行中合同、物业按企业绑定） */
+async function editNetBill(){
+  const mode = curMode();
+  const ym = netFilter.month || today().slice(0, 7);
+  const pStart = ym + '-01';
+  const pEnd = addDays(addMonths(pStart, 1), -1);
+
+  const roomsAll = await safeApi('/api/rooms');
+  if (!roomsAll) return;
+  const roomById = {};
+  roomsAll.forEach(r => { roomById[r.id] = r; });
+
+  /* 带宽默认取该房所有启用线路的总带宽 */
+  const netLines = await safeApi('/api/netLines');
+  if (!netLines) return;
+  const bwByRoom = {};
+  netLines.filter(l => l.status === 'active').forEach(l => {
+    bwByRoom[l.room_id] = (bwByRoom[l.room_id] || 0) + (Number(l.bandwidth) || 0);
+  });
+
+  let options, resolveTenant, firstBw;
+  if (mode === 'property'){
+    const owned = roomsAll.filter(r => r.owner_id);
+    if (!owned.length){ alert('请先在房产管理为房屋绑定企业'); return; }
+    options = owned.map(r => ({ value:r.id,
+      label:`${r.building_name || ''} ${r.room_no}｜${r.owner_name || ''}` }));
+    resolveTenant = roomId => (roomById[roomId] || {}).owner_id;
+    firstBw = bwByRoom[owned[0].id] || 0;
+  } else {
+    const contracts = await safeApi('/api/contracts?status=active');
+    if (!contracts) return;
+    if (!contracts.length){ alert('没有履行中的合同，请先在合同管理为房间办理出租'); return; }
+    const tenantByRoom = {};
+    contracts.forEach(c => { tenantByRoom[c.room_id] = c.tenant_id; });
+    options = contracts.map(c => ({ value:c.room_id,
+      label:`${c.building_name || ''} ${c.room_no}｜${c.tenant_name || ''}` }));
+    resolveTenant = roomId => tenantByRoom[roomId];
+    firstBw = bwByRoom[contracts[0].room_id] || 0;
+  }
+
+  /* 单价取本经营主体「系统设置」，按 org 隔离 */
+  const priceCny = Number(DB.data.settings.net_price_per_mb) || 0;
+
+  openForm('手动新增账单', [
+    { name:'bill_type', label:'账单类型', type:'select', required:true, options:[
+      { value:'network', label:'网费' },
+      { value:'net_repair', label:'网维修费' },
+      { value:'install',    label:'设备安装费' }] },
+    { name:'room_id', label:'房间', type:'select', required:true, options },
+    { name:'net_bandwidth', label:'带宽（兆）', type:'number', required:true, step:'1', default:Number(firstBw) || 0 },
+    { name:'net_price', label:'每兆月租单价', type:'number', step:'0.0001', money:true, readonly:true,
+      default:priceCny, hint:'取本经营主体「系统设置」的网费单价，如需调整请到系统设置修改' },
+    { name:'period_start', label:'费用起始日', type:'date', required:true, default:pStart },
+    { name:'period_end',   label:'费用截止日', type:'date', required:true, default:pEnd },
+    { name:'due_date',     label:'应缴日期', type:'date', required:true, default:ym + '-10' },
+    { name:'amount',       label:'金额', type:'number', required:true, step:'0.01', money:true },
+    { name:'items', label:'明细清单', type:'items', hint:'网维修费/设备安装费可录入明细行，合计自动填入金额', cat:'net' },
+    { name:'remark', label:'备注', type:'textarea' }
+  ], { bill_type:'network' }, async (d, modal) => {
+    await api('/api/bills', 'POST', {
+      source:d.bill_type, room_id:Number(d.room_id), tenant_id:resolveTenant(Number(d.room_id)) || null,
+      period_start:d.period_start, period_end:d.period_end, due_date:d.due_date,
+      amount:d.amount, remark:d.remark, items:d.items
+    });
+    modal.hide(); renderNetwork();
+  }, (el) => {
+    const $ = n => el.querySelector(`[name="${n}"]`);
+    const typeSel = $('bill_type'), roomSel = $('room_id'), bwInput = $('net_bandwidth'),
+          priceRow = $('net_price').closest('.mb-3'), bwRow = $('net_bandwidth').closest('.mb-3'),
+          amtLabel = $('amount').closest('.mb-3').querySelector('.form-label'),
+          ps = $('period_start'), pe = $('period_end'), amt = $('amount'),
+          itemWrap = el.querySelector('.item-wrap');
+    const recalc = () => {
+      const bw = Number(bwInput.value) || 0;
+      const s = ps.value, e = pe.value;
+      const days = (s && e) ? ((new Date(e + 'T00:00:00') - new Date(s + 'T00:00:00')) / 86400000) + 1 : 0;
+      const dim = s ? new Date(Number(s.slice(0, 4)), Number(s.slice(5, 7)), 0).getDate() : 30;
+      const amountCny = bw * priceCny * (days > 0 ? days / dim : 0);
+      amt.value = toDisplayMoney(amountCny);
+    };
+    const sync = () => {
+      const isNet = typeSel.value === 'network';
+      bwRow.style.display = isNet ? '' : 'none';
+      priceRow.style.display = isNet ? '' : 'none';
+      if (itemWrap) itemWrap.style.display = isNet ? 'none' : '';
+      amtLabel.innerHTML = (isNet ? '金额' : '金额') + ' <span class="text-danger">*</span>';
+      if (isNet){ amt.readOnly = false; recalc(); }
+    };
+    typeSel.addEventListener('change', sync);
+    roomSel.addEventListener('change', () => {
+      const r = roomById[Number(roomSel.value)];
+      if (r){ bwInput.value = bwByRoom[r.id] || 0; recalc(); }
+    });
+    bwInput.addEventListener('input', recalc);
+    ps.addEventListener('change', recalc);
+    pe.addEventListener('change', recalc);
+    sync();
+  });
+}
+
+/* 单户网费账单：生成 / 删除 */
+async function genRoomNetBill(roomId, month){
+  if (!confirm(`为该房产生成 ${month} 网费账单？\n（若当月已有网费账单将跳过）`)) return;
+  try {
+    const r = await api('/api/bills/generate', 'POST', { kind:'network', room_id: roomId });
+    const extra = (r.detail && r.detail.length)
+      ? '\n\n跳过原因：\n' + r.detail.map(d => '· ' + d.room + ' — ' + d.reason).join('\n') : '';
+    alert(r.msg + extra);
+    renderNetwork();
+  } catch(e){ alert(e.message); }
+}
+
+async function updateRoomNetBill(roomId, month){
+  if (!confirm(`按当前带宽/单价重算该房间 ${month} 网费账单？\n（未收款账单会更新金额与明细，账单 ID 保留）`)) return;
+  try {
+    const r = await api('/api/bills/update-network', 'POST', { room_id: roomId });
+    alert(r.bill_id
+      ? `已更新账单 #${r.bill_id}：金额由 ${money(r.old_amount)} 重算为 ${money(r.new_amount)}`
+      : r.msg);
+    renderNetwork();
+  } catch(e){ alert(e.message); }
+}
+
+async function delRoomNetBill(billId){
+  if (!confirm('确定删除该网费账单？')) return;
+  try { await api('/api/bills/' + billId, 'DELETE'); renderNetwork(); }
+  catch(e){ alert(e.message); }
+}
+
+/* 宽带线路：加兆 / 减兆（针对具体线路） */
+async function changeBandwidth(roomId, lineId, kind){
+  const lines = await safeApi('/api/netLines?room_id=' + roomId);
+  if (!lines) return;
+  const line = lines.find(x => x.id === Number(lineId));
+  if (!line){ alert('宽带线路不存在'); return; }
+
+  const isAdd = kind === 'add';
+  const title = `${isAdd ? '加兆' : '减兆'} - ${esc(line.line_name)}`;
+  const curBw = Number(line.bandwidth) || 0;
+
+  openForm(title, [
+    { name:'new_bandwidth', label:'新带宽(兆)', type:'number', required:true, step:'1',
+      default: isAdd ? curBw + 50 : Math.max(0, curBw - 50),
+      hint: `当前带宽 ${curBw} 兆，单价统一取本经营主体系统设置。` },
+    { name:'change_date', label:'生效日期', type:'date', required:true, default: today() },
+    { name:'remark', label:'备注', type:'textarea',
+      default: isAdd ? `加兆 ${curBw} → 新带宽` : `减兆 ${curBw} → 新带宽` }
+  ], {}, async (d, modal) => {
+    const nb = Number(d.new_bandwidth);
+    if (!Number.isFinite(nb) || nb < 0){ alert('请填写有效的带宽兆数'); return; }
+    if (isAdd && nb <= curBw){ alert('加兆后的带宽应大于当前带宽'); return; }
+    if (!isAdd && nb >= curBw){ alert('减兆后的带宽应小于当前带宽'); return; }
+    await api('/api/netChanges', 'POST', {
+      room_id: roomId, line_id: line.id,
+      new_bandwidth: nb,
+      change_date: d.change_date,
+      remark: d.remark || ''
+    });
+    modal.hide();
+    renderNetwork();
+  });
+}
+
+/* 添加一条宽带线路 */
+async function addNetLine(roomId, totalBw){
+  const rooms = await safeApi('/api/rooms');
+  if (!rooms) return;
+  const r = rooms.find(x => x.id === roomId);
+  if (!r) return;
+  openForm(`添加线路 - ${esc(r.building_name || '')} ${esc(r.room_no || '')}`, [
+    { name:'line_name', label:'线路名称', required:true, default:'线路' + (Number(totalBw) > 0 ? '' : ''),
+      placeholder:'如：主宽带 / 第二条 / 备用线路' },
+    { name:'bandwidth', label:'带宽(兆)', type:'number', required:true, step:'1', default:50,
+      hint:`该房当前启用线路总带宽 ${totalBw} 兆。` },
+    { name:'start_date', label:'开通日期', type:'date', required:true, default: today() },
+    { name:'remark', label:'备注', type:'textarea' }
+  ], {}, async (d, modal) => {
+    const bw = Number(d.bandwidth);
+    if (!Number.isFinite(bw) || bw <= 0){ alert('请填写有效的带宽兆数'); return; }
+    await api('/api/netLines', 'POST', { room_id: roomId, line_name:d.line_name,
+      bandwidth:bw, start_date:d.start_date, remark:d.remark || '' });
+    modal.hide(); renderNetwork();
+  });
+}
+
+/* 编辑线路名称/备注 */
+async function editNetLine(lineId){
+  const lines = await safeApi('/api/netLines');
+  if (!lines) return;
+  const line = lines.find(x => x.id === Number(lineId));
+  if (!line){ alert('线路不存在'); return; }
+  openForm(`编辑线路 - ${esc(line.line_name)}`, [
+    { name:'line_name', label:'线路名称', required:true, default:line.line_name },
+    { name:'remark', label:'备注', type:'textarea', default:line.remark }
+  ], {}, async (d, modal) => {
+    await api('/api/netLines/' + line.id, 'PUT', d);
+    modal.hide(); renderNetwork();
+  });
+}
+
+/* 停用 / 重新启用线路 */
+async function stopNetLine(lineId){
+  if (!confirm('确定停用该线路？停用日起不再计费，历史记录保留。')) return;
+  try { await api('/api/netLines/' + lineId + '/stop', 'POST', { stop_date: today() }); renderNetwork(); }
+  catch(e){ alert(e.message); }
+}
+async function startNetLine(lineId){
+  if (!confirm('确定重新启用该线路？将从今天起恢复计费。')) return;
+  try { await api('/api/netLines/' + lineId + '/start', 'POST', { start_date: today() }); renderNetwork(); }
+  catch(e){ alert(e.message); }
+}
+
+async function showNetSegments(roomId, month){
+  const data = await safeApi(`/api/netfee?month=${encodeURIComponent(month)}`);
+  if (!data) return;
+  const r = (data.list || []).find(x => x.room_id === roomId);
+  if (!r){ alert('未找到该房间的网费数据'); return; }
+
+  const lines = r.lines || [];
+  const linesHtml = lines.map(l => {
+    const segHtml = (l.segments || []).map(s => `
+      <div class="seg-row">
+        <div>
+          <b>${s.start} ~ ${s.end}</b>
+          <span class="text-muted small">（${s.days} 天）</span>
+        </div>
+        <div class="text-end">
+          <span class="bw-tag">${s.bandwidth} 兆</span>
+          <small class="text-muted">× ${money(s.price)}/兆 × ${s.days}/${r.days_in_month}</small>
+          <b class="ms-2 text-primary">${money(s.fee)}</b>
+        </div>
+      </div>`).join('') || '<div class="text-muted small">本月无计费分段</div>';
+    return `<div class="border rounded p-2 mb-2">
+      <div class="d-flex justify-content-between align-items-center mb-1">
+        <span><i class="bi bi-diagram-3 text-muted me-1"></i><b>${esc(l.line_name)}</b>
+          <span class="bw-tag ms-1">${l.bandwidth} 兆</span>
+          ${l.status === 'active' ? '<span class="badge bg-success">启用</span>' : '<span class="badge bg-secondary">停用</span>'}
+        </span>
+        <span class="text-primary fw-bold">${money(l.total)}</span>
+      </div>
+      ${segHtml}
+    </div>`;
+  }).join('') || '<div class="text-muted">该房间暂无宽带线路</div>';
+
+  openInfo(`网费分段明细 - ${r.building_name} ${r.room_no}（${month}）`, `
+    <div class="alert alert-info small mb-3">
+      <i class="bi bi-calculator"></i>
+      计算公式：<b>带宽兆数 × 每兆月租 × 段天数 ÷ 当月天数</b>，单价统一取本经营主体设置<br>
+      当月总天数：${r.days_in_month} 天
+    </div>
+    ${linesHtml}
+    <hr>
+    <div class="d-flex justify-content-between">
+      <span class="fw-bold">本月网费合计</span>
+      <span class="fw-bold text-primary fs-5">${money(r.month_fee)}</span>
+    </div>
+  `, 'modal-lg');
+}
+
+async function showNetHistory(roomId){
+  const changes = await api('/api/netChanges?room_id=' + roomId);
+  if (!changes.length){
+    openInfo('带宽变更历史', '<div class="text-muted">该房间暂无变更记录。</div>');
+    return;
+  }
+  const html = `<div class="table-responsive"><table class="table table-sm mb-0">
+    <thead class="table-light"><tr>
+      <th>日期</th><th>线路</th><th>类型</th><th>带宽变更</th><th>备注</th></tr></thead>
+    <tbody>${changes.map(c => {
+      const t = c.change_type === 'add' ? '<span class="badge bg-success">加兆</span>'
+              : '<span class="badge bg-danger">减兆</span>';
+      const d = c.delta >= 0 ? `+${c.delta}` : c.delta;
+      return `<tr>
+        <td>${esc(c.change_date)}</td>
+        <td><small>${esc(c.line_name || '默认线路')}</small></td>
+        <td>${t}</td>
+        <td><span class="bw-tag">${c.old_bandwidth} → ${c.new_bandwidth} 兆</span>
+            <small class="text-muted">（${d}）</small></td>
+        <td><small>${esc(c.remark || '-')}</small></td>
+      </tr>`;
+    }).join('')}
+    </tbody></table></div>`;
+  openInfo('带宽变更历史', html, 'modal-lg');
+}
+
+/* ==================================================================
+ * 17. 报修管理
+ * ================================================================== */
+let repairFilter = '';
+
+async function renderRepairs(){
+  const qs = repairFilter ? '?status=' + repairFilter : '';
+  const list = await api('/api/repairs' + qs);
+
+  $('#page').innerHTML = `
+  <div class="card mb-3"><div class="card-body py-2">
+    <div class="row g-2 align-items-center">
+      <div class="col-auto">
+        <select class="form-select form-select-sm" onchange="repairFilter=this.value;renderRepairs()">
+          <option value="">全部报修</option>
+          <option value="pending"    ${repairFilter === 'pending' ? 'selected' : ''}>待处理</option>
+          <option value="processing" ${repairFilter === 'processing' ? 'selected' : ''}>处理中</option>
+          <option value="done"       ${repairFilter === 'done' ? 'selected' : ''}>已完成</option>
+        </select>
+      </div>
+      <div class="col-auto">${canOp('repair_add') ? `<button class="btn btn-sm btn-primary" onclick="editRepair()">+ 新增报修</button>` : ''}</div>
+      <div class="col-auto text-muted small">共 ${list.length} 条</div>
+    </div>
+  </div></div>
+  <div class="card"><div class="table-responsive"><table class="table table-hover mb-0">
+    <thead class="table-light"><tr>
+      <th>楼栋/房间</th><th>报修人</th><th>标题</th><th>问题描述</th>
+      <th>状态</th><th>处理人</th><th>处理说明</th><th>报修时间</th>${canAnyOp('repair_add','repair_handle','repair_delete') ? '<th width="170">操作</th>' : ''}
+    </tr></thead>
+    <tbody>${list.map(r => `<tr>
+      <td><b>${esc(r.building_name || '')} ${esc(r.room_no || '-')}</b></td>
+      <td>${esc(r.tenant_name || '-')}</td>
+      <td>${esc(r.title)}</td>
+      <td><small>${esc(r.content || '-')}</small></td>
+      <td>${repairBadge(r.status)}</td>
+      <td>${esc(r.handler || '-')}</td>
+      <td><small>${esc(r.handle_note || '-')}</small></td>
+      <td><small>${esc(r.created_at || '-')}</small></td>
+      ${canAnyOp('repair_add','repair_handle','repair_delete') ? `<td>
+        ${r.status !== 'done' && canOp('repair_handle')
+          ? `<button class="btn btn-sm btn-outline-success" onclick="handleRepair(${r.id})">处理</button>` : ''}
+        ${canOp('repair_delete') ? `<button class="btn btn-sm btn-outline-danger" onclick="delRepair(${r.id})">删除</button>` : ''}
+      </td>` : ''}</tr>`).join('') || '<tr><td colspan="9" class="text-center text-muted py-4">暂无数据</td></tr>'}
+    </tbody></table></div></div>`;
+}
+
+async function editRepair(){
+  const rooms = await safeApi('/api/rooms');
+  if (!rooms) return;
+  if (!rooms.length){ alert(ME.level === 'company_admin' ? '暂无本企业房产，请先由物业主管理员绑定' : '请先创建房间'); return; }
+  if (ME.level === 'company_admin'){
+    /* 企业管理员：报修管理作为统一申请入口（网络维修 / 水电维修 / 其它维修） */
+    openForm('报修申请', [
+      { name:'room_id', label:'房产', type:'select', required:true,
+        options: rooms.map(r => ({ value:r.id, label:`${r.building_name || ''} ${r.room_no}｜${r.owner_name || ''}` })) },
+      { name:'type', label:'维修类型', type:'select', required:true, options:[
+        { value:'网络维修', label:'网络维修' }, { value:'水电维修', label:'水电维修' },
+        { value:'其它维修', label:'其它维修' }] },
+      { name:'content', label:'问题描述', type:'textarea', required:true,
+        placeholder:'如：办公室断网 / 卫生间漏水 / 门锁损坏' }
+    ], { room_id: rooms[0].id, type:'网络维修' }, async (d, modal) => {
+      await api('/api/repairs', 'POST', {
+        room_id: Number(d.room_id), title: d.type, content: d.content || ''
+      });
+      modal.hide(); renderRepairs();
+    });
+    return;
+  }
+  openForm('新增报修', [
+    { name:'room_id', label:'报修房间', type:'select', required:true,
+      options: rooms.map(r => ({ value:r.id, label:`${r.building_name || ''} ${r.room_no}` })) },
+    { name:'title', label:'报修标题', required:true, placeholder:'如：空调不制冷' },
+    { name:'content', label:'问题描述', type:'textarea' }
+  ], { room_id: rooms[0].id }, async (d, modal) => {
+    await api('/api/repairs', 'POST', d);
+    modal.hide(); renderRepairs();
+  });
+}
+
+async function handleRepair(id){
+  openForm('处理报修', [
+    { name:'status', label:'处理状态', type:'select', options:[
+      { value:'processing', label:'处理中' }, { value:'done', label:'已完成' }] },
+    { name:'handler', label:'处理人', default: ME.name },
+    { name:'handle_note', label:'处理说明', type:'textarea' }
+  ], { status:'done', handler: ME.name }, async (d, modal) => {
+    await api('/api/repairs/' + id, 'PUT', d);
+    modal.hide(); renderRepairs();
+  });
+}
+
+async function delRepair(id){
+  if (!confirm('确定删除该报修记录？')) return;
+  await api('/api/repairs/' + id, 'DELETE');
+  renderRepairs();
+}
+
+/* ==================================================================
+ * 18. 投诉建议
+ * ================================================================== */
+let complaintFilter = { status:'', type:'' };
+
+async function renderComplaints(){
+  const qs = new URLSearchParams(
+    Object.entries(complaintFilter).filter(([, v]) => v)
+  ).toString();
+  const list = await api('/api/complaints' + (qs ? '?' + qs : ''));
+  const pending = list.filter(c => c.status !== 'done').length;
+
+  $('#page').innerHTML = `
+  <div class="card mb-3"><div class="card-body py-2">
+    <div class="row g-2 align-items-center">
+      <div class="col-auto">
+        <select class="form-select form-select-sm"
+                onchange="complaintFilter.status=this.value;renderComplaints()">
+          <option value="">全部状态</option>
+          <option value="pending"    ${complaintFilter.status === 'pending' ? 'selected' : ''}>待处理</option>
+          <option value="processing" ${complaintFilter.status === 'processing' ? 'selected' : ''}>处理中</option>
+          <option value="done"       ${complaintFilter.status === 'done' ? 'selected' : ''}>已办结</option>
+        </select>
+      </div>
+      <div class="col-auto">
+        <select class="form-select form-select-sm"
+                onchange="complaintFilter.type=this.value;renderComplaints()">
+          <option value="">全部类型</option>
+          <option value="投诉" ${complaintFilter.type === '投诉' ? 'selected' : ''}>投诉</option>
+          <option value="建议" ${complaintFilter.type === '建议' ? 'selected' : ''}>建议</option>
+          <option value="咨询" ${complaintFilter.type === '咨询' ? 'selected' : ''}>咨询</option>
+          <option value="其他" ${complaintFilter.type === '其他' ? 'selected' : ''}>其他</option>
+        </select>
+      </div>
+      <div class="col-auto">
+        ${canOp('complaint_add') ? `<button class="btn btn-sm btn-primary" onclick="editComplaint()">+ 登记投诉/建议</button>` : ''}
+      </div>
+      <div class="col-auto text-muted small">
+        共 ${list.length} 条 · 未办结 <span class="text-danger fw-bold">${pending}</span>
+      </div>
+    </div>
+  </div></div>
+  <div class="card"><div class="table-responsive"><table class="table table-hover mb-0">
+    <thead class="table-light"><tr>
+      <th>楼栋/房号</th><th>企业</th><th>电话</th><th>类型</th>
+      <th>标题</th><th>内容</th><th>状态</th><th>处理人</th><th>处理说明</th><th>时间</th>${canAnyOp('complaint_add','complaint_handle','complaint_delete') ? '<th width="150">操作</th>' : ''}
+    </tr></thead>
+    <tbody>${list.map(c => `<tr>
+      <td><b>${esc(c.building_name || '')} ${esc(c.room_no || '-')}</b></td>
+      <td>${esc(c.owner_name || '-')}</td>
+      <td>${esc(c.owner_phone || '-')}</td>
+      <td><span class="badge bg-light text-dark border">${esc(c.type)}</span></td>
+      <td>${esc(c.title)}</td>
+      <td><small>${esc(c.content || '-')}</small></td>
+      <td>${complaintBadge(c.status)}</td>
+      <td>${esc(c.handler || '-')}</td>
+      <td><small>${esc(c.handle_note || '-')}</small></td>
+      <td><small>${esc(c.created_at || '-')}</small></td>
+      ${canAnyOp('complaint_add','complaint_handle','complaint_delete') ? `<td>
+        ${c.status !== 'done' && canOp('complaint_handle')
+          ? `<button class="btn btn-sm btn-outline-success" onclick="handleComplaint(${c.id})">处理</button>` : ''}
+        ${canOp('complaint_delete') ? `<button class="btn btn-sm btn-outline-danger" onclick="delComplaint(${c.id})">删除</button>` : ''}
+      </td>` : ''}</tr>`).join('') || '<tr><td colspan="11" class="text-center text-muted py-4">暂无数据</td></tr>'}
+    </tbody></table></div></div>`;
+}
+
+async function editComplaint(){
+  const rooms = await safeApi('/api/rooms');
+  if (!rooms) return;
+  const owned = rooms.filter(r => r.owner_id);
+  if (!owned.length){ alert('请先在房产管理中为房屋绑定企业'); return; }
+
+  const opts = owned.map(r => ({
+    value: r.id,
+    label: `${r.building_name || ''} ${r.room_no}｜${r.owner_name || ''}`
+  }));
+
+  openForm('登记投诉 / 建议', [
+    { name:'room_id', label:'房产', type:'select', required:true, options: opts },
+    { name:'type', label:'类型', type:'select', required:true, options:[
+      { value:'投诉', label:'投诉' }, { value:'建议', label:'建议' },
+      { value:'咨询', label:'咨询' }, { value:'其他', label:'其他' }] },
+    { name:'title', label:'标题', required:true, placeholder:'如：楼上噪音扰民' },
+    { name:'content', label:'详细内容', type:'textarea' }
+  ], { room_id: owned[0].id, type:'投诉' }, async (d, modal) => {
+    const r = owned.find(x => x.id === Number(d.room_id));
+    await api('/api/complaints', 'POST', {
+      ...d, owner_id: r ? r.owner_id : null
+    });
+    modal.hide(); renderComplaints();
+  });
+}
+
+async function handleComplaint(id){
+  openForm('处理投诉 / 建议', [
+    { name:'status', label:'处理状态', type:'select', options:[
+      { value:'processing', label:'处理中' }, { value:'done', label:'已办结' }] },
+    { name:'handler', label:'处理人', default: ME.name },
+    { name:'handle_note', label:'处理说明', type:'textarea' }
+  ], { status:'done', handler: ME.name }, async (d, modal) => {
+    await api('/api/complaints/' + id, 'PUT', d);
+    modal.hide(); renderComplaints();
+  });
+}
+
+async function delComplaint(id){
+  if (!confirm('确定删除该记录？')) return;
+  await api('/api/complaints/' + id, 'DELETE');
+  renderComplaints();
+}
+
+/* ==================================================================
+ * 18.5 宿舍管理（物业）：标记为宿舍的房产 + 员工入住关联
+ * 企业管理员仅本企业；物业员工/管理员按 dorm 页面权限 + dorm_assign 操作权限
+ * ================================================================== */
+let dormFilter = { owner:'', q:'', status:'' };
+async function renderDorms(){
+  if (curMode() !== 'property') return;
+  const [list, companies] = await Promise.all([
+    api('/api/dorms'),
+    ME.level === 'admin' ? api('/api/tenants') : Promise.resolve([])
+  ]);
+  const canAssign = canOp('dorm_assign');
+  let rows = list.slice();
+  if (dormFilter.owner) rows = rows.filter(r => r.owner_id === Number(dormFilter.owner));
+  if (dormFilter.status === 'in') rows = rows.filter(r => r.count > 0);
+  if (dormFilter.status === 'empty') rows = rows.filter(r => r.count === 0);
+  if (dormFilter.q) rows = rows.filter(r =>
+    r.room_no.includes(dormFilter.q) || (r.employees || []).some(e => e.name.includes(dormFilter.q)));
+  const occupied = list.filter(r => r.count > 0).length;
+  const rate = list.length ? Math.round(occupied / list.length * 100) : 0;
+  $('#pageTitle').textContent = '宿舍管理';
+  $('#page').innerHTML = `
+  <div class="card mb-3"><div class="card-body py-2">
+    <div class="row g-2 align-items-center">
+      <div class="col-auto"><span class="text-muted small">共 ${list.length} 间宿舍 · 已入住 ${occupied} · 空置 ${list.length - occupied} · 入住率 ${rate}%</span></div>
+      ${ME.level === 'admin' ? `<div class="col-auto"><select class="form-select form-select-sm" onchange="dormFilter.owner=this.value;renderDorms()">
+        <option value="">全部企业</option>${companies.map(c => `<option value="${c.id}" ${dormFilter.owner === String(c.id) ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}
+      </select></div>` : ''}
+      <div class="col-auto"><select class="form-select form-select-sm" onchange="dormFilter.status=this.value;renderDorms()">
+        <option value="">全部状态</option><option value="in" ${dormFilter.status === 'in' ? 'selected' : ''}>已入住</option>
+        <option value="empty" ${dormFilter.status === 'empty' ? 'selected' : ''}>空置</option></select></div>
+      <div class="col-auto"><input class="form-control form-control-sm" placeholder="搜索房间号 / 员工姓名" value="${esc(dormFilter.q)}"
+        oninput="dormFilter.q=this.value;renderDorms()" style="width:220px"></div>
+      ${canOp('room_add') ? '<div class="col-auto"><button class="btn btn-sm btn-primary" onclick="editRoom(undefined, renderDorms, true)">+ 新增宿舍</button></div>' : ''}
+    </div>
+  </div></div>
+  <div class="card"><div class="card-body p-0"><table class="table table-hover mb-0 align-middle"><thead class="table-light"><tr>
+    <th style="width:8%">楼栋</th><th style="width:9%">房间号</th><th style="width:7%">容量</th><th style="width:8%">入住</th>
+    <th>入住员工</th><th style="width:26%">操作</th>
+  </tr></thead><tbody>
+  ${rows.map(r => {
+    const cap = r.capacity ? (r.capacity + ' 人') : '不限';
+    const over = r.over ? ' <span class="badge bg-danger">超员</span>' : '';
+    const empCells = r.employees.length
+      ? r.employees.map(e => `<span class="badge bg-light text-dark border me-1 mb-1">${esc(e.name)}${e.department ? '<span class="text-muted"> · ' + esc(e.department) + '</span>' : ''}</span>`).join('')
+      : '<span class="text-muted small">空置</span>';
+    let ops = '';
+    if (canOp('room_edit')) ops += `<button class="btn btn-sm btn-outline-secondary" onclick="editRoom(${r.id}, renderDorms)">编辑</button>`;
+    if (canAssign) ops += `<button class="btn btn-sm btn-outline-primary ms-1" onclick="assignDorm(${r.id})">分配</button>`;
+    if (canAssign && r.count) ops += `<button class="btn btn-sm btn-outline-warning ms-1" onclick="moveDorm(${r.id})">调宿</button>
+      <button class="btn btn-sm btn-outline-danger ms-1" onclick="removeDormFrom(${r.id})">退宿</button>`;
+    if (!ops) ops = '<span class="text-muted small">无权限</span>';
+    return `<tr>
+      <td>${esc(r.building_name || '-')}</td><td>${esc(r.room_no)}</td><td>${cap}</td>
+      <td>${r.count}${over}</td><td>${empCells}</td><td>${ops}</td></tr>`;
+  }).join('') || '<tr><td colspan="6" class="text-center text-muted py-4">暂无宿舍（请在房产管理中将房间标记为宿舍）</td></tr>'}
+  </tbody></table></div></div>`;
+}
+async function assignDorm(roomId){
+  const [list, emps] = await Promise.all([api('/api/dorms'), api('/api/org-employees')]);
+  const free = emps.filter(e => !e.room_id);
+  if (!free.length){ alert('暂无未分配宿舍的员工，请先在「企业管理-企业员工」添加员工'); return; }
+  openForm('分配员工入住', [
+    { name:'employee_id', label:'选择员工', type:'select', options: free.map(e => ({ value: e.id, label: `${e.name}（${e.company || '未绑定企业'}）` })) },
+    { name:'room_id', label:'目标宿舍', type:'select', options: list.map(r => ({ value: r.id, label: `${r.building_name || ''} ${r.room_no}（${r.count}/${r.capacity || '不限'}）` })) }
+  ], { room_id: roomId }, async (d, modal) => {
+    await api('/api/dorms/assign', 'PUT', d);
+    modal.hide(); renderDorms();
+  });
+}
+async function moveDorm(roomId){
+  const [list, emps] = await Promise.all([api('/api/dorms'), api('/api/org-employees')]);
+  const cur = (list.find(r => r.id === roomId) || {}).employees || [];
+  if (!cur.length) return;
+  const others = list.filter(r => r.id !== roomId);
+  openForm('调宿', [
+    { name:'employee_id', label:'选择员工', type:'select', options: cur.map(e => ({ value: e.id, label: `${e.name}（${e.department || ''}）` })) },
+    { name:'room_id', label:'目标宿舍', type:'select', options: others.map(r => ({ value: r.id, label: `${r.building_name || ''} ${r.room_no}（${r.count}/${r.capacity || '不限'}）` })) }
+  ], {}, async (d, modal) => {
+    await api('/api/dorms/assign', 'PUT', d);
+    modal.hide(); renderDorms();
+  });
+}
+async function removeDormFrom(roomId){
+  const [list, emps] = await Promise.all([api('/api/dorms'), api('/api/org-employees')]);
+  const cur = (list.find(r => r.id === roomId) || {}).employees || [];
+  if (!cur.length) return;
+  openForm('退宿', [
+    { name:'employee_id', label:'选择员工', type:'select', options: cur.map(e => ({ value: e.id, label: `${e.name}（${e.department || ''}）` })) }
+  ], {}, async (d, modal) => {
+    await api('/api/dorms/remove', 'PUT', d);
+    modal.hide(); renderDorms();
+  });
+}
+
+/* ==================================================================
+ * 19. 楼栋管理
+ * ================================================================== */
+async function renderBuildings(){
+  const list = await api('/api/buildings');
+  const mode = curMode();
+  const unit = mode === 'property' ? '户数' : '房间数';
+
+  $('#page').innerHTML = `
+  <div class="mb-3">${canOp('building_add') ? `<button class="btn btn-primary btn-sm" onclick="editBuilding()">+ 新增楼栋</button>` : ''}</div>
+  <div class="card"><div class="table-responsive"><table class="table table-hover mb-0">
+    <thead class="table-light"><tr>
+      <th>楼栋名称</th><th>地址</th><th>${unit}</th><th>备注</th>${canAnyOp('building_add','building_edit','building_delete') ? '<th width="160">操作</th>' : ''}
+    </tr></thead>
+    <tbody>${list.map(b => `<tr>
+      <td><b>${esc(b.name)}</b></td><td>${esc(b.address || '-')}</td>
+      <td><span class="badge bg-info">${b.room_count}</span></td>
+      <td>${esc(b.remark || '-')}</td>
+      <td>${canAnyOp('building_add','building_edit','building_delete') ? `
+        ${canOp('building_edit') ? `<button class="btn btn-sm btn-outline-primary" onclick="editBuilding(${b.id})">编辑</button>` : ''}
+        ${canOp('building_delete') ? `<button class="btn btn-sm btn-outline-danger" onclick="delBuilding(${b.id})">删除</button>` : ''}` : ''}</td></tr>`).join('') || '<tr><td colspan="5" class="text-center text-muted py-4">暂无数据</td></tr>'}
+    </tbody></table></div></div>`;
+}
+
+async function editBuilding(id){
+  let data = {};
+  if (id){ const list = await api('/api/buildings'); data = list.find(x => x.id === id) || {}; }
+  openForm(id ? '编辑楼栋' : '新增楼栋', [
+    { name:'name', label:'楼栋名称', required:true, placeholder:'如：A栋' },
+    { name:'address', label:'地址' },
+    { name:'remark', label:'备注', type:'textarea' }
+  ], data, async (d, modal) => {
+    await api(id ? '/api/buildings/' + id : '/api/buildings', id ? 'PUT' : 'POST', d);
+    modal.hide(); renderBuildings();
+  });
+}
+
+async function delBuilding(id){
+  if (!confirm('确定删除该楼栋？')) return;
+  try { await api('/api/buildings/' + id, 'DELETE'); renderBuildings(); }
+  catch(e){ alert(e.message); }
+}
+
+/* ==================================================================
+ * 20. 用户管理（超管：管理员管理；管理员：本系统员工管理）
+ * ================================================================== */
+async function renderUsers(){
+  const list = await api('/api/users');
+  /* 主管理员仅管理本经营主体的员工 */
+  const rows = list.filter(u => u.level === 'staff' || u.level === 'manager');
+  const permCell = u => {
+    const rp = u.role_pages || [], ro = groupOps(u.role_ops || []);
+    const pages = rp.length
+      ? `<div class="d-flex flex-wrap gap-1">${rp.map(p => `<span class="badge bg-light text-dark border">${esc(pageName(p))}</span>`).join('')}</div>`
+      : '<span class="text-muted small">无</span>';
+    const ops = ro.length
+      ? `<div class="d-flex flex-wrap gap-1 mt-1">${ro.map(g => `<span class="badge bg-light text-primary border">${esc(g)}</span>`).join('')}</div>`
+      : '';
+    return pages + ops;
+  };
+  $('#page').innerHTML = `
+  <div class="mb-3 d-flex gap-2">
+    <button class="btn btn-sm btn-primary" onclick="editUser()">+ 新增员工</button>
+    <div class="text-muted small align-self-center">
+      管理本系统（${esc(ME.org_name || '')}）员工账号；员工权限来自其所属角色
+    </div>
+  </div>
+  <div class="card"><div class="table-responsive"><table class="table table-hover mb-0">
+    <thead class="table-light"><tr>
+      <th>用户名</th><th>姓名</th><th>角色</th>
+      <th>角色权限</th><th>创建时间</th><th width="170">操作</th>
+    </tr></thead>
+    <tbody>${rows.map(u => `<tr>
+      <td><b>${esc(u.username)}</b></td><td>${esc(u.real_name || '-')}</td>
+      <td><span class="badge bg-secondary">${esc(u.role_name || u.role)}</span></td>
+      <td>${permCell(u)}</td>
+      <td><small>${esc(u.created_at || '-')}</small></td>
+      <td>
+        <button class="btn btn-sm btn-outline-primary" onclick="editUser(${u.id})">编辑</button>
+        ${u.id !== ME.id
+          ? `<button class="btn btn-sm btn-outline-danger" onclick="delUser(${u.id})">删除</button>` : ''}
+      </td></tr>`).join('') || '<tr><td colspan="6" class="text-center text-muted py-4">暂无员工</td></tr>'}
+    </tbody></table></div></div>`;
+}
+
+function pageName(p){
+  if (p === 'orgemp') return '企业员工';
+  const all = [].concat(NAV.rental, NAV.hotel, NAV.property);
+  const hit = all.find(n => n[0] === p);
+  return hit ? hit[2] : p;
+}
+
+/* 页面权限清单：系统导航 + 物业「企业员工」（管理页内 Tab，不占独立导航项） */
+function pageOpts(mode){
+  const list = (NAV[mode] || []).filter(n => !n[3]).map(n => ({ value:n[0], label:n[2] }));
+  if (mode === 'property') list.push({ value:'orgemp', label:'企业员工' });
+  return list;
+}
+
+async function editUser(id){
+  let data = { role:'staff' };
+  if (id){ const list = await api('/api/users'); data = list.find(x => x.id === id) || data; }
+  const roles = await api('/api/roles');
+  /* 主管理员只能分配员工级/管理员级角色（内置 staff + 本主体自建角色） */
+  const roleOpts = roles.filter(r => r.level === 'staff' || r.level === 'manager');
+  if (!roleOpts.length){ alert('暂无可用角色'); return; }
+  if (!roleOpts.some(r => r.code === data.role)) data.role = roleOpts[0].code;
+  const fields = [
+    { name:'username', label:'用户名', required:true },
+    { name:'real_name', label:'姓名' },
+    { name:'password', label: id ? '密码（留空不修改）' : '密码', type:'password', required: !id },
+    { name:'role', label:'角色', type:'select', required:true,
+      options: roleOpts.map(r => ({ value:r.code, label:r.name })) }
+  ];
+  openForm(id ? '编辑员工' : '新增员工', fields, data, async (d, modal) => {
+    d.mode = undefined;
+    await api(id ? '/api/users/' + id : '/api/users', id ? 'PUT' : 'POST', d);
+    modal.hide(); renderUsers();
+  }, (el) => {
+    /* 角色切换时动态显示该角色已配置的页面与操作权限 */
+    const sel = el.querySelector('select[name=role]');
+    if (!sel) return;
+    const box = sel.closest('.mb-3');
+    const hint = document.createElement('div');
+    hint.className = 'form-text';
+    box.appendChild(hint);
+    const render = () => {
+      const r = roleOpts.find(x => x.code === sel.value);
+      if (!r) return;
+      const pages = (r.pages || []).map(p => pageName(p)).join('、') || '无';
+      const ops = (r.ops || []).map(opLabel).join('；') || '无';
+      hint.textContent = '该角色【' + r.name + '】自动授予 —— 页面：' + pages + '；操作：' + ops;
+    };
+    sel.addEventListener('change', render);
+    render();
+  });
+}
+
+async function delUser(id){
+  if (!confirm('确定删除该用户？')) return;
+  try { await api('/api/users/' + id, 'DELETE'); renderUsers(); }
+  catch(e){ alert(e.message); }
+}
+
+/* 角色管理（主管理员在本经营主体内自建员工角色；内置角色只读） */
+async function renderRoles(){
+  const roles = await api('/api/roles');
+  const lvlBadge = l => l === 'admin' ? '<span class="badge bg-warning text-dark">主管理员</span>'
+    : l === 'manager' ? '<span class="badge bg-info text-dark">管理员</span>'
+    : '<span class="badge bg-secondary">员工</span>';
+  const permTxt = r => (r.pages && r.pages.length)
+    ? `<div class="d-flex flex-wrap gap-1">${r.pages.map(p => `<span class="badge bg-light text-dark border">${esc(pageName(p))}</span>`).join('')}</div>`
+    : (r.is_system ? '<span class="text-muted small">—</span>' : '<span class="text-muted small">未配置</span>');
+  const opsTxt = r => (r.ops && r.ops.length)
+    ? `<div class="d-flex flex-wrap gap-1 mt-1">${groupOps(r.ops).map(l => `<span class="badge bg-light text-primary border">${esc(l)}</span>`).join('')}</div>`
+    : '<span class="text-muted small">—</span>';
+  $('#page').innerHTML = `
+  <div class="mb-3 d-flex gap-2">
+    <button class="btn btn-sm btn-primary" onclick="editRole()">+ 新增角色</button>
+    <div class="text-muted small align-self-center">
+      为本系统（${esc(ME.org_name || '')}）自定义角色并配置权限，再到「员工管理」分配
+    </div>
+  </div>
+  <div class="card"><div class="table-responsive"><table class="table table-hover mb-0">
+    <thead class="table-light"><tr>
+      <th>角色名称</th><th>编码</th><th>层级</th>
+      <th>角色权限</th><th>类型</th><th width="150">操作</th>
+    </tr></thead>
+    <tbody>${roles.map(r => `<tr>
+      <td><b>${esc(r.name)}</b></td>
+      <td><code>${esc(r.code)}</code></td>
+      <td>${lvlBadge(r.level)}</td>
+      <td><div>${permTxt(r)}</div><div>${opsTxt(r)}</div></td>
+      <td>${r.is_system
+        ? '<span class="badge bg-info text-dark">系统内置</span>'
+        : '<span class="badge bg-light text-dark">自定义</span>'}</td>
+      <td>
+        <button class="btn btn-sm btn-outline-primary" onclick="editRole(${r.id})">编辑</button>
+        ${!r.is_system
+          ? `<button class="btn btn-sm btn-outline-danger" onclick="delRole(${r.id})">删除</button>` : ''}
+      </td></tr>`).join('')}
+    </tbody></table></div></div>
+    <div class="text-muted small mt-2">
+      <i class="bi bi-info-circle"></i> ① 自定义角色可配置页面访问与操作权限，分配该角色的员工自动获得；
+      内置「员工」角色不可配置；已分配给员工的自定义角色需先调整后再删除。
+    </div>`;
+}
+
+async function editRole(id){
+  /* 新建角色默认页面参数：房产管理 / 账单收费 / 报修管理 / 网络管理 / 投诉建议（按当前系统可用项） */
+  const DEF_ROLE_PAGES = ['properties', 'bills', 'repairs', 'network', 'complaints'];
+  let data = { code:'', name:'', description:'', level:'staff',
+    pages: DEF_ROLE_PAGES.filter(p => pageOpts(curMode()).some(o => o.value === p)), ops: [] };
+  if (id){
+    const roles = await api('/api/roles');
+    data = roles.find(x => x.id === id) || data;
+  }
+  const isSys = id && Number(data.is_system);
+  const isSuperEdit = ME.level === 'super';
+  const fields = [
+    { name:'name', label:'角色名称', required:true, placeholder:'如：财务',
+      hint: isSys && !isSuperEdit ? '内置角色名称为系统共享，仅超管可修改；本次仅保存本经营主体的权限配置' : undefined },
+    { name:'code', label:'角色编码', required:true, placeholder:'如：finance',
+      hint: isSys ? '系统内置角色编码不可修改' : '仅字母/数字/下划线，以字母开头' }
+  ];
+  if (!isSys){
+    fields.push({ name:'level', label:'角色等级', type:'select',
+      options:[{ value:'staff', label:'员工' }, { value:'manager', label:'管理员' }],
+      hint:'员工：普通业务操作；管理员：给企业管理员/物业管理员使用，权限同样按勾选' });
+  }
+  fields.push({ name:'description', label:'说明', type:'textarea', placeholder:'该角色的职责说明（可选）',
+    hint: isSys && !isSuperEdit ? '说明为系统共享，仅超管可修改' : undefined });
+  {
+    const rolePageOpts = pageOpts(curMode());
+    if (rolePageOpts.length){
+      fields.push({ name:'pages', label:'角色权限', type:'checklist', options: rolePageOpts,
+        hint: (isSys && !isSuperEdit ? '系统内置：仅修改本经营主体配置（不影响其他主体）。' : '')
+          + '勾选后可访问对应页面；分配该角色的员工自动获得' });
+    }
+    const roleOpOpts = [];
+    (OP_DEFS[curMode()] || []).forEach(g => {
+      roleOpOpts.push({ type:'group', label:g.g });
+      g.items.forEach(([value, label]) => roleOpOpts.push({ value, label }));
+    });
+    if (roleOpOpts.length){
+      fields.push({ name:'ops', label:'操作权限', type:'checklist', options: roleOpOpts,
+        hint: '勾选后拥有对应页面的操作按钮（如新增、编辑、删除、收款）' });
+    }
+  }
+  openForm(id ? '编辑角色' : '新增角色', fields, data, async (d, modal) => {
+    if (isSys) delete d.level;
+    if (isSys) delete d.code;
+    if (isSys && !isSuperEdit){ delete d.name; delete d.description; }
+    await api(id ? '/api/roles/' + id : '/api/roles', id ? 'PUT' : 'POST', d);
+    modal.hide(); renderRoles();
+  }, (el) => {
+    /* 联动提示：账单操作（手动添加/生成）依赖房产管理页面权限 */
+    const propsCb = el.querySelector('input[name="pages"][value="properties"]');
+    if (!propsCb) return;
+    const needOps = ['bill_add', 'bill_generate'];
+    const labels = {};
+    (OP_DEFS[curMode()] || []).forEach(g => g.items.forEach(([v, l]) => { labels[v] = l; }));
+    const tip = document.createElement('div');
+    tip.className = 'form-text text-warning mt-1';
+    const opsBox = el.querySelector('input[name="ops"]');
+    const box = opsBox ? opsBox.closest('.mb-3') : null;
+    if (!box) return;
+    box.appendChild(tip);
+    const sync = () => {
+      const miss = needOps.filter(op => {
+        const cb = el.querySelector(`input[name="ops"][value="${op}"]`);
+        return cb && cb.checked && !propsCb.checked;
+      });
+      tip.textContent = miss.length
+        ? '提示：勾选「' + miss.map(op => labels[op] || op).join('、') + '」需同时勾选「房产管理」页面权限，员工才能正常使用'
+        : '';
+    };
+    needOps.forEach(op => {
+      const cb = el.querySelector(`input[name="ops"][value="${op}"]`);
+      if (cb) cb.addEventListener('change', sync);
+    });
+    propsCb.addEventListener('change', sync);
+  });
+}
+
+async function delRole(id){
+  if (!confirm('确定删除该角色？')) return;
+  try { await api('/api/roles/' + id, 'DELETE'); renderRoles(); }
+  catch(e){ alert(e.message); }
+}
+
+/* ==================================================================
+ * 21. 员工工作台（员工独立页面）
+ * ================================================================== */
+async function renderStaffHome(){
+  /* 工作台为员工基础首页：无仪表盘权限时显示占位（不阻断页面） */
+  let s = {};
+  try { s = await api('/api/stats'); } catch(e){}
+  const mode = curMode();
+  const cards = [
+    ['总房间', s.total_rooms || 0, 'door-open', 'primary'],
+    [mode === 'rental' ? '已出租' : '已入住', mode === 'rental' ? (s.rented || 0) : ((s.checked_in || s.rented) || 0), 'check-circle', 'success'],
+    ['待处理报修', s.pending_repairs || 0, 'tools', 'danger'],
+    ['本月应收', money(s.month_receivable || 0), 'wallet2', 'warning']
+  ];
+  let repairs = [];
+  try { repairs = await api('/api/repairs'); } catch(e){}
+  const todo = repairs.filter(r => r.status === 'pending').slice(0, 5);
+  $('#page').innerHTML = `
+  <div class="row g-3 mb-3">
+    ${cards.map(c => `<div class="col-6 col-md-3"><div class="card shadow-sm h-100">
+      <div class="card-body"><div class="text-muted small">${c[0]}</div>
+        <div class="fs-4 fw-bold text-${c[3]}"><i class="bi bi-${c[2]}"></i> ${c[1]}</div></div></div></div>`).join('')}
+  </div>
+  <div class="card"><div class="card-header bg-white fw-bold"><i class="bi bi-tools"></i> 待处理报修</div>
+    <div class="table-responsive"><table class="table table-hover mb-0">
+      <thead class="table-light"><tr>
+        <th>楼栋/房间</th><th>标题</th><th>问题描述</th><th>状态</th><th>报修时间</th></tr></thead>
+      <tbody>
+        ${todo.map(r => `<tr>
+          <td><b>${esc(r.building_name || '')} ${esc(r.room_no || '-')}</b></td>
+          <td>${esc(r.title)}</td>
+          <td><small>${esc(r.content || '-')}</small></td>
+          <td>${repairBadge(r.status)}</td>
+          <td><small>${esc(r.created_at || '-')}</small></td></tr>`).join('')
+          || '<tr><td colspan="5" class="text-center text-muted py-4">暂无待处理报修</td></tr>'}
+      </tbody></table></div></div>`;
+}
+
+/* ==================================================================
+ * 22. 系统监控（仅超管：聚合三系统核心运行指标）
+ * ================================================================== */
+async function renderMonitor(){
+  const m = await api('/api/monitor');
+  const sysCard = (key, name, icon) => {
+    const s = m.systems[key];
+    const row = (label, v, cls) => `<div class="d-flex justify-content-between py-1 border-bottom" style="font-size:13px">
+      <span class="text-muted">${label}</span><b class="${cls || ''}">${v}</b></div>`;
+    return `<div class="col-md-4"><div class="card h-100">
+      <div class="card-header bg-white fw-bold"><i class="bi bi-${icon} text-primary"></i> ${name}</div>
+      <div class="card-body py-2">
+        ${row('总房间', s.total_rooms)}
+        ${row('出租 / 入住', s.rented)}
+        ${row('空置', s.vacant)}
+        ${row('入住率', s.occupancy + '%', s.occupancy >= 60 ? 'text-success' : 'text-warning')}
+        ${row('本月应收', money(s.month_receivable), 'text-primary')}
+        ${row('本月已收', money(s.month_received), 'text-success')}
+        ${row('累计欠费', money(s.arrears), Number(s.arrears) > 0 ? 'text-danger' : '')}
+        ${row('待处理报修', s.pending_repairs, Number(s.pending_repairs) > 0 ? 'text-danger' : '')}
+        ${key === 'property' ? row('待处理投诉', s.pending_complaints, Number(s.pending_complaints) > 0 ? 'text-danger' : '') : ''}
+      </div></div></div>`;
+  };
+  const orgTable = (key, name) => {
+    const list = (m.orgs && m.orgs[key]) || [];
+    const rows = list.map(o => `<tr>
+      <td><b>${esc(o.name)}</b></td>
+      <td>${o.admin ? esc(o.admin.username) : '-'}<div class="text-muted small">${o.admin ? esc(o.admin.real_name || '') : ''}</div></td>
+      <td>${o.total_rooms}</td>
+      <td>${o.rented}</td>
+      <td>${o.occupancy}%</td>
+      <td>${money(o.month_receivable)}</td>
+      <td>${money(o.month_received)}</td>
+      <td class="${Number(o.arrears) > 0 ? 'text-danger' : ''}">${money(o.arrears)}</td>
+      <td>${Number(o.pending_repairs) > 0 ? '<span class="text-danger">' + o.pending_repairs + '</span>' : 0}${key === 'property' && Number(o.pending_complaints) > 0 ? '<div class="small">投诉 ' + o.pending_complaints + '</div>' : ''}</td>
+      <td>${o.staff_count}</td>
+    </tr>`).join('') || `<tr><td colspan="10" class="text-center text-muted py-3">暂无经营主体</td></tr>`;
+    return `<div class="card mb-3"><div class="card-header bg-white fw-bold">
+      <i class="bi bi-building text-primary"></i> 经营主体 ${name}（${list.length}）</div>
+      <div class="table-responsive" style="max-height:300px"><table class="table table-sm table-hover mb-0">
+      <thead class="table-light"><tr>
+        <th>主体名称</th><th>主管理员</th><th>房间</th><th>出租/入住</th><th>入住率</th>
+        <th>本月应收</th><th>本月已收</th><th>累计欠费</th><th>待处理</th><th>员工</th>
+      </tr></thead><tbody>${rows}</tbody></table></div></div>`;
+  };
+  $('#page').innerHTML = `
+  <div class="d-flex align-items-center gap-3 mb-3">
+    <span class="badge bg-success"><i class="bi bi-heart-pulse"></i> 服务在线 · 数据库连接正常</span>
+    <span class="text-muted small">更新时间：${esc(m.time)}</span>
+    <button class="btn btn-sm btn-outline-primary ms-auto" onclick="renderMonitor()"><i class="bi bi-arrow-clockwise"></i> 刷新</button>
+  </div>
+  <div class="row g-3">
+    ${sysCard('rental', '租房', 'house-door')}
+    ${sysCard('hotel', '酒店', 'building')}
+    ${sysCard('property', '物业', 'hdd-network')}
+  </div>
+  <h6 class="mt-4 mb-2 text-muted"><i class="bi bi-diagram-3"></i> 各系统经营主体明细（数据相互独立）</h6>
+  ${orgTable('rental', '租房')}
+  ${orgTable('hotel', '酒店')}
+  ${orgTable('property', '物业')}`;
+}
+
+/* 系统设置（仅超管）：登录入口选择开关 + 隐藏后默认入口（为后续域名绑定系统预留） */
+async function renderAppConfig(){
+  const cfg = await api('/api/app-config');
+  $('#page').innerHTML = `
+  <div class="d-flex align-items-center gap-3 mb-3">
+    <h5 class="mb-0"><i class="bi bi-gear text-primary"></i> 系统设置</h5>
+    <span class="text-muted small">全局配置，对所有系统生效</span>
+    <button class="btn btn-sm btn-outline-primary ms-auto" onclick="renderAppConfig()"><i class="bi bi-arrow-clockwise"></i> 刷新</button>
+  </div>
+  <div class="row">
+    <div class="col-md-6">
+      <div class="card">
+        <div class="card-header bg-white fw-bold"><i class="bi bi-door-closed text-primary"></i> 登录入口选择</div>
+        <div class="card-body">
+          <div class="form-check form-switch mb-3">
+            <input class="form-check-input" type="checkbox" id="cfgHideSelector" ${cfg.login_selector === 'hide' ? 'checked' : ''}>
+            <label class="form-check-label" for="cfgHideSelector">隐藏登录入口选择</label>
+            <div class="text-muted small mt-1">开启后，打开系统网址不再显示四个登录入口卡片，直接进入下方指定的默认登录窗口；入口地址仍可直达（#login-xxx）。</div>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">隐藏后默认登录入口</label>
+            <select class="form-select" id="cfgLoginDefault">
+              <option value="rental" ${cfg.login_default === 'rental' ? 'selected' : ''}>租房系统</option>
+              <option value="hotel" ${cfg.login_default === 'hotel' ? 'selected' : ''}>酒店系统</option>
+              <option value="property" ${cfg.login_default === 'property' ? 'selected' : ''}>物业综合管理系统</option>
+              <option value="super" ${cfg.login_default === 'super' ? 'selected' : ''}>超级管理员</option>
+            </select>
+          </div>
+          <button class="btn btn-primary" onclick="saveAppConfig()"><i class="bi bi-check-lg"></i> 保存</button>
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
+async function saveAppConfig(){
+  const selector = $('#cfgHideSelector').checked ? 'hide' : 'show';
+  const def = $('#cfgLoginDefault').value;
+  await api('/api/app-config', 'PUT', { login_selector: selector, login_default: def });
+  APP_CFG = null; /* 清除缓存，下次登录页读取新值 */
+  alert('已保存');
+  renderAppConfig();
+}
+
+/* ==================================================================
+ * 22c. 系统使用费（仅超管：收费模式/单价/周期/提醒/会话有效期/收款流水/主体计费）
+ * 超期或关闭 → 除主管理员外所有登录停用，持续提醒（见后端 feeBlocked）
+ * ================================================================== */
+const FEE_CYCLE_TXT = { month:'按月', year:'按年', once:'一次性' };
+function feeBadge(o){
+  if (o.fee_status === 'closed') return '<span class="badge bg-danger">已关闭</span>';
+  if (o.fee_status === 'paused') return '<span class="badge bg-warning text-dark">已暂停</span>';
+  if (o.fee_due && o.fee_due < today()) return '<span class="badge bg-danger">已超期</span>';
+  if (o.fee_due && o.fee_due === today()) return '<span class="badge bg-warning text-dark">今日到期</span>';
+  return '<span class="badge bg-success">正常</span>';
+}
+async function renderFee(){
+  const [cfg, orgs, pays] = await Promise.all([api('/api/fee-config'), api('/api/fee-orgs'), api('/api/fee-payments')]);
+  const sym = cfg.currency === 'CNY' ? '¥' : '$';
+  const m = n => sym + (Number(n) || 0).toFixed(2);
+  const rows = orgs.map(o => `<tr>
+    <td><b>${esc(o.name)}</b></td>
+    <td>${MODE_NAME[o.mode]}</td>
+    <td>${FEE_CYCLE_TXT[o.fee_cycle] || o.fee_cycle}</td>
+    <td>${m(o.fee_price)}</td>
+    <td>${o.fee_start || '-'}</td>
+    <td>${o.fee_due || (o.fee_cycle === 'once' ? '长期' : '-')}</td>
+    <td>${m(o.due)}</td>
+    <td>${m(o.paid)}</td>
+    <td class="${o.balance > 0 ? 'text-danger fw-bold' : ''}">${m(o.balance)}</td>
+    <td>${feeBadge(o)}</td>
+    <td class="text-nowrap">
+      <button class="btn btn-sm btn-outline-primary" onclick="addFeePay(${o.id}, '${esc(o.name)}')">登记收款</button>
+      <button class="btn btn-sm btn-outline-secondary" onclick="editFeeOrg(${o.id})">计费设置</button>
+    </td></tr>`).join('')
+    || '<tr><td colspan="11" class="text-center text-muted py-3">暂无经营主体</td></tr>';
+  $('#page').innerHTML = `
+  <div class="d-flex align-items-center gap-3 mb-3">
+    <h5 class="mb-0"><i class="bi bi-cash-stack text-primary"></i> 系统使用费</h5>
+    <span class="text-muted small">超期自动停用除主管理员外的所有登录，持续提醒</span>
+    <button class="btn btn-sm btn-outline-primary ms-auto" onclick="renderFee()"><i class="bi bi-arrow-clockwise"></i> 刷新</button>
+  </div>
+  <div class="card mb-3">
+    <div class="card-header bg-white fw-bold"><i class="bi bi-sliders text-primary"></i> 收费配置（全局）</div>
+    <div class="card-body">
+      <div class="row g-2 align-items-end">
+        <div class="col-auto"><label class="form-label small">收费模式</label>
+          <select class="form-select form-select-sm" id="feeMode">
+            <option value="free" ${cfg.fee_mode === 'free' ? 'selected' : ''}>免费（不限制登录）</option>
+            <option value="paid" ${cfg.fee_mode === 'paid' ? 'selected' : ''}>收费（超期停用）</option>
+          </select></div>
+        <div class="col-auto"><label class="form-label small">默认周期</label>
+          <select class="form-select form-select-sm" id="feeCycle">
+            <option value="month" ${cfg.cycle === 'month' ? 'selected' : ''}>按月</option>
+            <option value="year" ${cfg.cycle === 'year' ? 'selected' : ''}>按年</option>
+            <option value="once" ${cfg.cycle === 'once' ? 'selected' : ''}>一次性</option>
+          </select></div>
+        <div class="col-auto"><label class="form-label small">租房单价</label>
+          <input id="feeRp" type="number" class="form-control form-control-sm" style="width:90px" value="${cfg.rental_price}"></div>
+        <div class="col-auto"><label class="form-label small">酒店单价</label>
+          <input id="feeHp" type="number" class="form-control form-control-sm" style="width:90px" value="${cfg.hotel_price}"></div>
+        <div class="col-auto"><label class="form-label small">物业单价</label>
+          <input id="feePp" type="number" class="form-control form-control-sm" style="width:90px" value="${cfg.property_price}"></div>
+        <div class="col-auto"><label class="form-label small">提前提醒(天)</label>
+          <input id="feeRemind" type="number" class="form-control form-control-sm" style="width:80px" value="${cfg.remind_days}"></div>
+        <div class="col-auto"><label class="form-label small">会话有效期(天)</label>
+          <input id="feeSession" type="number" class="form-control form-control-sm" style="width:80px" value="${cfg.session_days}"></div>
+        <div class="col-auto"><label class="form-label small">使用费货币</label>
+          <select class="form-select form-select-sm" id="feeCur">
+            <option value="USD" ${cfg.currency === 'USD' ? 'selected' : ''}>美元 $</option>
+            <option value="CNY" ${cfg.currency === 'CNY' ? 'selected' : ''}>人民币 ¥</option>
+          </select></div>
+        <div class="col-auto"><button class="btn btn-sm btn-primary" onclick="saveFeeConfig()"><i class="bi bi-check-lg"></i> 保存配置</button></div>
+      </div>
+      <div class="text-muted small mt-2"><i class="bi bi-info-circle"></i> 主体可单独设置周期与单价（计费设置），未设置时按系统默认；登记收款后到期日自动顺延。</div>
+    </div>
+  </div>
+  <div class="table-responsive"><table class="table table-hover">
+    <thead class="table-light"><tr>
+      <th>经营主体</th><th>系统</th><th>周期</th><th>单价</th><th>计费开始</th><th>到期日</th>
+      <th>应收</th><th>实收</th><th>欠费</th><th>状态</th><th width="220">操作</th>
+    </tr></thead><tbody>${rows}</tbody></table></div>
+  <div class="card mt-3"><div class="card-header bg-white fw-bold"><i class="bi bi-receipt text-primary"></i> 收款流水</div>
+    <div class="card-body py-2 small">${pays.length ? pays.slice(0, 20).map(p =>
+      `<div class="d-flex justify-content-between border-bottom py-1">
+        <span>${esc(p.org_name)} · ${m(p.amount)} · ${esc(p.pay_method || '现金')} · ${p.pay_date}
+          ${p.remark ? '· ' + esc(p.remark) : ''}</span>
+        <span class="text-nowrap"><span class="text-muted me-2">${esc(p.operator || '')}</span>
+          <a class="text-danger" onclick="delFeePay(${p.id})">撤销</a></span></div>`).join('')
+      : '<div class="text-muted">暂无收款记录</div>'}</div></div>`;
+}
+async function saveFeeConfig(){
+  try {
+    await api('/api/fee-config', 'PUT', {
+      fee_mode: $('#feeMode').value, cycle: $('#feeCycle').value,
+      rental_price: Number($('#feeRp').value), hotel_price: Number($('#feeHp').value),
+      property_price: Number($('#feePp').value),
+      remind_days: Number($('#feeRemind').value), session_days: Number($('#feeSession').value),
+      currency: $('#feeCur').value
+    });
+    alert('已保存（修改会话有效期后，已登录会话按新天数生效）');
+    renderFee();
+  } catch(e){ alert(e.message); }
+}
+async function addFeePay(orgId, orgName){
+  openForm('登记收款 · ' + orgName, [
+    { name:'amount', label:'收款金额', type:'number', required:true, step:'0.01', placeholder:'必须大于 0' },
+    { name:'pay_method', label:'收款方式', type:'select', options:[
+      { value:'现金', label:'现金' }, { value:'转账', label:'转账' }, { value:'银行', label:'银行' },
+      { value:'微信', label:'微信' }, { value:'支付宝', label:'支付宝' } ] },
+    { name:'pay_date', label:'收款日期', type:'date', required:true },
+    { name:'remark', label:'备注' }
+  ], { pay_date: today(), pay_method: '现金' }, async (d, modal) => {
+    try {
+      await api('/api/fee-payments', 'POST', { org_id: orgId, ...d });
+      modal.hide(); renderFee();
+    } catch(e){ alert(e.message); }
+  });
+}
+async function editFeeOrg(id){
+  const list = await api('/api/fee-orgs');
+  const o = list.find(x => x.id === id);
+  if (!o){ alert('经营主体不存在'); return; }
+  openForm('计费设置 · ' + o.name, [
+    { name:'fee_cycle', label:'计费周期', type:'select', options:[
+      { value:'month', label:'按月' }, { value:'year', label:'按年' }, { value:'once', label:'一次性' } ] },
+    { name:'fee_price', label:'单价（0=按系统默认）', type:'number', step:'0.01' },
+    { name:'fee_start', label:'计费开始日', type:'date' },
+    { name:'fee_due', label:'当前到期日（留空=长期有效）', type:'date',
+      hint:'选择计费周期或计费开始日后，到期日自动按周期推算（一次性=长期有效），可手动修改' },
+    { name:'fee_status', label:'状态', type:'select', options:[
+      { value:'active', label:'正常' }, { value:'paused', label:'暂停（仅主管理员可登录）' },
+      { value:'closed', label:'关闭（全部停用）' } ] }
+  ], { id:o.id, fee_cycle:o.fee_cycle, fee_price:o.fee_price || '', fee_start:o.fee_start || '', fee_due:o.fee_due || '', fee_status:o.fee_status }, async (d, modal) => {
+    try {
+      await api('/api/fee-orgs/' + id, 'PUT', {
+        fee_cycle:d.fee_cycle, fee_price:Number(d.fee_price) || 0,
+        fee_start:d.fee_start || null, fee_due:d.fee_due || null, fee_status:d.fee_status
+      });
+      modal.hide(); renderFee();
+    } catch(e){ alert(e.message); }
+  }, (el) => {
+    /* 日期联动：周期/开始日变化时自动推算到期日（一次性=长期有效）；
+     * 到期日已有值（编辑场景）或用户手动改过 → 不再自动覆盖，始终可手动修改 */
+    const cyc = el.querySelector('[name=fee_cycle]');
+    const start = el.querySelector('[name=fee_start]');
+    const due = el.querySelector('[name=fee_due]');
+    if (!cyc || !start || !due) return;
+    let manual = !!due.value; /* 已有到期日视为手动设定，不自动覆盖 */
+    const calc = () => {
+      const c = cyc.value;
+      if (c === 'once'){ due.value = ''; return; }
+      if (manual) return;
+      if (!start.value) start.value = today(); /* 开始日未填时自动填今天 */
+      due.value = c === 'year' ? addMonths(start.value, 12) : addMonths(start.value, 1);
+    };
+    cyc.addEventListener('change', calc);
+    start.addEventListener('change', calc);
+    due.addEventListener('input', () => { manual = true; });
+  });
+}
+async function delFeePay(id){
+  if (!confirm('确定撤销这条收款记录？')) return;
+  try { await api('/api/fee-payments/' + id, 'DELETE'); renderFee(); }
+  catch(e){ alert(e.message); }
+}
+
+/* ==================================================================
+ * 22b. 经营主体管理（仅超管：开通/编辑/停用主管理员 = 开通一个独立租户）
+ * ================================================================== */
+async function renderOrgs(){
+  const list = await api('/api/orgs');
+  const grouped = { rental: [], hotel: [], property: [] };
+  list.forEach(o => grouped[o.mode].push(o));
+  const section = (mode, name, icon) => {
+    const rows = grouped[mode].map(o => `<tr>
+      <td><b>${esc(o.name)}</b></td>
+      <td>${o.admin ? esc(o.admin.username) : '-'}</td>
+      <td>${o.admin ? esc(o.admin.real_name || '-') : '-'}</td>
+      <td>${o.room_count}</td>
+      <td>${o.bill_count}</td>
+      <td>${o.staff_count}</td>
+      <td><small class="text-muted">${esc((o.created_at || '').slice(0, 16))}</small></td>
+      <td>
+        <button class="btn btn-sm btn-outline-primary" onclick="editOrg(${o.id})">编辑/重置密码</button>
+        <button class="btn btn-sm btn-outline-danger" onclick="delOrg(${o.id})">删除</button>
+      </td></tr>`).join('')
+      || `<tr><td colspan="8" class="text-center text-muted py-3">暂无${name}经营主体</td></tr>`;
+    return `<div class="card mb-3"><div class="card-header bg-white fw-bold">
+      <i class="bi bi-${icon} text-primary"></i> 经营主体 ${name}（${grouped[mode].length}）</div>
+      <div class="table-responsive"><table class="table table-hover mb-0">
+      <thead class="table-light"><tr>
+        <th>经营主体</th><th>管理员账号</th><th>管理员姓名</th>
+        <th>房间</th><th>账单</th><th>员工</th><th>开通时间</th><th width="200">操作</th>
+      </tr></thead><tbody>${rows}</tbody></table></div></div>`;
+  };
+  $('#page').innerHTML = `
+  <div class="mb-3 d-flex gap-2">
+    <button class="btn btn-sm btn-primary" onclick="editOrg()"><i class="bi bi-plus-lg"></i> 开通主管理员（经营主体）</button>
+    <div class="text-muted small align-self-center">
+      开通后即创建一套<b>完全独立</b>的数据、系统设置与角色权限；主管理员从对应系统的登录入口进入，互不可见。
+    </div>
+  </div>
+  ${section('rental', '租房', 'house-door')}
+  ${section('hotel', '酒店', 'building')}
+  ${section('property', '物业', 'hdd-network')}`;
+}
+
+async function editOrg(id){
+  let data = { mode:'rental' };
+  if (id){
+    const list = await api('/api/orgs');
+    const o = list.find(x => x.id === id);
+    if (!o){ alert('经营主体不存在'); return; }
+    data = { id:o.id, name:o.name, mode:o.mode, username:o.admin ? o.admin.username : '',
+             real_name:o.admin ? o.admin.real_name : '' };
+    openForm('编辑经营主体', [
+      { name:'name', label:'经营主体名称', required:true },
+      { name:'real_name', label:'主管理员姓名' },
+      { name:'password', label:'重置主管理员密码（留空不修改）', type:'password', placeholder:'至少 6 位' }
+    ], data, async (d, modal) => {
+      await api('/api/orgs/' + id, 'PUT', { name:d.name, real_name:d.real_name, password:d.password || undefined });
+      modal.hide(); renderOrgs();
+    });
+    return;
+  }
+  openForm('开通主管理员（经营主体）', [
+    { name:'mode', label:'所属系统', type:'select', required:true, options:[
+      { value:'rental', label:'租房' }, { value:'hotel', label:'酒店' }, { value:'property', label:'物业' } ] },
+    { name:'name', label:'经营主体名称', required:true, placeholder:'如：金边1号公寓 / XX酒店 / XX物业' },
+    { name:'real_name', label:'主管理员姓名' },
+    { name:'username', label:'主管理员登录账号', required:true, placeholder:'仅字母数字，全局唯一' },
+    { name:'password', label:'初始密码', type:'password', required:true, placeholder:'至少 6 位' }
+  ], data, async (d, modal) => {
+    try {
+      await api('/api/orgs', 'POST', d);
+      modal.hide(); renderOrgs();
+    } catch(e){ alert(e.message); }
+  });
+}
+
+async function delOrg(id){
+  const list = await api('/api/orgs');
+  const o = list.find(x => x.id === id);
+  if (!o) return;
+  if (!confirm(`确定删除经营主体「${o.name}」？\n该主体的主管理员、员工、全部业务数据、系统设置与角色将被永久删除，且不可恢复！`)) return;
+  if (!confirm(`再次确认：删除「${o.name}」的所有数据？此操作不可撤销。`)) return;
+  try { await api('/api/orgs/' + id, 'DELETE'); renderOrgs(); }
+  catch(e){ alert(e.message); }
+}
+
+/* ==================================================================
+ * 23. 路由表 & 启动
+ * ================================================================== */
+const PAGES = {
+  home:        { render: renderStaffHome },
+  monitor:     { render: renderMonitor },
+  fee:         { render: renderFee },
+  orgs:        { render: renderOrgs },
+  appcfg:      { render: renderAppConfig },
+  dashboard:   { render: renderDashboard },
+  roommap:     { render: renderRoomMap },
+  rooms:       { render: renderRooms },
+  properties:  { render: renderRooms },
+  tenants:     { render: renderTenants },
+  owners:      { render: renderTenants },
+  contracts:   { render: renderContracts },
+  orders:      { render: renderOrders },
+  bills:       { render: renderBills },
+  meters:      { render: renderMeters },
+  network:     { render: renderNetwork },
+  repairs:     { render: renderRepairs },
+  complaints:  { render: renderComplaints },
+  dorm:        { render: renderDorms },
+  buildings:   { render: renderBuildings },
+  users:       { render: renderUsers },
+  roles:       { render: renderRoles },
+  settings:    { render: renderSettings }
+};
+
+(async function boot(){
+  try {
+    const [me, st] = await Promise.all([api('/api/me'), api('/api/settings')]);
+    ME = me;
+    DB.data.settings = {
+      mode: me.mode || 'rental',
+      currency: st.currency || 'USD',
+      rate: Number(st.rate) || 7.2,
+      prices: !!st.prices,
+      net_price_per_mb: (st.net_price_per_mb !== undefined && st.net_price_per_mb !== null)
+        ? Number(st.net_price_per_mb) : 1,
+      water_price: (st.water_price !== undefined && st.water_price !== null)
+        ? Number(st.water_price) : 4.5,
+      elec_price: (st.elec_price !== undefined && st.elec_price !== null)
+        ? Number(st.elec_price) : 1,
+      remind_enable: Number(st.remind_enable === undefined ? 1 : st.remind_enable),
+      remind_days: Number(st.remind_days === undefined ? 3 : st.remind_days)
+    };
+    renderApp();
+  } catch(e){ showLogin(); }
+})();
+window.addEventListener('hashchange', () => {
+  if (!ME){ showLogin(); return; }
+  const h = location.hash.slice(1);
+  if (PAGES[h]) go(h);
+});
