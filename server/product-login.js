@@ -63,6 +63,7 @@ function createProductLoginService({
     await runRateLimit('assertAllowed', rateLimitIdentity);
     const mapped = await registry.findTenantByLoginHost(hostname, appId);
     if (!mapped || mapped.app_id !== appId || mapped.lifecycle_state !== 'active') {
+      await runRateLimit('recordFailure', rateLimitIdentity);
       throw Object.assign(new Error('INVALID_CREDENTIALS'), { code: 'INVALID_CREDENTIALS', status: 401 });
     }
     const tenantContext = await resolveTenantContext({
@@ -107,6 +108,7 @@ function createProductLoginService({
       sessionId, userId: subjectId, tenantId: mapped.tenant_uuid, appId,
       issuedAt, expiresAt
     });
+    await runRateLimit('clear', rateLimitIdentity);
     return Object.freeze({
       accessToken: unsigned + '.' + signature,
       tokenType: 'Bearer',
