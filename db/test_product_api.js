@@ -206,3 +206,40 @@ test('product API binds optional tenant write capability to verified request con
 test('product API rejects malformed optional tenant write service at construction', () => {
   assert.throws(() => setup({ writeService: {} }), /PRODUCT_TENANT_WRITE_SERVICE_INVALID/);
 });
+
+test('product API exposes tenant-local login before bearer authentication and protects logout', async () => {
+  const calls = [];
+  const { app } = setup({
+    loginService: {
+      login: async input => { calls.push(['login', input]); return { accessToken: 'signed-token', tokenType: 'Bearer' }; },
+      logout: async auth => { calls.push(['logout', auth]); return { ok: true }; }
+    },
+    authenticate: (req, _res, next) => {
+      req.auth = { authenticated: true, appId: 'rental', tenantId, userId: 'u-1', sessionId: 'session-identifier-1234' };
+      next();
+    }
+  });
+  await withServer(app, async base => {
+    const login = await fetch(base + '/api/auth/login', {
+      method: 'POST', headers: { 'content-type': 'application/json', host: 'tenant.example.test' },
+      body: JSON.stringify({ username: 'same-user', password: 'correct', tenantId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' })
+    });
+    assert.equal(login.status, 200);
+    assert.deepEqual(await login.json(), { accessToken: 'signed-token', tokenType: 'Bearer' });
+    assert.deepEqual(calls[0], ['login', { host: 'tenant.example.test', username: 'same-user', password: 'correct' }]);
+    const logout = await fetch(base + '/api/auth/logout', { method: 'POST' });
+    assert.equal(logout.status, 200);
+    assert.deepEqual(await logout.json(), { ok: true });
+    assert.equal(calls[1][1].tenantId, tenantId);
+  });
+});
+
+test('product API does not expose login/logout routes when login service is not configured', async () => {
+  const { app } = setup();
+  await withServer(app, async base => {
+    const login = await fetch(base + '/api/auth/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+    assert.equal(login.status, 401);
+    const logout = await fetch(base + '/api/auth/logout', { method: 'POST' });
+    assert.equal(logout.status, 401);
+  });
+});
