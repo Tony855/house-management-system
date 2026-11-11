@@ -9,8 +9,9 @@
     "seed": "node server/seed.js",
     "test:db-mode": "node db/test_db_mode.js",
     "test:tenant-isolation": "node --test db/test_tenant_isolation.js db/test_tenant_provisioner.js db/test_schema_manifest.js",
-    "test": "npm run test:db-mode && npm run test:tenant-isolation && npm run test:deploy",
-    "test:deploy": "bash scripts/test-deploy.sh"
+    "test": "npm run test:db-mode && npm run test:tenant-isolation && npm run test:deploy && npm run test:platform-billing",
+    "test:deploy": "bash scripts/test-deploy.sh",
+    "test:platform-billing": "node --test db/test_platform_billing.js"
   },
   "dependencies": {
     "express": "^4.19.2",
