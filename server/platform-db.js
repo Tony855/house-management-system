@@ -15,10 +15,12 @@ function createPlatformPool({ env = process.env, createPool = mysql.createPool }
   if (!host || !database || !user || !password) throw new Error('PLATFORM_DATABASE_CONFIGURATION_REQUIRED');
   if (!/^[A-Za-z0-9_]{1,64}$/.test(database)) throw new Error('PLATFORM_DATABASE_NAME_INVALID');
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('PLATFORM_DATABASE_PORT_INVALID');
+  const connectionLimit = Number(env.PLATFORM_DB_POOL_SIZE || 10);
+  if (!Number.isInteger(connectionLimit) || connectionLimit < 1 || connectionLimit > 100) throw new Error('PLATFORM_DATABASE_POOL_SIZE_INVALID');
   return createPool({
     host, port, database, user, password,
     charset: 'utf8mb4', waitForConnections: true,
-    connectionLimit: Number(env.PLATFORM_DB_POOL_SIZE || 10),
+    connectionLimit,
     queueLimit: 0, enableKeepAlive: true, keepAliveInitialDelay: 0,
     decimalNumbers: false, dateStrings: true
   });
