@@ -9,14 +9,14 @@ const schema = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
 const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, 'tenant-schema-manifest.json'), 'utf8'));
 
 function parseDatabases(sql) {
-  const markers = [...sql.matchAll(/USE\\s+(house_sys(?:_rental|_hotel|_property)?)\\s*;/gi)];
+  const markers = [...sql.matchAll(/USE\s+(house_sys(?:_rental|_hotel|_property)?)\s*;/gi)];
   const output = {};
   for (let i = 0; i < markers.length; i++) {
     const start = markers[i].index + markers[i][0].length;
     const end = i + 1 < markers.length ? markers[i + 1].index : sql.length;
     const block = sql.slice(start, end);
-    output[markers[i][1]] = [...block.matchAll(/CREATE\\s+TABLE\\s+([A-Za-z0-9_]+)\\s*\\(([\\s\\S]*?)\\)\\s*ENGINE=/gi)]
-      .map(match => ({ name: match[1], hasOrgId: /^\\s*org_id\\s+/m.test(match[2]) }));
+    output[markers[i][1]] = [...block.matchAll(/CREATE\s+TABLE\s+([A-Za-z0-9_]+)\s*\(([\s\S]*?)\)\s*ENGINE=/gi)]
+      .map(match => ({ name: match[1], hasOrgId: /^\s*org_id\s+/m.test(match[2]) }));
   }
   return output;
 }
