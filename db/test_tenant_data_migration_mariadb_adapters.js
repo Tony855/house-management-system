@@ -7,11 +7,12 @@ const { createMariaDbTenantMigrationAdapters } = require('../server/tenant-data-
 
 const tenantId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 
-function createPools(appId, sourceOrgId) {
+function createPools(appId, sourceOrgId, { lockAcquired = true } = {}) {
   const sourceCalls = [];
   const targetCalls = [];
   const sourceTables = Object.fromEntries([...TABLES[appId]].map(table => [table, [
-    { id: 1, org_id: sourceOrgId, name: table }
+    { id: 1, org_id: sourceOrgId, name: table },
+    { id: 2, org_id: sourceOrgId + 1, name: 'other-org-' + table }
   ]]));
   const targetTables = Object.fromEntries([...TABLES[appId]].map(table => [table, []]));
   let committed = false;
@@ -35,7 +36,7 @@ function createPools(appId, sourceOrgId) {
         async beginTransaction() { targetCalls.push('BEGIN'); },
         async execute(sql, params = []) {
           targetCalls.push(sql);
-          if (sql.startsWith('SELECT GET_LOCK')) return [[{ acquired: 1 }]];
+          if (sql.startsWith('SELECT GET_LOCK')) return [[{ acquired: lockAcquired ? 1 : 0 }]];
           if (sql.startsWith('SELECT RELEASE_LOCK')) return [[{ released: 1 }]];
           const countTable = sql.match(/SELECT COUNT\(\*\) AS total FROM `([a-z_]+)`/i)?.[1];
           if (countTable) return [[{ total: targetTables[countTable].length }]];
@@ -70,6 +71,8 @@ test('MariaDB source adapter scopes every query to the selected org with bound p
   const snapshot = await adapters.sourceReader.exportOrgSnapshot({ appId: 'rental', sourceOrgId: 17 });
   assert.deepEqual(Object.keys(snapshot.tables).sort(), [...TABLES.rental].sort());
   assert.equal(f.sourceCalls.length, TABLES.rental.size);
+  assert.ok(snapshot.tables.buildings.every(row => row.org_id === 17));
+  assert.equal(snapshot.tables.buildings.length, 1);
   assert.ok(f.sourceCalls.every(call => /WHERE `org_id` = \? ORDER BY `id` ASC/.test(call.sql) && call.params[0] === 17));
   await assert.rejects(adapters.sourceReader.exportOrgSnapshot({ appId: 'hotel', sourceOrgId: 17 }), /TENANT_DATA_MIGRATION_SOURCE_SCOPE_INVALID/);
 });
@@ -115,4 +118,18 @@ test('MariaDB target adapter rolls back malformed snapshots and rejects org_id i
 test('MariaDB adapters require a valid product and real mysql2-compatible pools', () => {
   assert.throws(() => createMariaDbTenantMigrationAdapters({ appId: 'platform', sourcePool: {}, targetPool: {} }), /TENANT_DATA_MIGRATION_APP_INVALID/);
   assert.throws(() => createMariaDbTenantMigrationAdapters({ appId: 'rental', sourcePool: {}, targetPool: {} }), /TENANT_MIGRATION_SOURCE_POOL_REQUIRED/);
+});
+
+
+test('MariaDB target adapter fails closed when the tenant advisory lock is unavailable', async () => {
+  const f = createPools('rental', 51, { lockAcquired: false });
+  const adapters = createMariaDbTenantMigrationAdapters({ appId: 'rental', ...f });
+  const tables = Object.fromEntries([...TABLES.rental].map(table => [table, []]));
+  await assert.rejects(
+    adapters.targetWriter.importTenantSnapshot({ appId: 'rental', tenantId, tables }),
+    /TENANT_DATA_MIGRATION_LOCK_UNAVAILABLE/
+  );
+  assert.equal(f.committed, false);
+  assert.ok(!f.targetCalls.includes('BEGIN'));
+  assert.ok(f.targetCalls.at(-1) === 'RELEASE');
 });
