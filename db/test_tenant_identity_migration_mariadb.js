@@ -7,6 +7,8 @@ const mysql = require('mysql2/promise');
 const { createMariaDbTenantIdentityAdapters } = require('../server/tenant-identity-migration-mariadb');
 const { copyTenantIdentity } = require('../server/tenant-identity-migration');
 const { tenantDatabaseName } = require('../server/tenant-provisioner');
+const { createTenantRepository } = require('../server/tenant-repository');
+const { createMariaDbTenantWriteIdempotencyStore } = require('../server/tenant-write-idempotency-mariadb');
 
 async function main() {
   if (process.env.NODE_ENV !== 'test') throw new Error('TENANT_IDENTITY_MARIADB_TEST_ONLY');
@@ -67,7 +69,10 @@ async function main() {
     await source.execute('INSERT INTO role_permissions (role_id, org_id, page) VALUES (?, 0, ?)', [globalRole.insertId, 'rooms']);
     await source.execute('INSERT INTO role_permissions (role_id, org_id, page) VALUES (?, ?, ?)', [tenantRole.insertId, orgA, 'dashboard']);
 
-    const sql = fs.readFileSync(path.join(__dirname, 'migrations/tenant/001_tenant_identity.sql'), 'utf8');
+    const sql = [
+      fs.readFileSync(path.join(__dirname, 'migrations/tenant/001_tenant_identity.sql'), 'utf8'),
+      fs.readFileSync(path.join(__dirname, 'migrations/tenant/002_tenant_write_idempotency.sql'), 'utf8')
+    ].join('\\n');
     const dbA = tenantDatabaseName(appId, tenantA);
     const dbB = tenantDatabaseName(appId, tenantB);
     for (const db of [dbA, dbB]) {
@@ -117,7 +122,44 @@ async function main() {
     if (Number(sessionsA[0].total) !== 0 || Number(sessionsB[0].total) !== 0) {
       throw new Error('TENANT_IDENTITY_LEGACY_SESSIONS_COPIED');
     }
-    console.log('PASS: tenant identity MariaDB copy, same username isolation, tenant role precedence, default permissions and legacy session exclusion');
+    const repository = createTenantRepository({ pool: targetA, appId });
+    const idempotencyStore = createMariaDbTenantWriteIdempotencyStore();
+    const requestId = 'mariadb-idempotency-' + suffix;
+    const fingerprint = crypto.createHash('sha256').update('validated fixture payload').digest('hex');
+    const idempotencyInput = {
+      appId, tenantId: tenantA, userId: String(usersA[0].id), requestId,
+      requestFingerprint: fingerprint
+    };
+    let mutationCalls = 0;
+    const mutate = async () => { mutationCalls++; return { createdId: 12345 }; };
+    const firstWrite = await repository.withTransaction(tx => idempotencyStore.execute(tx, idempotencyInput, mutate));
+    const replayWrite = await repository.withTransaction(tx => idempotencyStore.execute(tx, idempotencyInput, mutate));
+    if (firstWrite.status !== 'executed' || replayWrite.status !== 'replayed' ||
+        JSON.stringify(firstWrite.result) !== JSON.stringify(replayWrite.result) || mutationCalls !== 1) {
+      throw new Error('TENANT_WRITE_IDEMPOTENCY_MARIADB_REPLAY_FAILED');
+    }
+    const conflict = await repository.withTransaction(tx => idempotencyStore.execute(
+      tx, { ...idempotencyInput, requestFingerprint: crypto.createHash('sha256').update('changed payload').digest('hex') }, mutate
+    ));
+    if (conflict.status !== 'conflict' || mutationCalls !== 1) throw new Error('TENANT_WRITE_IDEMPOTENCY_MARIADB_CONFLICT_FAILED');
+
+    const concurrentId = 'mariadb-concurrent-' + suffix;
+    let concurrentMutations = 0;
+    const concurrentInput = { ...idempotencyInput, requestId: concurrentId };
+    const concurrentMutation = async () => {
+      concurrentMutations++;
+      await new Promise(resolve => setTimeout(resolve, 50));
+      return { concurrentId: 54321 };
+    };
+    const concurrent = await Promise.all([
+      repository.withTransaction(tx => idempotencyStore.execute(tx, concurrentInput, concurrentMutation)),
+      repository.withTransaction(tx => idempotencyStore.execute(tx, concurrentInput, concurrentMutation))
+    ]);
+    if (concurrentMutations !== 1 || concurrent.filter(x => x.status === 'executed').length !== 1 ||
+        concurrent.filter(x => x.status === 'replayed').length !== 1) {
+      throw new Error('TENANT_WRITE_IDEMPOTENCY_MARIADB_CONCURRENCY_FAILED');
+    }
+    console.log('PASS: tenant identity MariaDB copy, same username isolation, tenant role precedence, default permissions, legacy session exclusion and transactional idempotency replay/concurrency');
   } finally {
     for (const pool of targets) await pool.end();
     for (const token of tokens) { try { await source.execute('DELETE FROM sessions WHERE token = ?', [token]); } catch (_) {} }
