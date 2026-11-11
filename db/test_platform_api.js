@@ -132,3 +132,17 @@ test('platform tenant repository selects only opaque operational metadata', asyn
   assert.match(sql, /tenant_uuid, app_id, display_label, lifecycle_state, schema_version/);
   assert.doesNotMatch(sql, /db_host|db_name|db_secret_ref/);
 });
+
+test('sensitive platform writes reject login-only MFA without a fresh step-up', async () => {
+  const loginOnly = { ...admin, stepUpVerified: false };
+  const app = fixture({ auth: loginOnly });
+  await withServer(app, async base => {
+    const payload = { productCode: 'rental', planCode: 'starter', displayName: 'Starter', interval: 'month', currency: 'USD', amountMinor: 1200 };
+    const response = await fetch(base + '/api/platform/plans', {
+      method: 'POST', headers: { 'content-type': 'application/json', 'x-action-reason': 'initial plan setup' },
+      body: JSON.stringify(payload)
+    });
+    assert.equal(response.status, 403);
+    assert.deepEqual(await response.json(), { error: 'PLATFORM_STEP_UP_REQUIRED' });
+  });
+});
