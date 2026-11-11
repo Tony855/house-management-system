@@ -2,6 +2,7 @@
 
 const { APP_IDS } = require('./tenant-registry');
 const { TABLES } = require('./tenant-repository');
+const { tenantDatabaseName } = require('./tenant-provisioner');
 
 const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
 const BATCH_SIZE = 200;
@@ -9,6 +10,11 @@ const BATCH_SIZE = 200;
 function quoteIdentifier(value) {
   if (typeof value !== 'string' || !IDENTIFIER.test(value)) throw new TypeError('TENANT_MIGRATION_SQL_IDENTIFIER_INVALID');
   return '`' + value + '`';
+}
+
+async function assertDatabase(queryable, expected, code) {
+  const [rows] = await queryable.execute('SELECT DATABASE() AS databaseName');
+  if (rows[0]?.databaseName !== expected) throw new Error(code);
 }
 
 function assertPool(pool, method, code) {
@@ -32,6 +38,7 @@ function createMariaDbTenantMigrationAdapters({ appId, sourcePool, targetPool })
       if (requestedAppId !== appId || !Number.isSafeInteger(sourceOrgId) || sourceOrgId < 1) {
         throw new TypeError('TENANT_DATA_MIGRATION_SOURCE_SCOPE_INVALID');
       }
+      await assertDatabase(sourcePool, 'house_sys_' + appId, 'TENANT_DATA_MIGRATION_SOURCE_DATABASE_MISMATCH');
       const result = {};
       for (const table of tables) {
         const [rows] = await sourcePool.execute(
@@ -57,6 +64,7 @@ function createMariaDbTenantMigrationAdapters({ appId, sourcePool, targetPool })
       const lockName = 'tenant-migrate-' + tenantId;
       let lockAcquired = false;
       try {
+        await assertDatabase(connection, tenantDatabaseName(appId, tenantId), 'TENANT_DATA_MIGRATION_TARGET_DATABASE_MISMATCH');
         const [lockRows] = await connection.execute('SELECT GET_LOCK(?, 10) AS acquired', [lockName]);
         if (Number(lockRows[0]?.acquired) !== 1) throw new Error('TENANT_DATA_MIGRATION_LOCK_UNAVAILABLE');
         lockAcquired = true;
@@ -116,9 +124,10 @@ function createMariaDbTenantMigrationAdapters({ appId, sourcePool, targetPool })
 
   const targetReader = Object.freeze({
     async readTenantSnapshot({ appId: requestedAppId, tenantId }) {
-      if (requestedAppId !== appId || typeof tenantId !== 'string') {
+      if (requestedAppId !== appId || typeof tenantId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(tenantId)) {
         throw new TypeError('TENANT_DATA_MIGRATION_TARGET_SCOPE_INVALID');
       }
+      await assertDatabase(targetPool, tenantDatabaseName(appId, tenantId), 'TENANT_DATA_MIGRATION_TARGET_DATABASE_MISMATCH');
       const result = {};
       for (const table of tables) {
         const [rows] = await targetPool.execute('SELECT * FROM ' + quoteIdentifier(table) + ' ORDER BY `id` ASC');
