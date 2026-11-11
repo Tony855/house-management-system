@@ -18,6 +18,7 @@ export MYSQL_PWD="$DB_PASSWORD"
 "${mysql_cmd[@]}" "$DB_NAME" < "$ROOT_DIR/db/migrations/platform/003_product_sessions.sql"
 "${mysql_cmd[@]}" "$DB_NAME" < "$ROOT_DIR/db/migrations/platform/004_tenant_login_hosts.sql"
 "${mysql_cmd[@]}" "$DB_NAME" < "$ROOT_DIR/db/migrations/platform/005_login_attempt_rate_limit.sql"
+"${mysql_cmd[@]}" "$DB_NAME" < "$ROOT_DIR/db/migrations/platform/007_platform_admin_mfa.sql"
 
 expected_tables=11
 actual_tables="$("${mysql_cmd[@]}" -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '$DB_NAME' AND table_type = 'BASE TABLE' AND table_name IN ('platform_billing_accounts','platform_products','platform_plans','platform_subscriptions','platform_invoices','platform_invoice_lines','platform_payment_transactions','platform_payment_webhook_events','platform_refunds','platform_ledger_entries','platform_billing_audit')")"
@@ -75,3 +76,10 @@ fi
 echo "Platform registry + billing + product session MariaDB migrations passed: $actual_tables billing tables, $fk_count foreign keys."
 
 echo "Platform login attempt rate-limit schema verified."
+
+mfa_tables="$("${mysql_cmd[@]}" -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '$DB_NAME' AND table_type = 'BASE TABLE' AND table_name IN ('platform_admin_mfa_enrollments','platform_admin_mfa_factors','platform_admin_mfa_recovery_codes')")"
+if [[ "$mfa_tables" != "3" ]]; then
+  echo "Expected 3 platform administrator MFA tables, found $mfa_tables" >&2
+  exit 1
+fi
+echo "Platform administrator MFA storage schema verified: $mfa_tables tables."
