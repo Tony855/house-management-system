@@ -46,8 +46,9 @@ function createProductApi({ appId, authenticate, registry, secretProvider, poolM
   app.use('/api', api);
   app.use((err, req, res, _next) => {
     const status = Number.isInteger(err.status) && err.status >= 400 && err.status <= 599 ? err.status : 500;
-    if (status >= 500) req.log?.error?.({ err, requestId: req.id }, 'product API request failed');
-    res.status(status).json({ error: status >= 500 ? 'INTERNAL_ERROR' : (err.code || err.message || 'REQUEST_FAILED') });
+    if (status >= 500) req.log?.error?.({ errorName: err.name, errorCode: err.code, requestId: req.id }, 'product API request failed');
+    const publicCode = typeof err.code === 'string' && /^[A-Z][A-Z0-9_]{1,63}$/.test(err.code) ? err.code : 'REQUEST_FAILED';
+    res.status(status).json({ error: status >= 500 ? 'INTERNAL_ERROR' : publicCode });
   });
   app.use((_req, res) => res.status(404).json({ error: 'NOT_FOUND' }));
   return app;
