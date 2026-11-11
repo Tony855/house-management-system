@@ -148,3 +148,27 @@ test('concurrent different tenants cannot exceed the global pool cap', async () 
   assert.equal(created.filter(pool => !pool.ended).length, 1);
   await manager.closeAll();
 });
+
+
+test('pool manager rejects invalid tenant identity, database port and malformed host', async () => {
+  const manager = new TenantPoolManager({ createPool: () => ({ end: async () => {} }) });
+  const valid = {
+    tenantId: tenantA, appId: 'rental',
+    db: { host: 'db.internal', port: 3306, database: 'rental_a', user: 'tenant_a', password: 'secret' }
+  };
+  await assert.rejects(manager.getPool({ ...valid, appId: 'platform' }), /TENANT_CONTEXT_INVALID/);
+  await assert.rejects(manager.getPool({ ...valid, tenantId: 'not-a-uuid' }), /TENANT_CONTEXT_INVALID/);
+  await assert.rejects(manager.getPool({ ...valid, db: { ...valid.db, port: 70000 } }), /TENANT_DATABASE_CREDENTIALS_INVALID/);
+  await assert.rejects(manager.getPool({ ...valid, db: { ...valid.db, host: 'db.internal\\nmalicious' } }), /TENANT_DATABASE_CREDENTIALS_INVALID/);
+  await assert.rejects(manager.getPool({ ...valid, db: { ...valid.db, password: 'p'.repeat(1025) } }), /TENANT_DATABASE_CREDENTIALS_INVALID/);
+});
+
+test('pool manager validates global capacity, idle expiry and returned pool contract', async () => {
+  assert.throws(() => new TenantPoolManager({ createPool: () => ({}), maxPools: 501 }), /TENANT_POOL_MAX_INVALID/);
+  assert.throws(() => new TenantPoolManager({ createPool: () => ({}), idleTtlMs: 0 }), /TENANT_POOL_IDLE_TTL_INVALID/);
+  const manager = new TenantPoolManager({ createPool: () => ({ close: async () => {} }) });
+  await assert.rejects(manager.getPool({
+    tenantId: tenantA, appId: 'rental',
+    db: { host: 'db.internal', port: 3306, database: 'rental_a', user: 'tenant_a', password: 'secret' }
+  }), /TENANT_POOL_ADAPTER_INVALID/);
+});
