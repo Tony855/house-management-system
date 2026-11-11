@@ -16,11 +16,15 @@ permissions:
 jobs:
   node-tests:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ['24.22.2', '26.13.0']
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: actions/setup-node@v7.1.0
         with:
-          node-version: 24
+          node-version: ${{ matrix.node-version }}
           cache: npm
       - run: npm ci
       - run: npm audit --omit=dev
@@ -44,8 +48,6 @@ jobs:
       - uses: actions/checkout@v7.0.1
       - name: Install MariaDB client
         run: |
-          # The MariaDB service image is already pulled for this job. Use its client
-          # through Docker instead of apt mirrors, avoiding runner DNS/package outages.
           for client in mysql mariadb; do
             sudo tee "/usr/local/bin/${client}" >/dev/null <<'WRAPPER'
           #!/usr/bin/env bash
@@ -62,7 +64,6 @@ jobs:
           DB_USER: root
           DB_PASSWORD: platform-test-root
         run: bash scripts/test-platform-billing-schema.sh
-
 
   legacy-api-express5-integration:
     runs-on: ubuntu-latest
@@ -83,12 +84,10 @@ jobs:
       - uses: actions/checkout@v7.0.1
       - uses: actions/setup-node@v7.1.0
         with:
-          node-version: 24
+          node-version: 24.22.2
           cache: npm
       - name: Install MariaDB client
         run: |
-          # The MariaDB service image is already pulled for this job. Use its client
-          # through Docker instead of apt mirrors, avoiding runner DNS/package outages.
           for client in mysql mariadb; do
             sudo tee "/usr/local/bin/${client}" >/dev/null <<'WRAPPER'
           #!/usr/bin/env bash
