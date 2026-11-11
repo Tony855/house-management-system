@@ -181,3 +181,20 @@ test('resource creation timeout still triggers deterministic cleanup attempt', a
   }), /REMOTE_CREATED_BUT_CLIENT_TIMED_OUT/);
   assert.equal(dropAttempted, true);
 });
+
+test('audit adapter is mandatory before any provisioning side effect', async () => {
+  let created = false;
+  await assert.rejects(provisionTenant({
+    appId: 'rental', displayLabel: 'No audit', tenantId: 'abababab-abab-4bab-8bab-abababababab',
+    registry: {
+      createProvisioningTenant: async () => { created = true; },
+      activateTenant: async () => {},
+      markProvisioningFailed: async () => {}
+    },
+    databaseAdmin: { host: 'db.internal' },
+    secretStore: {},
+    migrationRunner: {},
+    isolationVerifier: {}
+  }), /TENANT_AUDIT_ADAPTER_REQUIRED/);
+  assert.equal(created, false);
+});
