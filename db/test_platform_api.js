@@ -6,6 +6,7 @@ const express = require('express');
 const http = require('node:http');
 const { createPlatformBillingRouter } = require('../services/platform-api/routes');
 const { createPlatformPool } = require('../server/platform-db');
+const { createPlatformRepository } = require('../services/platform-api/repository');
 
 async function withServer(app, fn) {
   const server = http.createServer(app);
@@ -81,4 +82,53 @@ test('platform plan writes require step-up and a reason and are recorded by repo
     assert.equal(valid.status, 201);
     assert.equal(created, 1);
   });
+});
+
+test('platform plan creation commits the plan and audit in one transaction', async () => {
+  const calls = [];
+  const connection = {
+    beginTransaction: async () => calls.push('begin'),
+    query: async sql => { calls.push(sql.startsWith('INSERT INTO platform_plans') ? 'plan' : 'audit'); return [{ insertId: 42 }, []]; },
+    commit: async () => calls.push('commit'),
+    rollback: async () => calls.push('rollback'),
+    release: () => calls.push('release')
+  };
+  const repository = createPlatformRepository({ query: async () => [[], []], getConnection: async () => connection });
+  const result = await repository.createPlan({
+    productCode: 'rental', planCode: 'starter', displayName: 'Starter', interval: 'month',
+    amountMinor: 1200, currency: 'USD', trialDays: 0, limits: {}, features: {}
+  }, { adminId: 7, reason: 'approved starter plan', requestId: 'req-1' });
+  assert.deepEqual(result, { id: 42, status: 'draft' });
+  assert.deepEqual(calls, ['begin', 'plan', 'audit', 'commit', 'release']);
+});
+
+test('platform plan creation rolls back if audit persistence fails', async () => {
+  const calls = [];
+  const connection = {
+    beginTransaction: async () => calls.push('begin'),
+    query: async sql => {
+      if (sql.startsWith('INSERT INTO platform_billing_audit')) throw new Error('AUDIT_WRITE_FAILED');
+      return [{ insertId: 43 }, []];
+    },
+    commit: async () => calls.push('commit'),
+    rollback: async () => calls.push('rollback'),
+    release: () => calls.push('release')
+  };
+  const repository = createPlatformRepository({ query: async () => [[], []], getConnection: async () => connection });
+  await assert.rejects(repository.createPlan({
+    productCode: 'rental', planCode: 'starter', displayName: 'Starter', interval: 'month',
+    amountMinor: 1200, currency: 'USD', trialDays: 0, limits: {}, features: {}
+  }, { adminId: 7, reason: 'approved starter plan' }), /AUDIT_WRITE_FAILED/);
+  assert.deepEqual(calls, ['begin', 'rollback', 'release']);
+});
+
+test('platform tenant repository selects only opaque operational metadata', async () => {
+  let sql = '';
+  const repository = createPlatformRepository({
+    query: async statement => { sql = statement; return [[{ tenant_uuid: 'opaque', app_id: 'rental' }], []]; },
+    getConnection: async () => { throw new Error('unused'); }
+  });
+  await repository.listTenants({ appId: 'rental', limit: 10, offset: 0 });
+  assert.match(sql, /tenant_uuid, app_id, display_label, lifecycle_state, schema_version/);
+  assert.doesNotMatch(sql, /db_host|db_name|db_secret_ref/);
 });
