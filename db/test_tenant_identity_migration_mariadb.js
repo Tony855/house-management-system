@@ -72,7 +72,7 @@ async function main() {
     const sql = [
       fs.readFileSync(path.join(__dirname, 'migrations/tenant/001_tenant_identity.sql'), 'utf8'),
       fs.readFileSync(path.join(__dirname, 'migrations/tenant/002_tenant_write_idempotency.sql'), 'utf8')
-    ].join('\\n');
+    ].join('\n');
     const dbA = tenantDatabaseName(appId, tenantA);
     const dbB = tenantDatabaseName(appId, tenantB);
     for (const db of [dbA, dbB]) {
