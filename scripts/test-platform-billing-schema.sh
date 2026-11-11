@@ -39,4 +39,21 @@ fi
 session_table="$("${mysql_cmd[@]}" -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '$DB_NAME' AND table_name = 'platform_product_sessions' AND table_type = 'BASE TABLE'")"
 if [[ "$session_table" != "1" ]]; then echo "Product session migration was not installed" >&2; exit 1; fi
 if (( fk_count < 11 )); then echo "Expected product session and billing foreign keys, found $fk_count" >&2; exit 1; fi
+
+test_tenant_uuid='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+test_session_id='ci-product-session-revocation-0001'
+"${mysql_cmd[@]}" "$DB_NAME" -e "INSERT INTO platform_tenants (tenant_uuid, app_id, display_label, lifecycle_state, db_host, db_port, db_name, db_secret_ref) VALUES ('$test_tenant_uuid', 'rental', 'CI tenant', 'active', '127.0.0.1', 3306, 'ci_tenant_db', 'ci/tenant/db')"
+"${mysql_cmd[@]}" "$DB_NAME" -e "INSERT INTO platform_product_sessions (session_id, app_id, tenant_uuid, subject_id, issued_at, expires_at) VALUES ('$test_session_id', 'rental', '$test_tenant_uuid', 'ci-user-1', UTC_TIMESTAMP(), DATE_ADD(UTC_TIMESTAMP(), INTERVAL 5 MINUTE))"
+active_session="$("${mysql_cmd[@]}" "$DB_NAME" -e "SELECT COUNT(*) FROM platform_product_sessions WHERE session_id = '$test_session_id' AND subject_id = 'ci-user-1' AND tenant_uuid = '$test_tenant_uuid' AND app_id = 'rental' AND revoked_at IS NULL AND expires_at > UTC_TIMESTAMP()")"
+wrong_audience="$("${mysql_cmd[@]}" "$DB_NAME" -e "SELECT COUNT(*) FROM platform_product_sessions WHERE session_id = '$test_session_id' AND app_id = 'hotel' AND revoked_at IS NULL AND expires_at > UTC_TIMESTAMP()")"
+if [[ "$active_session" != "1" || "$wrong_audience" != "0" ]]; then
+  echo "Product session binding/expiry verification failed" >&2
+  exit 1
+fi
+"${mysql_cmd[@]}" "$DB_NAME" -e "UPDATE platform_product_sessions SET revoked_at = UTC_TIMESTAMP() WHERE session_id = '$test_session_id'"
+revoked_session="$("${mysql_cmd[@]}" "$DB_NAME" -e "SELECT COUNT(*) FROM platform_product_sessions WHERE session_id = '$test_session_id' AND revoked_at IS NULL AND expires_at > UTC_TIMESTAMP()")"
+if [[ "$revoked_session" != "0" ]]; then
+  echo "Revoked product session remained active" >&2
+  exit 1
+fi
 echo "Platform registry + billing + product session MariaDB migrations passed: $actual_tables billing tables, $fk_count foreign keys."
