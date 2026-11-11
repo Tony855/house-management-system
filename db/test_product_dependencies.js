@@ -5,7 +5,7 @@ const test = require('node:test');
 const { createProductControlPlaneDependencies } = require('../server/product-dependencies');
 
 test('product dependencies wire signed auth, platform registry, session revocation and secret manager', () => {
-  const pool = { query: async () => [[], []] };
+  const pool = { query: async () => [[], []], getConnection: async () => ({ beginTransaction: async () => {}, query: async () => [[], []], commit: async () => {}, rollback: async () => {}, release: () => {} }) };
   const dependencies = createProductControlPlaneDependencies({
     appId: 'rental',
     issuer: 'https://auth.example.test',
@@ -43,9 +43,19 @@ test('product dependencies wire login only with a dedicated signing key issuer',
     platformPool: pool,
     secretManager: { getSecret: async () => ({ user: 'tenant', password: 'secret' }) },
     keyProvider: { getVerificationKey: async () => '0123456789abcdef0123456789abcdef' },
-    signingKeyProvider: { getSigningKey: async () => ({ kid: 'v1', key: '0123456789abcdef0123456789abcdef' }) },
+    signingKeyProvider: { getSigningKey: async () => ({ kid: 'v1', key: '0123456789abcdef0123456789abcdef' }) },\n    loginRateLimitHmacKey: '0123456789abcdef0123456789abcdef',
     poolManager: { getPool: async () => ({ execute: async () => [[], []] }) }
   });
   assert.equal(typeof dependencies.loginService.login, 'function');
   assert.equal(typeof dependencies.loginService.logout, 'function');
+});
+
+test('product login composition refuses to enable login without a dedicated limiter HMAC key', () => {
+  const pool = { query: async () => [[], []], getConnection: async () => ({}) };
+  assert.throws(() => createProductControlPlaneDependencies({
+    appId: 'rental', issuer: 'https://auth.example.test', platformPool: pool,
+    secretManager: { getSecret: async () => ({ user: 'tenant', password: 'secret' }) },
+    keyProvider: { getVerificationKey: async () => '0123456789abcdef0123456789abcdef' },
+    signingKeyProvider: { getSigningKey: async () => ({ kid: 'v1', key: '0123456789abcdef0123456789abcdef' }) }
+  }), /LOGIN_RATE_LIMIT_HMAC_KEY_REQUIRED/);
 });
