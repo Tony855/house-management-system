@@ -142,11 +142,11 @@ function createPlatformLoginRateLimiter(pool, {
           [identity.appId, hash]
         );
         const [rows] = await connection.query(
-          'SELECT window_started_at, failures FROM platform_login_attempts WHERE app_id = ? AND identity_hash = ? FOR UPDATE',
-          [identity.appId, hash]
+          'SELECT window_started_at, failures, (window_started_at <= DATE_SUB(UTC_TIMESTAMP(), INTERVAL ? SECOND)) AS expired FROM platform_login_attempts WHERE app_id = ? AND identity_hash = ? FOR UPDATE',
+          [windowSeconds, identity.appId, hash]
         );
         const row = rows[0];
-        const expired = !row || (Date.now() - new Date(row.window_started_at).getTime()) >= windowSeconds * 1000;
+        const expired = !row || Number(row.expired) === 1;
         const failures = expired ? 1 : Number(row.failures) + 1;
         const blocked = failures >= maxAttempts;
         await connection.query(
