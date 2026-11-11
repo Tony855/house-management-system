@@ -3,7 +3,7 @@
 const ACTIONS = new Set([
   'admin.login', 'admin.mfa.verify', 'admin.mfa.enrollment.begin',
   'admin.mfa.enrollment.confirm', 'admin.mfa.recovery.rotate',
-  'admin.step_up', 'admin.logout'
+  'admin.step_up', 'admin.logout', 'admin.disable'
 ]);
 const OUTCOMES = new Set(['success', 'failure']);
 
