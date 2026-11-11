@@ -57,7 +57,9 @@ test('rejects malformed, expired, overlong and cross-product tokens', async () =
     'Bearer ' + token({ exp: now }),
     'Bearer ' + token({ exp: now + 3601 }),
     'Bearer ' + token({ aud: 'hotel', appId: 'hotel' }),
-    'Bearer ' + token({}, { alg: 'none' })
+    'Bearer ' + token({ aud: ['rental', 'platform'] }),
+    'Bearer ' + token({}, { alg: 'none' }),
+    'Bearer ' + token({}, { crit: ['b64'], b64: false })
   ]) {
     const result = await invoke(authenticate, value);
     assert.ok(result.error);
