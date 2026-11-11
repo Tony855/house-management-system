@@ -88,3 +88,6 @@ No production DB migration or data deletion is performed by the CI jobs.
 - The tenant writer acquires a MariaDB advisory lock for the tenant, refuses any non-empty target table, inserts all reviewed rows in one transaction, and rolls back on any error. The lock is released before the connection is returned.
 - The target reader reads back the full tenant table set for count and SHA-256 reconciliation. The target schema must be pre-migrated without `org_id`; the writer rejects attempts to insert that legacy column.
 - Adapter contract tests cover source scoping, transaction commit/rollback, non-empty target refusal, lock lifecycle and org_id injection. These are adapter tests using mysql2-compatible fakes; a live legacy-to-tenant production migration, backup restore and cutover remain separate acceptance gates.
+
+
+The CI legacy MariaDB integration now creates an ephemeral tenant database, clones the Rental product schema without `org_id`, inserts a uniquely scoped fixture into the disposable legacy schema, executes the real mysql2 adapters, and verifies target read-back plus SHA-256 reconciliation. The fixture row and ephemeral database are removed in a `finally` cleanup. This validates the concrete Rental path against MariaDB; it is not a production tenant cutover or a full data migration for Hotel/Property.
