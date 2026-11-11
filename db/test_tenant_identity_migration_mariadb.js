@@ -68,20 +68,13 @@ async function main() {
     await source.execute('INSERT INTO role_permissions (role_id, org_id, page) VALUES (?, ?, ?)', [tenantRole.insertId, orgA, 'dashboard']);
 
     const sql = fs.readFileSync(path.join(__dirname, 'migrations/tenant/001_tenant_identity.sql'), 'utf8');
-    for (const statement of sql.split(';').map(s => s.trim()).filter(Boolean)) {
-      const dbA = tenantDatabaseName(appId, tenantA);
-      await admin.execute('CREATE DATABASE IF NOT EXISTS `' + dbA + '` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci');
-      if (!created.includes(dbA)) created.push(dbA);
-      const dbB = tenantDatabaseName(appId, tenantB);
-      await admin.execute('CREATE DATABASE IF NOT EXISTS `' + dbB + '` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci');
-      if (!created.includes(dbB)) created.push(dbB);
-      for (const db of [dbA, dbB]) {
-        const [exists] = await admin.execute(
-          'SELECT COUNT(*) AS total FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?',
-          [db, 'roles']
-        );
-        if (Number(exists[0].total) === 0) await admin.query('USE `' + db + '`; ' + statement);
-      }
+    const dbA = tenantDatabaseName(appId, tenantA);
+    const dbB = tenantDatabaseName(appId, tenantB);
+    for (const db of [dbA, dbB]) {
+      await admin.execute('CREATE DATABASE `' + db + '` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci');
+      created.push(db);
+      const setup = mysql.createPool({ ...config, database: db, multipleStatements: true });
+      try { await setup.query(sql); } finally { await setup.end(); }
     }
     const targetA = mysql.createPool({ ...config, database: tenantDatabaseName(appId, tenantA) });
     const targetB = mysql.createPool({ ...config, database: tenantDatabaseName(appId, tenantB) });
