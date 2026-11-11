@@ -46,7 +46,7 @@ function createMariaDbTenantDatabaseAdmin({
     async grantDatabaseOnly(dbUser, dbName) {
       assertIdentifier(dbUser, 'TENANT_DATABASE_USER_INVALID');
       assertIdentifier(dbName, 'TENANT_DATABASE_NAME_INVALID');
-      await execute("GRANT ALL PRIVILEGES ON `" + dbName + "`.* TO '" + dbUser + "'@'%'");
+      await execute("GRANT SELECT, INSERT, UPDATE, DELETE, EXECUTE ON `" + dbName + "`.* TO '" + dbUser + "'@'%'");
     },
     async dropPrincipal(dbUser) {
       assertIdentifier(dbUser, 'TENANT_DATABASE_USER_INVALID');
