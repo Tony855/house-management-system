@@ -6,6 +6,27 @@ const { TABLES } = require('./tenant-repository');
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const MAX_ROWS_PER_TABLE = 250000;
+const RELATIONSHIPS = Object.freeze({
+  rental: Object.freeze([
+    ['rooms', 'building_id', 'buildings'], ['contracts', 'room_id', 'rooms'], ['contracts', 'tenant_id', 'tenants'],
+    ['meters', 'room_id', 'rooms'], ['room_net_lines', 'room_id', 'rooms'], ['net_changes', 'room_id', 'rooms'],
+    ['net_requests', 'room_id', 'rooms'], ['net_requests', 'line_id', 'room_net_lines'],
+    ['bills', 'room_id', 'rooms'], ['bills', 'tenant_id', 'tenants'], ['bills', 'contract_id', 'contracts'],
+    ['repairs', 'room_id', 'rooms']
+  ]),
+  hotel: Object.freeze([
+    ['rooms', 'building_id', 'buildings'], ['orders', 'room_id', 'rooms'], ['orders', 'guest_id', 'tenants'],
+    ['bills', 'room_id', 'rooms'], ['bills', 'tenant_id', 'tenants'], ['bills', 'order_id', 'orders'],
+    ['repairs', 'room_id', 'rooms']
+  ]),
+  property: Object.freeze([
+    ['rooms', 'building_id', 'buildings'], ['org_employees', 'room_id', 'rooms'], ['meters', 'room_id', 'rooms'],
+    ['room_net_lines', 'room_id', 'rooms'], ['net_changes', 'room_id', 'rooms'],
+    ['net_requests', 'room_id', 'rooms'], ['net_requests', 'line_id', 'room_net_lines'],
+    ['bills', 'room_id', 'rooms'], ['bills', 'tenant_id', 'tenants'], ['bills', 'order_id', 'orders'],
+    ['repairs', 'room_id', 'rooms'], ['complaints', 'room_id', 'rooms']
+  ])
+});
 
 function canonicalize(value) {
   if (Array.isArray(value)) return value.map(canonicalize);
@@ -53,6 +74,17 @@ function normalizeSourceSnapshot(appId, sourceOrgId, snapshot) {
     });
     tables[table] = tenantRows;
     manifest[table] = { rowCount: tenantRows.length, sha256: digestRows(tenantRows) };
+  }
+  const ids = Object.fromEntries(expectedTables.map(table => [
+    table, new Set((tables[table] || []).map(row => String(row.id)))
+  ]));
+  for (const [table, column, referencedTable] of RELATIONSHIPS[appId]) {
+    for (const row of tables[table]) {
+      const value = row[column];
+      if (value !== null && value !== undefined && value !== '' && !ids[referencedTable].has(String(value))) {
+        throw new Error('TENANT_DATA_MIGRATION_RELATIONSHIP_INVALID');
+      }
+    }
   }
   return { tables, manifest };
 }
@@ -145,4 +177,4 @@ function normalizeTargetSnapshot(appId, snapshot) {
   return { manifest };
 }
 
-module.exports = { copyTenantOrgData, digestRows, normalizeSourceSnapshot, compareManifests };
+module.exports = { copyTenantOrgData, digestRows, normalizeSourceSnapshot, compareManifests, RELATIONSHIPS };
