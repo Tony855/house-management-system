@@ -205,6 +205,116 @@ function createPlatformAdminAuthStore(pool) {
       } finally {
         connection.release();
       }
+    },
+    async requestAdminReenable({ actorAdminId, targetAdminId, sessionId, reason }) {
+      if (!Number.isSafeInteger(actorAdminId) || actorAdminId < 1 ||
+          !Number.isSafeInteger(targetAdminId) || targetAdminId < 1 || actorAdminId === targetAdminId ||
+          typeof sessionId !== 'string' || !/^[A-Za-z0-9._~-]{16,128}$/.test(sessionId) ||
+          typeof reason !== 'string' || reason.trim().length < 8 || reason.trim().length > 500) return false;
+      if (typeof pool.getConnection !== 'function') throw new TypeError('PLATFORM_ADMIN_TRANSACTION_REQUIRED');
+      const connection = await pool.getConnection();
+      try {
+        await connection.beginTransaction();
+        const [admins] = await connection.query(
+          'SELECT id, status FROM platform_admins WHERE id IN (?, ?) ORDER BY id FOR UPDATE',
+          [actorAdminId, targetAdminId]
+        );
+        const actor = admins.find(row => Number(row.id) === actorAdminId);
+        const target = admins.find(row => Number(row.id) === targetAdminId);
+        if (!actor || actor.status !== 'active' || !target || target.status !== 'disabled') {
+          await connection.rollback();
+          return false;
+        }
+        const [factors] = await connection.query(
+          'SELECT admin_id FROM platform_admin_mfa_factors WHERE admin_id = ? AND enabled = 1 FOR UPDATE',
+          [targetAdminId]
+        );
+        if (!factors[0]) {
+          await connection.rollback();
+          return false;
+        }
+        const [inserted] = await connection.query(
+          "INSERT INTO platform_admin_reenable_requests (target_admin_id, requested_by_admin_id, reason, status) VALUES (?, ?, ?, 'pending')",
+          [targetAdminId, actorAdminId, reason.trim()]
+        );
+        await connection.query(
+          'INSERT INTO platform_admin_audit_events (admin_id, session_id, action, outcome, detail_code) VALUES (?, ?, ?, ?, ?)',
+          [actorAdminId, sessionId, 'admin.reenable.request', 'success', 'TARGET_ADMIN_' + targetAdminId]
+        );
+        await connection.commit();
+        return Number(inserted.insertId);
+      } catch (error) {
+        try { await connection.rollback(); } catch (rollbackError) { error.rollbackError = rollbackError; }
+        if (error && error.code === 'ER_DUP_ENTRY') {
+          throw Object.assign(new Error('PLATFORM_ADMIN_REENABLE_ALREADY_PENDING'), {
+            code: 'PLATFORM_ADMIN_REENABLE_ALREADY_PENDING', status: 409
+          });
+        }
+        throw error;
+      } finally {
+        connection.release();
+      }
+    },
+    async approveAdminReenable({ actorAdminId, targetAdminId, requestId, sessionId }) {
+      if (!Number.isSafeInteger(actorAdminId) || actorAdminId < 1 ||
+          !Number.isSafeInteger(targetAdminId) || targetAdminId < 1 ||
+          !Number.isSafeInteger(requestId) || requestId < 1 || actorAdminId === targetAdminId ||
+          typeof sessionId !== 'string' || !/^[A-Za-z0-9._~-]{16,128}$/.test(sessionId)) return false;
+      if (typeof pool.getConnection !== 'function') throw new TypeError('PLATFORM_ADMIN_TRANSACTION_REQUIRED');
+      const connection = await pool.getConnection();
+      try {
+        await connection.beginTransaction();
+        const [requests] = await connection.query(
+          "SELECT id, target_admin_id, requested_by_admin_id FROM platform_admin_reenable_requests WHERE id = ? AND target_admin_id = ? AND status = 'pending' FOR UPDATE",
+          [requestId, targetAdminId]
+        );
+        const request = requests[0];
+        if (!request || Number(request.requested_by_admin_id) === actorAdminId) {
+          await connection.rollback();
+          return false;
+        }
+        const [admins] = await connection.query(
+          'SELECT id, status FROM platform_admins WHERE id IN (?, ?) ORDER BY id FOR UPDATE',
+          [actorAdminId, targetAdminId]
+        );
+        const actor = admins.find(row => Number(row.id) === actorAdminId);
+        const target = admins.find(row => Number(row.id) === targetAdminId);
+        if (!actor || actor.status !== 'active' || !target || target.status !== 'disabled') {
+          await connection.rollback();
+          return false;
+        }
+        const [factors] = await connection.query(
+          'SELECT admin_id FROM platform_admin_mfa_factors WHERE admin_id = ? AND enabled = 1 FOR UPDATE',
+          [targetAdminId]
+        );
+        if (!factors[0]) {
+          await connection.rollback();
+          return false;
+        }
+        const [updated] = await connection.query(
+          "UPDATE platform_admins SET status = 'active' WHERE id = ? AND status = 'disabled'",
+          [targetAdminId]
+        );
+        if (Number(updated.affectedRows) !== 1) {
+          await connection.rollback();
+          return false;
+        }
+        await connection.query(
+          "UPDATE platform_admin_reenable_requests SET status = 'approved', approved_by_admin_id = ?, decided_at = UTC_TIMESTAMP() WHERE id = ? AND status = 'pending'",
+          [actorAdminId, requestId]
+        );
+        await connection.query(
+          'INSERT INTO platform_admin_audit_events (admin_id, session_id, action, outcome, detail_code) VALUES (?, ?, ?, ?, ?)',
+          [actorAdminId, sessionId, 'admin.reenable.approve', 'success', 'TARGET_ADMIN_' + targetAdminId]
+        );
+        await connection.commit();
+        return true;
+      } catch (error) {
+        try { await connection.rollback(); } catch (rollbackError) { error.rollbackError = rollbackError; }
+        throw error;
+      } finally {
+        connection.release();
+      }
     }
   });
 }
