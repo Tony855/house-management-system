@@ -8,7 +8,7 @@ const { tenantDatabaseName } = require('../server/tenant-provisioner');
 
 const tenantId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 
-function createPools(appId, sourceOrgId, { lockAcquired = true, releaseLockSucceeds = true } = {}) {
+function createPools(appId, sourceOrgId, { lockAcquired = true, releaseLockSucceeds = true, failInsertTable = null } = {}) {
   const sourceCalls = [];
   const targetCalls = [];
   const sourceTables = Object.fromEntries([...TABLES[appId]].map(table => [table, [
@@ -49,6 +49,7 @@ function createPools(appId, sourceOrgId, { lockAcquired = true, releaseLockSucce
           const insertMatch = sql.match(/INSERT INTO `([a-z_]+)` \(([^)]+)\) VALUES/i);
           if (insertMatch) {
             const table = insertMatch[1];
+            if (table === failInsertTable) throw new Error('INJECTED_INSERT_FAILURE');
             const columns = [...insertMatch[2].matchAll(/`([a-z_]+)`/gi)].map(match => match[1]);
             const width = columns.length;
             for (let i = 0; i < params.length; i += width) {
@@ -181,4 +182,20 @@ test('MariaDB adapters reject a tenant target pool connected to another tenant d
     adapters.targetWriter.importTenantSnapshot({ appId: 'rental', tenantId, tables }),
     /TENANT_DATA_MIGRATION_TARGET_DATABASE_MISMATCH/
   );
+});
+
+
+test('MariaDB target adapter rolls back earlier table inserts after a later table batch fails', async () => {
+  const f = createPools('rental', 91, { failInsertTable: 'bills' });
+  const adapters = createMariaDbTenantMigrationAdapters({ appId: 'rental', ...f });
+  const tables = Object.fromEntries([...TABLES.rental].map(table => [table, []]));
+  tables.buildings = [{ id: 10, name: 'fixture' }];
+  tables.bills = [{ id: 20, amount: 12 }];
+  await assert.rejects(
+    adapters.targetWriter.importTenantSnapshot({ appId: 'rental', tenantId, tables }),
+    /INJECTED_INSERT_FAILURE/
+  );
+  assert.equal(f.rolledBack, true);
+  assert.equal(f.committed, false);
+  assert.equal(Object.values(f.targetTables).every(rows => rows.length === 0), true);
 });
