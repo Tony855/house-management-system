@@ -108,3 +108,7 @@ The CI legacy MariaDB integration now creates an ephemeral tenant database, clon
 - The write service requires product/tenant context agreement, explicit domain authorization, step-up verification, a reason, a request identifier and a transaction-aware audit adapter.
 - Both start and committed audit records are appended using the same tenant transaction handle as the domain mutation. Audit failure or domain failure rolls the transaction back.
 - This is a guarded write boundary, not a blanket activation of generic CRUD endpoints. Product-specific write routes must still implement domain validation and call this capability explicitly; current read routes remain read-only.
+
+
+- Migration preflight validates known in-product references (for example room-to-building, contract-to-room/tenant, bill-to-contract/order, and maintenance-to-room) against the selected tenant snapshot before any target write. Historical orphan references fail closed and require explicit data repair; this preflight does not invent or silently rewrite missing relationships.
+- MariaDB migration adapters verify `SELECT DATABASE()` on the source and tenant target connections. Source must be `house_sys_<product>`; target must exactly match the canonical tenant DB name generated from the product and tenant UUID.
