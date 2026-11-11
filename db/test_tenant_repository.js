@@ -46,7 +46,7 @@ test('tenant repository parameterizes filters and pagination on the supplied ten
 
 test('tenant repository validates identifiers, pagination and immutable primary keys', async () => {
   const repo = createTenantRepository({ pool: fakePool(), appId: 'hotel' });
-  await assert.rejects(repo.list('rooms', { orderBy: 'id; DROP TABLE rooms' }), /TENANT_SQL_IDENTIFIER_INVALID/);
+  await assert.rejects(repo.list('rooms', { orderBy: 'id; DROP TABLE rooms' }), /TENANT_COLUMN_NOT_ALLOWED/);
   await assert.rejects(repo.list('rooms', { limit: 101 }), /TENANT_PAGINATION_INVALID/);
   await assert.rejects(repo.updateById('rooms', 1, { id: 2 }), /TENANT_PRIMARY_KEY_IMMUTABLE/);
   await assert.rejects(repo.insert('rooms', { 'name) VALUES (1);--': 'x' }), /TENANT_FIELDS_INVALID/);
