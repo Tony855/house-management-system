@@ -59,7 +59,7 @@ test('copy fails closed when target reconciliation differs', async () => {
   await assert.rejects(copyTenantOrgData({
     appId: 'rental', tenantId, sourceOrgId: 44, mode: 'copy', ...a
   }), /TENANT_DATA_MIGRATION_RECONCILIATION_FAILED/);
-  assert.ok(a.calls.some(call => call[0] === 'audit' && call[1] === 'tenant_data_migration_reconciliation_failed'));
+  assert.ok(a.calls.some(call => call[0] === 'audit' && call[1] === 'tenant_data_migration_copy_failed'));
 });
 
 test('copy requires durable audit and a complete target adapter before side effects', async () => {
