@@ -51,8 +51,8 @@ fi
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get install -y ca-certificates curl gnupg mariadb-server ufw
-if ! command -v node >/dev/null 2>&1 || [ "$(node -p 'Number(process.versions.node.split(".")[0])')" -lt 20 ]; then
- curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+if ! command -v node >/dev/null 2>&1 || [ "$(node -p 'Number(process.versions.node.split(".")[0])'" -lt 24 ]; then
+ curl -fsSL https://deb.nodesource.com/setup_24.x | bash -
  apt-get install -y nodejs
 fi
 systemctl enable --now mariadb
