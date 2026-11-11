@@ -87,7 +87,7 @@ function createPlatformAdminAuthStore(pool) {
     async getActiveSession({ sessionId, adminId, now }) {
       if (typeof sessionId !== 'string' || !Number.isSafeInteger(adminId) || !Number.isSafeInteger(now)) return null;
       const [rows] = await pool.query(
-        'SELECT s.permissions_json, UNIX_TIMESTAMP(s.last_mfa_verified_at) AS mfa_verified_at, a.status AS admin_status FROM platform_admin_sessions s JOIN platform_admins a ON a.id = s.admin_id WHERE s.session_id = ? AND s.admin_id = ? AND s.revoked_at IS NULL AND s.expires_at > UTC_TIMESTAMP() AND a.status = \'active\' LIMIT 1',
+        'SELECT a.permissions_json, UNIX_TIMESTAMP(s.last_mfa_verified_at) AS mfa_verified_at, a.status AS admin_status FROM platform_admin_sessions s JOIN platform_admins a ON a.id = s.admin_id WHERE s.session_id = ? AND s.admin_id = ? AND s.revoked_at IS NULL AND s.expires_at > UTC_TIMESTAMP() AND a.status = \'active\' LIMIT 1',
         [sessionId, adminId]
       );
       if (!rows[0]) return null;
