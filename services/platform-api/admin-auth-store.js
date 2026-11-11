@@ -87,13 +87,14 @@ function createPlatformAdminAuthStore(pool) {
     async getActiveSession({ sessionId, adminId, now }) {
       if (typeof sessionId !== 'string' || !Number.isSafeInteger(adminId) || !Number.isSafeInteger(now)) return null;
       const [rows] = await pool.query(
-        'SELECT a.permissions_json, UNIX_TIMESTAMP(s.last_mfa_verified_at) AS mfa_verified_at, a.status AS admin_status FROM platform_admin_sessions s JOIN platform_admins a ON a.id = s.admin_id WHERE s.session_id = ? AND s.admin_id = ? AND s.revoked_at IS NULL AND s.expires_at > UTC_TIMESTAMP() AND a.status = \'active\' LIMIT 1',
+        'SELECT a.permissions_json, UNIX_TIMESTAMP(s.last_mfa_verified_at) AS mfa_verified_at, UNIX_TIMESTAMP(s.last_step_up_at) AS step_up_verified_at, a.status AS admin_status FROM platform_admin_sessions s JOIN platform_admins a ON a.id = s.admin_id WHERE s.session_id = ? AND s.admin_id = ? AND s.revoked_at IS NULL AND s.expires_at > UTC_TIMESTAMP() AND a.status = \'active\' LIMIT 1',
         [sessionId, adminId]
       );
       if (!rows[0]) return null;
       return {
         status: 'active', adminStatus: rows[0].admin_status,
         mfaVerifiedAt: Number(rows[0].mfa_verified_at),
+        stepUpVerifiedAt: rows[0].step_up_verified_at === null ? null : Number(rows[0].step_up_verified_at),
         permissions: parseJson(rows[0].permissions_json)
       };
     },
@@ -102,6 +103,15 @@ function createPlatformAdminAuthStore(pool) {
           !Number.isSafeInteger(verifiedAt)) return false;
       const [result] = await pool.query(
         'UPDATE platform_admin_sessions SET last_mfa_verified_at = ? WHERE session_id = ? AND admin_id = ? AND revoked_at IS NULL AND expires_at > UTC_TIMESTAMP()',
+        [new Date(verifiedAt * 1000), sessionId, adminId]
+      );
+      return Number(result.affectedRows) === 1;
+    },
+    async touchStepUpVerified({ adminId, sessionId, verifiedAt }) {
+      if (!Number.isSafeInteger(adminId) || adminId < 1 || typeof sessionId !== 'string' ||
+          !Number.isSafeInteger(verifiedAt)) return false;
+      const [result] = await pool.query(
+        'UPDATE platform_admin_sessions SET last_step_up_at = ? WHERE session_id = ? AND admin_id = ? AND revoked_at IS NULL AND expires_at > UTC_TIMESTAMP()',
         [new Date(verifiedAt * 1000), sessionId, adminId]
       );
       return Number(result.affectedRows) === 1;
