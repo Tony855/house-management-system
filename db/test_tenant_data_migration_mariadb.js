@@ -47,6 +47,7 @@ async function main() {
         appId: 'rental',
         tenantId,
         sourceOrgId,
+        mode: 'copy',
         ...adapters,
         audit: async event => events.push(event)
       });
