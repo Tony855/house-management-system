@@ -117,17 +117,21 @@ function createPlatformMfaService({
         typeof issuer !== 'string' || !issuer || issuer.length > 80) fail('PLATFORM_MFA_ENROLLMENT_INPUT_INVALID');
     const secret = randomBytes(20);
     if (!Buffer.isBuffer(secret) || secret.length !== 20) fail('PLATFORM_MFA_RANDOM_SOURCE_INVALID', 503);
-    const encoded = encodeBase32(secret);
-    const encryptedSecret = await encryption.encrypt(secret);
-    if (!encryptedSecret || typeof encryptedSecret !== 'object') fail('PLATFORM_MFA_ENCRYPTION_FAILED', 503);
-    await store.savePendingEnrollment({
-      adminId, encryptedSecret, expiresAt: now() + ENROLLMENT_TTL_SECONDS
-    });
-    const label = encodeURIComponent(issuer + ':' + account);
-    const query = new URLSearchParams({
-      secret: encoded, issuer, algorithm: 'SHA1', digits: String(CODE_DIGITS), period: String(STEP_SECONDS)
-    });
-    return Object.freeze({ secret: encoded, otpauthUrl: 'otpauth://totp/' + label + '?' + query.toString() });
+    try {
+      const encoded = encodeBase32(secret);
+      const encryptedSecret = await encryption.encrypt(secret);
+      if (!encryptedSecret || typeof encryptedSecret !== 'object') fail('PLATFORM_MFA_ENCRYPTION_FAILED', 503);
+      await store.savePendingEnrollment({
+        adminId, encryptedSecret, expiresAt: now() + ENROLLMENT_TTL_SECONDS
+      });
+      const label = encodeURIComponent(issuer + ':' + account);
+      const query = new URLSearchParams({
+        secret: encoded, issuer, algorithm: 'SHA1', digits: String(CODE_DIGITS), period: String(STEP_SECONDS)
+      });
+      return Object.freeze({ secret: encoded, otpauthUrl: 'otpauth://totp/' + label + '?' + query.toString() });
+    } finally {
+      secret.fill(0);
+    }
   }
 
   async function confirmEnrollment({ adminId, code }) {
@@ -137,15 +141,19 @@ function createPlatformMfaService({
       fail('PLATFORM_MFA_ENROLLMENT_EXPIRED', 410);
     }
     const secret = await encryption.decrypt(pending.encryptedSecret);
-    const counter = verifyTotp(secret, code, now());
-    if (counter === null) fail('PLATFORM_MFA_CODE_INVALID', 401);
-    const recoveryCodes = Array.from({ length: RECOVERY_CODE_COUNT }, () => {
-      const raw = randomBytes(6).toString('hex').toUpperCase();
-      return raw.slice(0, 4) + '-' + raw.slice(4, 8) + '-' + raw.slice(8, 12);
-    });
-    const recoveryCodeHashes = recoveryCodes.map(value => hashRecoveryCode(value, recoveryCodePepper));
-    await store.activateFactor({ adminId, encryptedSecret: pending.encryptedSecret, lastTotpCounter: counter, recoveryCodeHashes });
-    return Object.freeze({ enabled: true, recoveryCodes: Object.freeze(recoveryCodes) });
+    try {
+      const counter = verifyTotp(secret, code, now());
+      if (counter === null) fail('PLATFORM_MFA_CODE_INVALID', 401);
+      const recoveryCodes = Array.from({ length: RECOVERY_CODE_COUNT }, () => {
+        const raw = randomBytes(6).toString('hex').toUpperCase();
+        return raw.slice(0, 4) + '-' + raw.slice(4, 8) + '-' + raw.slice(8, 12);
+      });
+      const recoveryCodeHashes = recoveryCodes.map(value => hashRecoveryCode(value, recoveryCodePepper));
+      await store.activateFactor({ adminId, encryptedSecret: pending.encryptedSecret, lastTotpCounter: counter, recoveryCodeHashes });
+      return Object.freeze({ enabled: true, recoveryCodes: Object.freeze(recoveryCodes) });
+    } finally {
+      if (Buffer.isBuffer(secret)) secret.fill(0);
+    }
   }
 
   async function verify({ adminId, code }) {
@@ -154,19 +162,23 @@ function createPlatformMfaService({
     const factor = await store.getFactor(adminId);
     if (!factor || factor.enabled !== true) fail('PLATFORM_MFA_NOT_ENROLLED', 403);
     const secret = await decryptFactor(factor);
-    const counter = verifyTotp(secret, code, now());
-    if (counter !== null) {
-      const consumed = await store.consumeTotpCounter({ adminId, counter });
-      if (consumed !== true) fail('PLATFORM_MFA_CODE_REPLAYED', 401);
-      return Object.freeze({ verified: true, method: 'totp', verifiedAt: now() });
+    try {
+      const counter = verifyTotp(secret, code, now());
+      if (counter !== null) {
+        const consumed = await store.consumeTotpCounter({ adminId, counter });
+        if (consumed !== true) fail('PLATFORM_MFA_CODE_REPLAYED', 401);
+        return Object.freeze({ verified: true, method: 'totp', verifiedAt: now() });
+      }
+      if (/^[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(code)) {
+        const consumed = await store.consumeRecoveryCode({
+          adminId, codeHash: hashRecoveryCode(code, recoveryCodePepper)
+        });
+        if (consumed === true) return Object.freeze({ verified: true, method: 'recovery', verifiedAt: now() });
+      }
+      fail('PLATFORM_MFA_CODE_INVALID', 401);
+    } finally {
+      secret.fill(0);
     }
-    if (/^[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(code)) {
-      const consumed = await store.consumeRecoveryCode({
-        adminId, codeHash: hashRecoveryCode(code, recoveryCodePepper)
-      });
-      if (consumed === true) return Object.freeze({ verified: true, method: 'recovery', verifiedAt: now() });
-    }
-    fail('PLATFORM_MFA_CODE_INVALID', 401);
   }
 
   return Object.freeze({ beginEnrollment, confirmEnrollment, verify });
