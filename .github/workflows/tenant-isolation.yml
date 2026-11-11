@@ -109,6 +109,13 @@ jobs:
         run: |
           mariadb --protocol=tcp --host="$DB_HOST" --port="$DB_PORT" --user="$DB_USER" --password="$DB_PASSWORD" < db/schema.sql
           node server/seed.js core
+      - name: Verify isolated product read APIs against MariaDB schemas
+        env:
+          DB_HOST: 127.0.0.1
+          DB_PORT: 3306
+          DB_USER: root
+          DB_PASSWORD: house-api-test-root
+        run: npm run test:product-read-mariadb
       - name: Start Express 5 API and run end-to-end regression
         env:
           NODE_ENV: test
