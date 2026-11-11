@@ -166,12 +166,14 @@ async function main() {
       assert.equal(missingBuilding.status, 404, appId + ' missing building');
 
       failCommitAudit = true;
-      const auditFailureRoom = { ...room, room_no: room.room_no + '-audit-failure' };
+      const auditFailureRoom = { ...room, room_no: 'CI-AUD-' + appId.toUpperCase() };
       const auditFailure = await post(base, auditFailureRoom, 'ci-room-audit-failure-' + appId);
       assert.equal(auditFailure.status, 500, appId + ' audit failure status');
       failCommitAudit = false;
       const [[rolledBackRows]] = await pool.query('SELECT COUNT(*) AS total FROM rooms WHERE room_no = ?', [auditFailureRoom.room_no]);
       assert.equal(Number(rolledBackRows.total), 0, appId + ' audit failure rollback');
+      const [[idemRows]] = await pool.query('SELECT COUNT(*) AS total FROM tenant_write_idempotency WHERE request_id = ?', ['ci-room-audit-failure-' + appId]);
+      assert.equal(Number(idemRows.total), 0, appId + ' audit failure idempotency rollback');
 
       if (appId === 'property') {
         const noOwner = await post(base, { ...room, room_no: 'CI-P-NO-OWNER', owner_id: 999999 }, 'ci-room-missing-owner-property');
