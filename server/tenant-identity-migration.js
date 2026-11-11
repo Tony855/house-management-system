@@ -38,6 +38,7 @@ function normalizeTenantIdentity({ appId, tenantId, sourceOrgId, snapshot }) {
   const settingRows = snapshot.settings.filter(r => Number(r.org_id) === sourceOrgId);
   if (settingRows.length !== 1) throw new Error('TENANT_IDENTITY_MIGRATION_SETTINGS_INVALID');
   const settings = settingRows.map(({ org_id: _org, ...r }) => r);
+  rolePermissions.sort((a, b) => a.role_id - b.role_id || a.page.localeCompare(b.page));
   const tables = { users, roles: cleanRoles, settings, user_permissions: userPermissions, role_permissions: rolePermissions };
   const manifest = Object.fromEntries(TABLES.map(t => [t, { rowCount: tables[t].length, sha256: digest(tables[t]) }]));
   return { tables, manifest, revokedLegacySessions: Number(snapshot.legacySessionCount || 0) };
