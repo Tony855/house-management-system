@@ -73,3 +73,21 @@ test('tenant repository fails closed for invalid app and missing pool', () => {
   assert.throws(() => createTenantRepository({ pool: fakePool(), appId: 'platform' }), /TENANT_REPOSITORY_APP_INVALID/);
   assert.throws(() => createTenantRepository({ pool: {}, appId: 'rental' }), /TENANT_REPOSITORY_POOL_REQUIRED/);
 });
+
+test('tenant repository rejects unreviewed and sensitive columns in reads, filters and writes', async () => {
+  const pool = fakePool();
+  const repo = createTenantRepository({ pool, appId: 'rental' });
+  await assert.rejects(repo.list('tenants', { columns: ['id', 'id_card'] }), /TENANT_COLUMN_NOT_ALLOWED/);
+  await assert.rejects(repo.list('rooms', { filters: { password: 'x' } }), /TENANT_COLUMN_NOT_ALLOWED/);
+  await assert.rejects(repo.insert('tenants', { id_card: 'passport-number' }), /TENANT_COLUMN_NOT_ALLOWED/);
+  await assert.rejects(repo.updateById('rooms', 1, { org_id: 999 }), /TENANT_COLUMN_NOT_ALLOWED/);
+  assert.equal(pool.calls.length, 0);
+});
+
+test('tenant repository defaults to explicit reviewed columns and never selects wildcard', async () => {
+  const pool = fakePool();
+  const repo = createTenantRepository({ pool, appId: 'property' });
+  await repo.list('org_employees', { limit: 5 });
+  assert.match(pool.calls[0].sql, /^SELECT `id`, `company`, `owner_id`, `room_id`, `name`, `phone`, `department`, `position`, `remark`, `created_at` FROM/);
+  assert.doesNotMatch(pool.calls[0].sql, /SELECT \*/);
+});
