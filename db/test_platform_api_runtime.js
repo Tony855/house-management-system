@@ -12,7 +12,7 @@ function options(overrides = {}) {
     getConnection: async () => { throw new Error('not used'); },
     end: async function () { this.ended++; }
   };
-  return {
+  const config = {
     env: {
       PLATFORM_DB_HOST: '127.0.0.1', PLATFORM_DB_NAME: 'platform_control',
       PLATFORM_DB_USER: 'platform_api', PLATFORM_DB_PASSWORD: 'strong-db-password',
@@ -28,10 +28,11 @@ function options(overrides = {}) {
     signingKeyProvider: { getSigningKey: async () => ({ kid: 'platform-key-1', key: 'platform-signing-key-at-least-32-bytes-long' }) },
     verificationKeyProvider: { getVerificationKey: async () => 'platform-signing-key-at-least-32-bytes-long' },
     issuer: 'https://platform.example.test',
-    get poolConfig() { return poolConfig; },
     pool,
     ...overrides
   };
+  Object.defineProperty(config, 'poolConfig', { get: () => poolConfig });
+  return config;
 }
 
 test('platform runtime composes a dedicated DB, MFA and admin auth without legacy fallback', async () => {
