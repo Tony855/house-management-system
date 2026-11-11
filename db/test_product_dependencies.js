@@ -36,7 +36,7 @@ test('product dependency composition refuses incomplete control-plane integratio
 });
 
 test('product dependencies wire login only with a dedicated signing key issuer', () => {
-  const pool = { query: async () => [[], []] };
+  const pool = { query: async () => [[], []], getConnection: async () => ({ beginTransaction: async () => {}, query: async () => [[], []], commit: async () => {}, rollback: async () => {}, release: () => {} }) };
   const dependencies = createProductControlPlaneDependencies({
     appId: 'hotel',
     issuer: 'https://auth.example.test',
