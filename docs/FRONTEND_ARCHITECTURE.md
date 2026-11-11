@@ -42,5 +42,5 @@ packages/
 - Node.js 24 LTS is the current compatibility baseline for this branch.
 - Bootstrap CSS is pinned to 5.3.8; Bootstrap Icons to 1.13.2.
 - npm and GitHub Actions updates are managed by Dependabot against this refactor branch.
-- Express 4 to Express 5 is a major migration and must be validated with API regression tests before its lockfile update is accepted. The official migration guide documents breaking changes: https://expressjs.com/en/guide/migrating-5/
+- Express 5.3.x is the server framework baseline; the migration audit found no legacy `req.param`, wildcard route, `res.send(status)`, or `sendfile` usages. API integration and MariaDB-backed route tests remain mandatory before production cutover. The official migration guide documents breaking changes: https://expressjs.com/en/guide/migrating-5/
 - Do not run blind major upgrades or commit a package manifest without a matching lockfile.
