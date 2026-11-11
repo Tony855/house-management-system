@@ -33,7 +33,8 @@ async function provisionTenant({
   const dbName = tenantDatabaseName(appId, tenantId);
   const dbUser = tenantDatabaseUser(tenantId);
   const secretRef = 'tenant-db/' + tenantId;
-  const password = crypto.randomBytes(32).toString('base64url');
+  const passwordBytes = crypto.randomBytes(32);
+  const password = passwordBytes.toString('base64url');
   const record = {
     tenant_uuid: tenantId, app_id: appId, display_label: displayLabel.trim(),
     lifecycle_state: 'provisioning', db_host: databaseAdmin.host,
@@ -59,7 +60,7 @@ async function provisionTenant({
     await audit({ tenantId, event: 'provisioning_failed', code: error.code || 'PROVISIONING_FAILED' });
     throw error;
   } finally {
-    password.replace(/./g, '\\0');
+    passwordBytes.fill(0);
   }
 }
 
