@@ -100,7 +100,7 @@ test('product route receives only the pool resolved from verified tenant identit
       router.get('/tenant-data', (req, res) => res.json({ database: req.tenantDb.config?.database || req.tenantDb.database }));
       return router;
     },
-    poolManager: { getPool: async context => ({ database: context.db.database }) }
+    poolManager: { getPool: async context => ({ database: context.db.database, execute: async () => [[], {}] }) }
   });
   await withServer(app, async base => {
     const response = await fetch(base + '/api/tenant-data', { headers: { 'x-tenant-id': 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' } });
