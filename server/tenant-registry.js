@@ -51,7 +51,8 @@ async function resolveTenantContext({ auth, appId, registry, secretProvider }) {
       port: Number(tenant.db_port),
       database: tenant.db_name,
       user: credentials.user,
-      password: credentials.password
+      password: credentials.password,
+      credentialVersion: String(credentials.version || credentials.updatedAt || '')
     }),
     schemaVersion: tenant.schema_version || null
   });
