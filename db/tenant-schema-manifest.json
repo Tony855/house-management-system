@@ -63,10 +63,17 @@
   "migrationRules": {
     "tenantBoundary": "one database per tenant, one database principal per tenant",
     "orgId": "remove org_id from destination tenant tables only after source filtering and reconciliation",
-    "sessions": "revoke all legacy sessions; require fresh login",
-    "userIdentity": "copy tenant users/roles/permissions into that tenant database; never globally deduplicate",
+    "sessions": "never copy legacy sessions; revoke all and require fresh login through platform_product_sessions",
+    "userIdentity": "copy users for source org and product; include referenced tenant roles and global defaults; merge effective role permissions; never globally deduplicate",
     "platformIdentity": "extract only verified super-admin accounts to platform_admins",
     "files": "copy each org upload tree into tenant-specific storage and verify checksums",
     "legacyCutover": "expand-copy-verify-switch-contract; no uncontrolled dual writes"
-  }
+  },
+  "tenantIdentityTables": [
+    "users",
+    "roles",
+    "settings",
+    "user_permissions",
+    "role_permissions"
+  ]
 }
