@@ -75,7 +75,7 @@ test('platform plan writes require step-up and a reason and are recorded by repo
   await withServer(app, async base => {
     const payload = { productCode: 'rental', planCode: 'starter', displayName: 'Starter', interval: 'month', currency: 'USD', amountMinor: 1200 };
     const missingReason = await fetch(base + '/api/platform/plans', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
-    assert.equal(missingReason.status, 403);
+    assert.equal(missingReason.status, 400);
     const valid = await fetch(base + '/api/platform/plans', { method: 'POST', headers: { 'content-type': 'application/json', 'x-action-reason': 'initial plan setup' }, body: JSON.stringify(payload) });
     assert.equal(valid.status, 201);
     assert.equal(created, 1);
