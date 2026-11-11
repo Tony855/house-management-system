@@ -161,3 +161,16 @@ The CI legacy MariaDB integration now creates an ephemeral tenant database, clon
 - The current npm registry latest tags remain Express 5.3.0 and mysql2 3.24.6; the lockfile already resolves those releases, so no speculative package bump was made.
 - CI now runs the complete Node test suite and production dependency audit on both supported LTS lines (Node 24.22.2 and Node 26.13.0). The MariaDB API integration remains pinned to Node 24.22.2 until the Node 26 matrix proves compatibility.
 - Runtime support remains constrained to Node >=24 and <27. Major-version upgrades beyond that range require a separate compatibility and deployment rehearsal.
+
+
+### Product-specific room creation endpoints
+
+- Rental, Hotel and Property now each mount a distinct `POST /api/rooms` route under the authenticated product API boundary.
+- Hotel accepts hotel-only daily pricing and booking/cleaning statuses; Property accepts property fees, utility prices and an optional owner reference. Each product rejects fields belonging to another product.
+- Each route requires the injected tenant write service, operation reason, step-up token and idempotency key. It locks the building, rejects duplicate room numbers and validates Property owner references within the tenant database transaction.
+- The route modules do not enable writes by themselves. Production remains fail-closed until the API process is supplied with real authorization, step-up, audit and MariaDB idempotency adapters. Current unit tests cover DTO contracts; real three-product MariaDB write integration remains a release gate.
+
+### Dependency maintenance
+
+- Dependabot is already configured for weekly npm and GitHub Actions updates on the independent refactor branch, with a bounded pull-request queue.
+- CI validates the locked dependency graph on Node.js 24 and 26 and runs the production dependency audit. Dependency updates still require CI and security review before merge.
