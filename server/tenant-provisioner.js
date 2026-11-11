@@ -15,16 +15,19 @@ function tenantDatabaseUser(tenantId) {
   return 't_' + tenantId.replace(/-/g, '').slice(0, 24);
 }
 
+async function safeAudit(audit, event) {
+  try { await audit(event); } catch (_) { /* preserve the provisioning result; audit adapter must alert independently */ }
+}
+
 /**
- * High-privilege adapter boundary. This module never embeds DB admin credentials.
- * Implementations of databaseAdmin/secretStore must be provided by the platform
- * deployment using a secret manager and a restricted provisioning identity.
+ * High-privilege adapter boundary. Cleanup runs in reverse order on partial failure.
+ * A failed cleanup is surfaced in the audit event; the tenant stays non-active.
  */
 async function provisionTenant({
   appId, displayLabel, registry, databaseAdmin, secretStore, migrationRunner,
   isolationVerifier, audit = async () => {}, tenantId = crypto.randomUUID()
 }) {
-  if (!APP_IDS.has(appId) || typeof displayLabel !== 'string' || !displayLabel.trim()) {
+  if (!APP_IDS.has(appId) || typeof displayLabel !== 'string' || !displayLabel.trim() || !UUID_RE.test(tenantId)) {
     throw new Error('TENANT_PROVISIONING_INPUT_INVALID');
   }
   for (const [name, adapter] of Object.entries({ registry, databaseAdmin, secretStore, migrationRunner, isolationVerifier })) {
@@ -41,23 +44,63 @@ async function provisionTenant({
     db_port: Number(databaseAdmin.port || 3306), db_name: dbName,
     db_secret_ref: secretRef, schema_version: null
   };
+  let registryCreated = false;
+  let databaseCreated = false;
+  let principalCreated = false;
+  let secretCreated = false;
 
-  await registry.createProvisioningTenant(record);
-  await audit({ tenantId, event: 'provisioning_started' });
   try {
+    await registry.createProvisioningTenant(record);
+    registryCreated = true;
+    await safeAudit(audit, { tenantId, event: 'provisioning_started' });
+
     await databaseAdmin.createDatabase(dbName);
+    databaseCreated = true;
     await databaseAdmin.createPrincipal(dbUser, password);
+    principalCreated = true;
     await databaseAdmin.grantDatabaseOnly(dbUser, dbName);
     await secretStore.put(secretRef, { user: dbUser, password });
+    secretCreated = true;
     await migrationRunner.apply({ appId, tenantId, dbName, secretRef });
     const verification = await isolationVerifier.verify({ appId, tenantId, dbName, dbUser });
     if (!verification || verification.passed !== true) throw new Error('TENANT_ISOLATION_VERIFICATION_FAILED');
+
     await registry.activateTenant(tenantId, { schemaVersion: verification.schemaVersion || null });
-    await audit({ tenantId, event: 'provisioning_succeeded' });
+    await safeAudit(audit, { tenantId, event: 'provisioning_succeeded' });
     return { tenantId, appId, lifecycleState: 'active', schemaVersion: verification.schemaVersion || null };
   } catch (error) {
-    await registry.markProvisioningFailed(tenantId, error.code || 'PROVISIONING_FAILED');
-    await audit({ tenantId, event: 'provisioning_failed', code: error.code || 'PROVISIONING_FAILED' });
+    const cleanupFailures = [];
+    const cleanup = async (label, operation) => {
+      try { await operation(); } catch (_) { cleanupFailures.push(label); }
+    };
+
+    if (secretCreated && typeof secretStore.delete === 'function') {
+      await cleanup('secret', () => secretStore.delete(secretRef));
+    }
+    if (principalCreated && typeof databaseAdmin.dropPrincipal === 'function') {
+      await cleanup('principal', () => databaseAdmin.dropPrincipal(dbUser));
+    }
+    if (databaseCreated && typeof databaseAdmin.dropDatabase === 'function') {
+      await cleanup('database', () => databaseAdmin.dropDatabase(dbName));
+    }
+
+    if (registryCreated) {
+      try {
+        await registry.markProvisioningFailed(tenantId, error.code || 'PROVISIONING_FAILED');
+      } catch (_) {
+        cleanupFailures.push('registry_state');
+      }
+    }
+    await safeAudit(audit, {
+      tenantId,
+      event: 'provisioning_failed',
+      code: error.code || 'PROVISIONING_FAILED',
+      cleanupFailures
+    });
+    if (cleanupFailures.length) {
+      error.cleanupFailures = cleanupFailures;
+      error.code = error.code || 'PROVISIONING_FAILED_CLEANUP_INCOMPLETE';
+    }
     throw error;
   } finally {
     passwordBytes.fill(0);
