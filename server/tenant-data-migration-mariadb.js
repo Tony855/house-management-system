@@ -54,7 +54,12 @@ function createMariaDbTenantMigrationAdapters({ appId, sourcePool, targetPool })
         throw new Error('TENANT_DATA_MIGRATION_TARGET_TABLE_SET_MISMATCH');
       }
       const connection = await targetPool.getConnection();
+      const lockName = 'tenant-migrate-' + tenantId;
+      let lockAcquired = false;
       try {
+        const [lockRows] = await connection.execute('SELECT GET_LOCK(?, 10) AS acquired', [lockName]);
+        if (Number(lockRows[0]?.acquired) !== 1) throw new Error('TENANT_DATA_MIGRATION_LOCK_UNAVAILABLE');
+        lockAcquired = true;
         await connection.beginTransaction();
         // Never overwrite or append into a partially migrated tenant database.
         for (const table of tables) {
@@ -93,6 +98,9 @@ function createMariaDbTenantMigrationAdapters({ appId, sourcePool, targetPool })
         try { await connection.rollback(); } catch (rollbackError) { error.rollbackError = rollbackError; }
         throw error;
       } finally {
+        if (lockAcquired) {
+          try { await connection.execute('SELECT RELEASE_LOCK(?) AS released', [lockName]); } catch (_) { /* connection close releases advisory lock */ }
+        }
         connection.release();
       }
     }
