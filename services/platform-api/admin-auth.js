@@ -29,7 +29,7 @@ function createPlatformAdminAuthService({
   async function login({ username, password }) {
     if (typeof username !== 'string' || !/^[A-Za-z0-9_.@-]{1,80}$/.test(username) ||
         typeof password !== 'string' || password.length < 1 || password.length > 256) authError('LOGIN_INVALID', 400);
-    const identity = { username: username.toLowerCase() };
+    const identity = { appId: 'platform', host: 'platform', username: username.toLowerCase() };
     await loginRateLimiter.assertAllowed(identity);
     let admin;
     try { admin = await adminStore.findByUsername(username); }
