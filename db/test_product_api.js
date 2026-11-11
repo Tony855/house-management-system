@@ -108,3 +108,29 @@ test('product route receives only the pool resolved from verified tenant identit
     assert.deepEqual(await response.json(), { database: 'rental_a' });
   });
 });
+
+test('product API sanitizes malformed middleware errors and never emits invalid HTTP status codes', async () => {
+  const { app } = setup({
+    registry: { findTenantById: async () => { throw Object.assign(new Error('secret db host password'), { status: 200, code: 'db-secret-password' }); } }
+  });
+  await withServer(app, async base => {
+    const response = await fetch(base + '/api/tenant-context');
+    assert.equal(response.status, 503);
+    assert.deepEqual(await response.json(), { error: 'TENANT_CONTEXT_UNAVAILABLE' });
+  });
+});
+
+test('product API does not expose arbitrary error messages to clients', async () => {
+  const { app } = setup({
+    routes: () => {
+      const router = express.Router();
+      router.get('/failure', (_req, _res, next) => next(Object.assign(new Error('internal db credentials'), { status: 400 })));
+      return router;
+    }
+  });
+  await withServer(app, async base => {
+    const response = await fetch(base + '/api/failure');
+    assert.equal(response.status, 400);
+    assert.deepEqual(await response.json(), { error: 'REQUEST_FAILED' });
+  });
+});
