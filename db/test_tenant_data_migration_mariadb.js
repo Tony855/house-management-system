@@ -8,10 +8,12 @@ const { createMariaDbTenantMigrationAdapters } = require('../server/tenant-data-
 
 const APPS = ['rental', 'hotel', 'property'];
 
-async function createTenantDatabase(adminPool, config, sourceDatabase, appId, suffix) {
+async function createTenantDatabase(adminPool, config, sourceDatabase, appId, suffix, createdDatabases, targetPools) {
   const database = 'house_sys_mig_' + appId + '_' + suffix;
   await adminPool.execute('CREATE DATABASE `' + database + '` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci');
+  createdDatabases.push(database);
   const pool = mysql.createPool({ ...config, database });
+  targetPools.push(pool);
   for (const table of [...TABLES[appId]].sort()) {
     await adminPool.execute(
       'CREATE TABLE `' + database + '`.`' + table + '` LIKE `' + sourceDatabase + '`.`' + table + '`'
@@ -45,23 +47,28 @@ async function main() {
       sourcePools.push(sourcePool);
       const suffix = crypto.randomBytes(5).toString('hex');
       const sourceOrgId = crypto.randomInt(100000000, 200000000);
-      const decoyOrgId = sourceOrgId + 1;
+      const decoyOrgId = crypto.randomInt(200000001, 300000000);
       const tenantId = crypto.randomUUID();
       const tenantId2 = crypto.randomUUID();
 
-      const [insert] = await sourcePool.execute(
+      const selectedName = 'migration-' + appId + '-' + suffix;
+      const decoyName = 'decoy-' + appId + '-' + suffix;
+      await sourcePool.execute(
         'INSERT INTO `buildings` (`org_id`, `name`, `address`, `remark`) VALUES (?, ?, ?, ?), (?, ?, ?, ?)',
-        [sourceOrgId, 'migration-' + appId + '-' + suffix, 'CI fixture', 'selected org',
-         decoyOrgId, 'decoy-' + appId + '-' + suffix, 'Other org', 'must not migrate']
+        [sourceOrgId, selectedName, 'CI fixture', 'selected org',
+         decoyOrgId, decoyName, 'Other org', 'must not migrate']
       );
-      const firstId = insert.insertId;
-      const secondId = firstId + 1;
+      const [[selectedRows], [decoyRows]] = await Promise.all([
+        sourcePool.execute('SELECT `id` FROM `buildings` WHERE `org_id` = ? AND `name` = ?', [sourceOrgId, selectedName]),
+        sourcePool.execute('SELECT `id` FROM `buildings` WHERE `org_id` = ? AND `name` = ?', [decoyOrgId, decoyName])
+      ]);
+      if (selectedRows.length !== 1 || decoyRows.length !== 1) throw new Error('TENANT_MIGRATION_FIXTURE_INSERT_FAILED_' + appId);
+      const firstId = selectedRows[0].id;
+      const secondId = decoyRows[0].id;
       fixtures.push({ sourcePool, firstId, sourceOrgId }, { sourcePool, firstId: secondId, sourceOrgId: decoyOrgId });
 
-      const target = await createTenantDatabase(adminPool, config, sourceDatabase, appId, suffix + 'a');
-      const target2 = await createTenantDatabase(adminPool, config, sourceDatabase, appId, suffix + 'b');
-      createdDatabases.push(target.database, target2.database);
-      targetPools.push(target.pool, target2.pool);
+      const target = await createTenantDatabase(adminPool, config, sourceDatabase, appId, suffix + 'a', createdDatabases, targetPools);
+      const target2 = await createTenantDatabase(adminPool, config, sourceDatabase, appId, suffix + 'b', createdDatabases, targetPools);
 
       const adapters = createMariaDbTenantMigrationAdapters({ appId, sourcePool, targetPool: target.pool });
       const result = await copyTenantOrgData({
