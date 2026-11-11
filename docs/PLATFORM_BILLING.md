@@ -16,7 +16,7 @@ It does NOT own tenant users, customers, guests, owners, employee records, opera
 8. Delinquency uses a configurable grace period and explicit lifecycle state machine. Failed billing must not run destructive tenant DB actions.
 
 ## Money and currency
-- Store integer minor units (USD cents, KHR riel, KWD fils); use the ISO 4217 currency exponent.
+- Store integer minor units (USD cents, KHR sen, KWD fils); use the ISO 4217 currency exponent.
 - Every invoice, payment and refund carries an explicit ISO currency. Never mix currencies in aggregates.
 - FX, if added, must persist source/target currency, exact rate, source, quote timestamp and rounded result.
 - Tax, discount, proration and rounding policies are explicit and snapshotted on each invoice.
