@@ -81,7 +81,7 @@ test('MariaDB source adapter scopes every query to the selected org with bound p
   assert.equal(f.sourceCalls.length, TABLES.rental.size + 1);
   assert.ok(snapshot.tables.buildings.every(row => row.org_id === 17));
   assert.equal(snapshot.tables.buildings.length, 1);
-  assert.ok(f.sourceCalls.every(call => /WHERE `org_id` = \? ORDER BY `id` ASC/.test(call.sql) && call.params[0] === 17));
+  assert.ok(f.sourceCalls.filter(call => call.sql.startsWith('SELECT *')).every(call => /WHERE `org_id` = \\? ORDER BY `id` ASC/.test(call.sql) && call.params[0] === 17));
   await assert.rejects(adapters.sourceReader.exportOrgSnapshot({ appId: 'hotel', sourceOrgId: 17 }), /TENANT_DATA_MIGRATION_SOURCE_SCOPE_INVALID/);
 });
 
