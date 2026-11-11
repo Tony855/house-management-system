@@ -16,7 +16,7 @@ export MYSQL_PWD="$DB_PASSWORD"
 "${mysql_cmd[@]}" "$DB_NAME" < "$ROOT_DIR/db/migrations/platform/001_platform_tenant_registry.sql"
 "${mysql_cmd[@]}" "$DB_NAME" < "$ROOT_DIR/db/migrations/platform/002_platform_billing.sql"
 "${mysql_cmd[@]}" "$DB_NAME" < "$ROOT_DIR/db/migrations/platform/003_product_sessions.sql"
-"${mysql_cmd[@]}" "$DB_NAME" < "$ROOT_DIR/db/migrations/platform/004_tenant_login_hosts.sql"
+"${mysql_cmd[@]}" "$DB_NAME" < "$ROOT_DIR/db/migrations/platform/004_tenant_login_hosts.sql"\n"${mysql_cmd[@]}" "$DB_NAME" < "$ROOT_DIR/db/migrations/platform/005_login_attempt_rate_limit.sql"
 
 expected_tables=11
 actual_tables="$("${mysql_cmd[@]}" -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '$DB_NAME' AND table_type = 'BASE TABLE' AND table_name IN ('platform_billing_accounts','platform_products','platform_plans','platform_subscriptions','platform_invoices','platform_invoice_lines','platform_payment_transactions','platform_payment_webhook_events','platform_refunds','platform_ledger_entries','platform_billing_audit')")"
@@ -44,6 +44,10 @@ if (( fk_count < 11 )); then echo "Expected product session and billing foreign 
 test_tenant_uuid='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 login_host_table="$("${mysql_cmd[@]}" -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '$DB_NAME' AND table_name = 'platform_tenant_login_hosts' AND table_type = 'BASE TABLE'")"
 if [[ "$login_host_table" != "1" ]]; then echo "Tenant login host migration was not installed" >&2; exit 1; fi
+login_attempt_table="$("${mysql_cmd[@]}" -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '$DB_NAME' AND table_name = 'platform_login_attempts' AND table_type = 'BASE TABLE'")"
+if [[ "$login_attempt_table" != "1" ]]; then echo "Login attempt rate-limit migration was not installed" >&2; exit 1; fi
+login_hash_column="$("${mysql_cmd[@]}" -e "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = '$DB_NAME' AND table_name = 'platform_login_attempts' AND column_name = 'identity_hash' AND character_maximum_length = 64")"
+if [[ "$login_hash_column" != "1" ]]; then echo "Privacy-preserving login identity hash column was not installed" >&2; exit 1; fi
 
 test_session_id='ci-product-session-revocation-0001'
 "${mysql_cmd[@]}" "$DB_NAME" -e "INSERT INTO platform_tenants (tenant_uuid, app_id, display_label, lifecycle_state, db_host, db_port, db_name, db_secret_ref) VALUES ('$test_tenant_uuid', 'rental', 'CI tenant', 'active', '127.0.0.1', 3306, 'ci_tenant_db', 'ci/tenant/db')"
@@ -68,3 +72,5 @@ if [[ "$revoked_session" != "0" ]]; then
   exit 1
 fi
 echo "Platform registry + billing + product session MariaDB migrations passed: $actual_tables billing tables, $fk_count foreign keys."
+
+echo "Platform login attempt rate-limit schema verified."
