@@ -125,6 +125,7 @@ function createPlatformAdminAuthService({
       const current = now();
       if (claims.iss !== issuer || claims.aud !== 'platform' || claims.appId !== 'platform' ||
           typeof claims.sub !== 'string' || !/^\d+$/.test(claims.sub) ||
+          !Number.isSafeInteger(Number(claims.sub)) || Number(claims.sub) < 1 ||
           typeof claims.jti !== 'string' || claims.jti.length < 40 ||
           !Number.isSafeInteger(claims.iat) || !Number.isSafeInteger(claims.exp) ||
           claims.iat > current + 30 || claims.exp <= current || claims.exp <= claims.iat ||
