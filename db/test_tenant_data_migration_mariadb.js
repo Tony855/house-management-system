@@ -5,11 +5,12 @@ const mysql = require('mysql2/promise');
 const { TABLES } = require('../server/tenant-repository');
 const { copyTenantOrgData } = require('../server/tenant-data-migration');
 const { createMariaDbTenantMigrationAdapters } = require('../server/tenant-data-migration-mariadb');
+const { tenantDatabaseName } = require('../server/tenant-provisioner');
 
 const APPS = ['rental', 'hotel', 'property'];
 
-async function createTenantDatabase(adminPool, config, sourceDatabase, appId, suffix, createdDatabases, targetPools) {
-  const database = 'house_sys_mig_' + appId + '_' + suffix;
+async function createTenantDatabase(adminPool, config, sourceDatabase, appId, tenantId, createdDatabases, targetPools) {
+  const database = tenantDatabaseName(appId, tenantId);
   await adminPool.execute('CREATE DATABASE `' + database + '` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci');
   createdDatabases.push(database);
   const pool = mysql.createPool({ ...config, database });
@@ -79,8 +80,8 @@ async function main() {
       const secondId = decoyRows[0].id;
       fixtures.push({ sourcePool, firstId, sourceOrgId }, { sourcePool, firstId: secondId, sourceOrgId: decoyOrgId });
 
-      const target = await createTenantDatabase(adminPool, config, sourceDatabase, appId, suffix + 'a', createdDatabases, targetPools);
-      const target2 = await createTenantDatabase(adminPool, config, sourceDatabase, appId, suffix + 'b', createdDatabases, targetPools);
+      const target = await createTenantDatabase(adminPool, config, sourceDatabase, appId, tenantId, createdDatabases, targetPools);
+      const target2 = await createTenantDatabase(adminPool, config, sourceDatabase, appId, tenantId2, createdDatabases, targetPools);
 
       const adapters = createMariaDbTenantMigrationAdapters({ appId, sourcePool, targetPool: target.pool });
       const result = await copyTenantOrgData({
