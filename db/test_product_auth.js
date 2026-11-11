@@ -87,3 +87,31 @@ test('fails closed when verification keys or session store are unavailable', asy
 test('requires explicit key and revocation adapters at construction', () => {
   assert.throws(() => createProductAuthenticator({ appId: 'rental', issuer: 'issuer' }), /PRODUCT_AUTH_KEY_PROVIDER_REQUIRED/);
 });
+
+
+test('same username subject remains isolated by tenant-bound platform sessions', async () => {
+  const secondTenant = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+  const active = new Set([
+    ['user-1', tenantId, 'session-identifier-1234'].join(':'),
+    ['user-1', secondTenant, 'session-identifier-5678'].join(':')
+  ]);
+  const { authenticate } = setup({
+    sessionStore: {
+      isSessionActive: async ({ userId, tenantId: scopedTenant, sessionId, appId }) =>
+        appId === 'rental' && active.has([userId, scopedTenant, sessionId].join(':'))
+    }
+  });
+  const first = await invoke(authenticate, 'Bearer ' + token());
+  const second = await invoke(authenticate, 'Bearer ' + token({
+    tenantId: secondTenant, jti: 'session-identifier-5678'
+  }));
+  assert.equal(first.error, null);
+  assert.equal(second.error, null);
+  assert.equal(first.req.auth.userId, second.req.auth.userId);
+  assert.notEqual(first.req.auth.tenantId, second.req.auth.tenantId);
+
+  const swapped = await invoke(authenticate, 'Bearer ' + token({
+    tenantId: secondTenant, jti: 'session-identifier-1234'
+  }));
+  assert.equal(swapped.error.code, 'SESSION_REVOKED');
+});
