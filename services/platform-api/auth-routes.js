@@ -2,7 +2,7 @@
 
 const express = require('express');
 
-function createPlatformAuthRouter({ authService, mfaService, auditStore }) {
+function createPlatformAuthRouter({ authService, mfaService, auditStore, adminStore }) {
   if (!authService || !['login', 'verifyChallenge', 'authenticate', 'stepUp', 'logout']
     .every(method => typeof authService[method] === 'function')) throw new TypeError('PLATFORM_ADMIN_AUTH_SERVICE_REQUIRED');
   if (!mfaService || !['beginEnrollment', 'confirmEnrollment', 'getStatus', 'rotateRecoveryCodes']
@@ -80,6 +80,31 @@ function createPlatformAuthRouter({ authService, mfaService, auditStore }) {
       await audit(req, 'admin.logout', 'success');
       res.status(204).end();
     } catch (error) { next(error); }
+  });
+  router.post('/admins/:adminId/disable', authService.authenticate, (req, _res, next) => {
+    if (!req.platformAuth?.permissions?.includes('platform:admins:write') ||
+        req.platformAuth.stepUpVerified !== true) {
+      return next(Object.assign(new Error('PLATFORM_ADMIN_STEP_UP_REQUIRED'), {
+        code: 'PLATFORM_ADMIN_STEP_UP_REQUIRED', status: 403
+      }));
+    }
+    return next();
+  }, async (req, res, next) => {
+    try {
+      const targetAdminId = Number(req.params.adminId);
+      if (!Number.isSafeInteger(targetAdminId) || targetAdminId < 1) {
+        return next(Object.assign(new Error('PLATFORM_ADMIN_ID_INVALID'), { code: 'PLATFORM_ADMIN_ID_INVALID', status: 400 }));
+      }
+      if (!adminStore || typeof adminStore.disableAdmin !== 'function') {
+        return next(Object.assign(new Error('PLATFORM_ADMIN_MANAGEMENT_UNAVAILABLE'), { code: 'PLATFORM_ADMIN_MANAGEMENT_UNAVAILABLE', status: 503 }));
+      }
+      const disabled = await adminStore.disableAdmin({ actorAdminId: req.platformAuth.adminId, targetAdminId });
+      if (disabled !== true) {
+        return next(Object.assign(new Error('PLATFORM_ADMIN_DISABLE_REJECTED'), { code: 'PLATFORM_ADMIN_DISABLE_REJECTED', status: 409 }));
+      }
+      await audit(req, 'admin.disable', 'success');
+      return res.status(204).end();
+    } catch (error) { return next(error); }
   });
   return router;
 }
