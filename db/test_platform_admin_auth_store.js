@@ -158,3 +158,31 @@ test('MFA reset rejects self-reset, invalid reason and inactive target before ch
     actorAdminId: 7, targetAdminId: 8, sessionId: 'session-id-1234567890', reason: 'valid reset reason'
   }), false);
 });
+
+
+test('MFA reset rolls back factor, recovery, enrollment and session changes if audit persistence fails', async () => {
+  const calls = [];
+  const failure = new Error('audit unavailable');
+  const connection = {
+    beginTransaction: async () => calls.push('begin'),
+    query: async (sql) => {
+      calls.push(sql);
+      if (sql.startsWith('SELECT id FROM platform_admins')) return [[{ id: 8 }], []];
+      if (sql.startsWith('INSERT INTO platform_admin_audit_events')) throw failure;
+      return [{ affectedRows: 1 }, []];
+    },
+    commit: async () => calls.push('commit'),
+    rollback: async () => calls.push('rollback'),
+    release: () => calls.push('release')
+  };
+  const store = createPlatformAdminAuthStore({
+    query: async () => [[], []], getConnection: async () => connection
+  });
+  await assert.rejects(store.resetAdminMfa({
+    actorAdminId: 7, targetAdminId: 8, sessionId: 'session-id-1234567890',
+    reason: 'Lost authenticator device'
+  }), error => error === failure);
+  assert.equal(calls.includes('rollback'), true);
+  assert.equal(calls.includes('commit'), false);
+  assert.equal(calls.at(-1), 'release');
+});
