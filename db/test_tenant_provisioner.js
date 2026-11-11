@@ -28,11 +28,12 @@ test('tenant is activated only after database grants, migrations and isolation v
     },
     secretStore: { put: async () => calls.push(['secret']) },
     migrationRunner: { apply: async () => calls.push(['migrate']) },
-    isolationVerifier: { verify: async () => { calls.push(['verify']); return { passed: true, schemaVersion: 'v1' }; } }
+    isolationVerifier: { verify: async () => { calls.push(['verify']); return { passed: true, schemaVersion: 'v1' }; } },
+    audit: async event => calls.push(['audit', event.event])
   };
   const result = await provisionTenant({ appId: 'hotel', displayLabel: 'Hotel A', tenantId: id, ...adapters });
   assert.equal(result.lifecycleState, 'active');
-  assert.deepEqual(calls.map(x => x[0]), ['create', 'database', 'principal', 'grant', 'secret', 'migrate', 'verify', 'activate']);
+  assert.deepEqual(calls.map(x => x[0]), ['create', 'audit', 'database', 'principal', 'grant', 'secret', 'migrate', 'verify', 'audit', 'activate']);
 });
 
 test('failed isolation verification never activates tenant', async () => {
@@ -50,7 +51,8 @@ test('failed isolation verification never activates tenant', async () => {
     },
     secretStore: { put: async () => {} },
     migrationRunner: { apply: async () => {} },
-    isolationVerifier: { verify: async () => ({ passed: false }) }
+    isolationVerifier: { verify: async () => ({ passed: false }) },
+    audit: async () => {}
   }), /TENANT_ISOLATION_VERIFICATION_FAILED/);
   assert.equal(activated, false);
   assert.equal(failed, true);
@@ -118,4 +120,63 @@ test('failed cleanup is surfaced without activating tenant or masking original e
   });
   assert.equal(failedState, true);
   assert.deepEqual(auditFailure.cleanupFailures, ['principal']);
+});
+
+test('audit persistence failure prevents activation and reports failure-audit outage', async () => {
+  let activated = false;
+  let failed = false;
+  let dbDropped = false;
+  await assert.rejects(provisionTenant({
+    appId: 'rental', displayLabel: 'Audit guarded', tenantId: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+    registry: {
+      createProvisioningTenant: async () => {},
+      activateTenant: async () => { activated = true; },
+      markProvisioningFailed: async () => { failed = true; }
+    },
+    databaseAdmin: {
+      host: 'db.internal',
+      createDatabase: async () => {},
+      createPrincipal: async () => {},
+      grantDatabaseOnly: async () => {},
+      dropPrincipal: async () => {},
+      dropDatabase: async () => { dbDropped = true; }
+    },
+    secretStore: { put: async () => {}, delete: async () => {} },
+    migrationRunner: { apply: async () => {} },
+    isolationVerifier: { verify: async () => ({ passed: true, schemaVersion: 'v1' }) },
+    audit: async event => {
+      if (event.event === 'provisioning_verified') throw new Error('AUDIT_DB_UNAVAILABLE');
+      if (event.event === 'provisioning_failed') throw new Error('AUDIT_DB_UNAVAILABLE');
+    }
+  }), error => {
+    assert.match(error.message, /AUDIT_DB_UNAVAILABLE/);
+    assert.equal(error.auditFailure, 'AUDIT_DB_UNAVAILABLE');
+    assert.ok(error.cleanupFailures.includes('audit'));
+    return true;
+  });
+  assert.equal(activated, false);
+  assert.equal(failed, true);
+  assert.equal(dbDropped, true);
+});
+
+test('resource creation timeout still triggers deterministic cleanup attempt', async () => {
+  let dropAttempted = false;
+  await assert.rejects(provisionTenant({
+    appId: 'hotel', displayLabel: 'Timeout cleanup', tenantId: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
+    registry: {
+      createProvisioningTenant: async () => {},
+      activateTenant: async () => { throw new Error('must not activate'); },
+      markProvisioningFailed: async () => {}
+    },
+    databaseAdmin: {
+      host: 'db.internal',
+      createDatabase: async () => { throw new Error('REMOTE_CREATED_BUT_CLIENT_TIMED_OUT'); },
+      dropDatabase: async () => { dropAttempted = true; }
+    },
+    secretStore: { put: async () => {} },
+    migrationRunner: { apply: async () => {} },
+    isolationVerifier: { verify: async () => ({ passed: true }) },
+    audit: async () => {}
+  }), /REMOTE_CREATED_BUT_CLIENT_TIMED_OUT/);
+  assert.equal(dropAttempted, true);
 });
