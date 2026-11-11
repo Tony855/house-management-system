@@ -2,7 +2,20 @@
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const REQUEST_ID_RE = /^[A-Za-z0-9._:-]{16,128}$/;
-const FINGERPRINT_RE = /^[a-f0-9]{64}$/;
+function canonicalPayload(value, depth = 0) {
+  if (depth > 20) throw writeError('TENANT_WRITE_PAYLOAD_INVALID', 400);
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') return value;
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (Array.isArray(value)) return value.map(item => canonicalPayload(item, depth + 1));
+  if (!value || typeof value !== 'object' || (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null)) throw writeError('TENANT_WRITE_PAYLOAD_INVALID', 400);
+  return Object.fromEntries(Object.keys(value).sort().map(key => [key, canonicalPayload(value[key], depth + 1)]));
+}
+function fingerprintPayload(payload) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw writeError('TENANT_WRITE_PAYLOAD_INVALID', 400);
+  const serialized = JSON.stringify(canonicalPayload(payload));
+  if (serialized.length > 262144) throw writeError('TENANT_WRITE_PAYLOAD_INVALID', 400);
+  return require('node:crypto').createHash('sha256').update(serialized).digest('hex');
+}
 
 function writeError(code, status) {
   return Object.assign(new Error(code), { code, status });
@@ -23,7 +36,7 @@ function createTenantWriteService({ authorize, verifyStepUp, auditWriter, idempo
   }
 
   return Object.freeze({
-    async execute({ auth, tenantContext, repository, operation, reason, stepUpToken, requestId, requestFingerprint, mutate }) {
+    async execute({ auth, tenantContext, repository, operation, reason, stepUpToken, requestId, payload, mutate }) {
       if (!auth || auth.authenticated !== true || !['rental', 'hotel', 'property'].includes(auth.appId) ||
           typeof auth.userId !== 'string' || !auth.userId || typeof auth.sessionId !== 'string' || !auth.sessionId ||
           !UUID_RE.test(auth.tenantId || '') || !tenantContext ||
@@ -33,10 +46,10 @@ function createTenantWriteService({ authorize, verifyStepUp, auditWriter, idempo
       if (!['create', 'update', 'delete'].includes(operation) ||
           typeof reason !== 'string' || reason.trim().length < 8 || reason.trim().length > 500 ||
           typeof stepUpToken !== 'string' || stepUpToken.length < 16 || stepUpToken.length > 4096 ||
-          !REQUEST_ID_RE.test(requestId || '') || !FINGERPRINT_RE.test(requestFingerprint || '') ||
-          typeof mutate !== 'function') {
+          !REQUEST_ID_RE.test(requestId || '') || typeof mutate !== 'function') {
         throw writeError('TENANT_WRITE_REQUEST_INVALID', 400);
       }
+      const requestFingerprint = fingerprintPayload(payload);
       if (!repository || typeof repository.withTransaction !== 'function') {
         throw new TypeError('TENANT_WRITE_REPOSITORY_REQUIRED');
       }
@@ -56,7 +69,7 @@ function createTenantWriteService({ authorize, verifyStepUp, auditWriter, idempo
         await auditWriter.append(tx, { ...event, event: 'tenant_write_started' });
         const execution = await idempotencyStore.execute(tx, {
           ...event, requestFingerprint
-        }, () => mutate(tx));
+        }, () => mutate(tx, payload));
         if (!execution || !['executed', 'replayed', 'conflict'].includes(execution.status)) {
           throw new TypeError('TENANT_WRITE_IDEMPOTENCY_RESULT_INVALID');
         }
@@ -72,4 +85,4 @@ function createTenantWriteService({ authorize, verifyStepUp, auditWriter, idempo
   });
 }
 
-module.exports = { createTenantWriteService };
+module.exports = { createTenantWriteService, fingerprintPayload };
