@@ -23,18 +23,22 @@ function fixture() {
   const authService = {
     login: async input => { calls.push(['login', input]); return { mfaRequired: true, challenge: 'challenge-token' }; },
     verifyChallenge: async input => { calls.push(['verify', input]); return { tokenType: 'Bearer', accessToken: 'signed-token' }; },
-    authenticate: (req, _res, next) => { req.platformAuth = { adminId: 7, sessionId: 'session-id-1234567890', mfaVerified: true, stepUpVerified: true, permissions: ['platform:admins:write'] }; next(); },
+    authenticate: (req, _res, next) => {
+      req.platformAuth = {
+        adminId: 7, sessionId: 'session-id-1234567890', mfaVerified: true,
+        stepUpVerified: true, permissions: ['platform:admins:write']
+      };
+      next();
+    },
     stepUp: async input => { calls.push(['step-up', input]); return { stepUpVerified: true }; },
     logout: async input => { calls.push(['logout', input]); return true; }
   };
-  const pool = {
-    query: async () => [[], []],
-    getConnection: async () => { throw new Error('not used'); }
-  };
-  const adminStore = { disableAdmin: async input => { calls.push(['disable-admin', input]); return true; } };\n  return { app: createPlatformApi({ pool, adminAuthService: authService, mfaService, adminStore }), calls };
+  const pool = { query: async () => [[], []], getConnection: async () => { throw new Error('not used'); } };
+  const adminStore = { disableAdmin: async input => { calls.push(['disable-admin', input]); return true; } };
+  return { app: createPlatformApi({ pool, adminAuthService: authService, mfaService, adminStore }), calls };
 }
 
-test('Platform API mounts password login, MFA challenge, step-up and logout routes', async () => {
+test('Platform API mounts password login, MFA lifecycle, step-up, admin disable and logout', async () => {
   const { app, calls } = fixture();
   await withServer(app, async base => {
     const login = await fetch(base + '/api/platform/auth/login', {
@@ -51,9 +55,7 @@ test('Platform API mounts password login, MFA challenge, step-up and logout rout
     assert.equal(verify.status, 200);
     assert.deepEqual(await verify.json(), { tokenType: 'Bearer', accessToken: 'signed-token' });
 
-    const status = await fetch(base + '/api/platform/auth/mfa/status', {
-      headers: { authorization: 'Bearer session-token' }
-    });
+    const status = await fetch(base + '/api/platform/auth/mfa/status', { headers: { authorization: 'Bearer session-token' } });
     assert.equal(status.status, 200);
     assert.deepEqual(await status.json(), { enabled: true });
 
@@ -87,15 +89,26 @@ test('Platform API mounts password login, MFA challenge, step-up and logout rout
     assert.equal(stepUp.status, 200);
     assert.equal((await stepUp.json()).stepUpVerified, true);
 
-    const disabled = await fetch(base + '/api/platform/auth/admins/8/disable', {\n      method: 'POST', headers: { authorization: 'Bearer session-token' }\n    });\n    assert.equal(disabled.status, 204);\n\n    const logout = await fetch(base + '/api/platform/auth/logout',
+    const disabled = await fetch(base + '/api/platform/auth/admins/8/disable', {
+      method: 'POST', headers: { authorization: 'Bearer session-token' }
+    });
+    assert.equal(disabled.status, 204);
+
+    const logout = await fetch(base + '/api/platform/auth/logout', {
       method: 'POST', headers: { authorization: 'Bearer session-token' }
     });
     assert.equal(logout.status, 204);
   });
-  assert.deepEqual(calls.map(call => call[0]), ['login', 'verify', 'mfa-status', 'mfa-enroll', 'mfa-confirm', 'mfa-rotate', 'step-up', 'disable-admin', 'logout']);
+  assert.deepEqual(calls.map(call => call[0]), [
+    'login', 'verify', 'mfa-status', 'mfa-enroll', 'mfa-confirm',
+    'mfa-rotate', 'step-up', 'disable-admin', 'logout'
+  ]);
   assert.deepEqual(calls[4][1], { adminId: 7, code: '123456' });
   assert.deepEqual(calls[5][1], { adminId: 7, code: '123456' });
-  assert.deepEqual(calls[6][1], { adminId: 7, sessionId: 'session-id', code: '123456' });
+  assert.deepEqual(calls[6][1], { adminId: 7, sessionId: 'session-id-1234567890', code: '123456' });
+  assert.deepEqual(calls[7][1], {
+    actorAdminId: 7, targetAdminId: 8, sessionId: 'session-id-1234567890'
+  });
 });
 
 test('Platform API requires an authenticator before it can be created', () => {
@@ -112,10 +125,12 @@ test('MFA enrollment requires a recently MFA-verified authenticated session', as
   const mfaService = {
     getStatus: async () => ({ enabled: false }),
     beginEnrollment: async () => { enrollmentCalls++; return {}; },
-    confirmEnrollment: async () => ({}),
-    rotateRecoveryCodes: async () => ({})
+    confirmEnrollment: async () => ({}), rotateRecoveryCodes: async () => ({})
   };
-  const app = createPlatformApi({ pool: { query: async () => [[], []], getConnection: async () => ({}) }, adminAuthService: authService, mfaService });
+  const app = createPlatformApi({
+    pool: { query: async () => [[], []], getConnection: async () => ({}) },
+    adminAuthService: authService, mfaService
+  });
   await withServer(app, async base => {
     const response = await fetch(base + '/api/platform/auth/mfa/enrollment', {
       method: 'POST', headers: { authorization: 'Bearer session-token' }
@@ -129,14 +144,25 @@ test('MFA enrollment requires a recently MFA-verified authenticated session', as
 test('admin disable requires fresh step-up and explicit admin-management permission', async () => {
   const authService = {
     login: async () => ({}), verifyChallenge: async () => ({}),
-    authenticate: (req, _res, next) => { req.platformAuth = { adminId: 7, sessionId: 'session-id-1234567890', permissions: [], stepUpVerified: false }; next(); },
+    authenticate: (req, _res, next) => {
+      req.platformAuth = { adminId: 7, sessionId: 'session-id-1234567890', permissions: [], stepUpVerified: false };
+      next();
+    },
     stepUp: async () => ({}), logout: async () => true
   };
-  const mfaService = { getStatus: async () => ({}), beginEnrollment: async () => ({}), confirmEnrollment: async () => ({}), rotateRecoveryCodes: async () => ({}) };
+  const mfaService = {
+    getStatus: async () => ({}), beginEnrollment: async () => ({}),
+    confirmEnrollment: async () => ({}), rotateRecoveryCodes: async () => ({})
+  };
   let called = false;
-  const app = createPlatformApi({ pool: { query: async () => [[], []] }, adminAuthService: authService, mfaService, adminStore: { disableAdmin: async () => { called = true; return true; } } });
+  const app = createPlatformApi({
+    pool: { query: async () => [[], []] }, adminAuthService: authService, mfaService,
+    adminStore: { disableAdmin: async () => { called = true; return true; } }
+  });
   await withServer(app, async base => {
-    const response = await fetch(base + '/api/platform/auth/admins/8/disable', { method: 'POST', headers: { authorization: 'Bearer token' } });
+    const response = await fetch(base + '/api/platform/auth/admins/8/disable', {
+      method: 'POST', headers: { authorization: 'Bearer token' }
+    });
     assert.equal(response.status, 403);
   });
   assert.equal(called, false);
