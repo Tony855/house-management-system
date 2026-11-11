@@ -86,7 +86,7 @@ test('MariaDB target adapter imports in one transaction without org_id and suppo
   assert.equal(result.imported, true);
   assert.equal(f.committed, true);
   assert.equal(f.rolledBack, false);
-  assert.ok(f.targetCalls[0] === 'BEGIN' && f.targetCalls.includes('COMMIT') && f.targetCalls.at(-1) === 'RELEASE');
+  assert.ok(f.targetCalls.some(call => call.startsWith('SELECT GET_LOCK')) && f.targetCalls.includes('BEGIN') && f.targetCalls.includes('COMMIT') && f.targetCalls.some(call => call.startsWith('SELECT RELEASE_LOCK')) && f.targetCalls.at(-1) === 'RELEASE');
   assert.ok(Object.values(readBack.tables).every(rows => rows.length === 1 && !Object.hasOwn(rows[0], 'org_id')));
 });
 
