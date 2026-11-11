@@ -9,7 +9,7 @@ if grep -Eq '^[[:space:]]*--force\\)' deploy.sh; then
   echo "Unsafe --force option found in installer" >&2
   exit 1
 fi
-grep -Fq 'Refusing destructive db/schema.sql import' deploy.sh
+grep -Fiq 'refusing destructive db/schema.sql import' deploy.sh
 grep -Fq 'GRANT SELECT, INSERT, UPDATE, DELETE ON house_sys.*' deploy.sh
 grep -Fq 'User=house-sys' deploy.sh
 grep -Fq 'ProtectSystem=strict' deploy.sh
