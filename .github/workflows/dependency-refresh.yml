@@ -1,0 +1,50 @@
+name: Refresh compatible npm dependencies
+
+on:
+  push:
+    branches: [refactor/independent-portals]
+    paths:
+      - package.json
+      - package-lock.json
+      - .github/workflows/dependency-refresh.yml
+  schedule:
+    - cron: "23 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: dependency-refresh-refactor
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/independent-portals
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Refresh lockfile within declared semver ranges
+        run: npm update --package-lock-only --ignore-scripts --no-audit
+      - name: Install exact refreshed lockfile
+        run: npm ci
+      - name: Audit production dependency tree
+        run: npm audit --omit=dev
+      - name: Run complete regression suite
+        run: npm test
+      - name: Commit verified lockfile update
+        run: |
+          if ! git diff --quiet -- package-lock.json; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add package-lock.json
+            git commit -m "chore(deps): refresh compatible npm lockfile"
+            git push origin HEAD:refactor/independent-portals
+          else
+            echo "Lockfile already current within declared semver ranges."
+          fi
