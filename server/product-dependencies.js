@@ -10,6 +10,9 @@ const {
 } = require('./platform-adapters');
 const { TenantPoolManager } = require('./tenant-db');
 const mysql = require('mysql2/promise');
+const { createTenantWriteService } = require('./tenant-write-service');
+const { createMariaDbTenantWriteIdempotencyStore } = require('./tenant-write-idempotency-mariadb');
+const { createMariaDbTenantWriteAuditStore } = require('./tenant-write-audit-mariadb');
 
 function createProductControlPlaneDependencies({
   appId,
@@ -21,6 +24,7 @@ function createProductControlPlaneDependencies({
   loginRateLimitHmacKey,
   poolManager,
   createPool = mysql.createPool,
+  writeSecurity,
   authOptions = {}
 }) {
   if (!['rental', 'hotel', 'property'].includes(appId)) throw new TypeError('PRODUCT_AUTH_APP_ID_INVALID');
@@ -46,6 +50,17 @@ function createProductControlPlaneDependencies({
     secretProvider,
     poolManager: resolvedPoolManager
   };
+  if (writeSecurity !== undefined) {
+    if (!writeSecurity || typeof writeSecurity.authorize !== 'function' || typeof writeSecurity.verifyStepUp !== 'function') {
+      throw new TypeError('PRODUCT_WRITE_SECURITY_DEPENDENCIES_REQUIRED');
+    }
+    dependencies.writeService = createTenantWriteService({
+      authorize: writeSecurity.authorize,
+      verifyStepUp: writeSecurity.verifyStepUp,
+      auditWriter: createMariaDbTenantWriteAuditStore(),
+      idempotencyStore: createMariaDbTenantWriteIdempotencyStore()
+    });
+  }
   // Login is exposed only when a separate signing-key issuer is explicitly configured.
   // Verification-only key providers must never be repurposed to mint access tokens.
   if (signingKeyProvider !== undefined) {
