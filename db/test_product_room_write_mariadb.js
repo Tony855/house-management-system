@@ -48,6 +48,15 @@ async function createTenantDb(adminPool, config, appId, tenantId, created, creat
   await adminPool.query('CREATE USER ' + mysql.escape(dbUser) + '@' + mysql.escape('%') + ' IDENTIFIED BY ' + mysql.escape(dbPassword));
   await adminPool.query('GRANT SELECT, INSERT, UPDATE, DELETE ON ' + mysql.escapeId(database) + '.* TO ' + mysql.escape(dbUser) + '@' + mysql.escape('%'));
   createdUsers.push(dbUser);
+  const [grantRows] = await adminPool.query('SHOW GRANTS FOR ' + mysql.escape(dbUser) + '@' + mysql.escape('%'));
+  const grantText = grantRows.map(row => Object.values(row).join(' ')).join(' ').toUpperCase();
+  assert.match(grantText, new RegExp('SELECT, INSERT, UPDATE, DELETE ON \\x60' + database.toUpperCase() + '\\x60\\.\\*'));
+  assert.doesNotMatch(grantText, /ALL PRIVILEGES|GRANT OPTION/);
+  const [[legacyColumns]] = await pool.query(
+    "SELECT COUNT(*) AS total FROM information_schema.columns WHERE table_schema = ? AND table_name IN (" + tables.map(() => '?').join(',') + ") AND column_name = 'org_id'",
+    [database, ...tables]
+  );
+  assert.equal(Number(legacyColumns.total), 0, appId + ' tenant schema excludes org_id');
   return { pool, credentials: { user: dbUser, password: dbPassword } };
 }
 
