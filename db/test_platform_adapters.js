@@ -4,7 +4,8 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const {
   createPlatformTenantRegistry,
-  createPlatformProductSessionStore,\n  createPlatformLoginRateLimiter,
+  createPlatformProductSessionStore,
+  createPlatformLoginRateLimiter,
   createTenantDatabaseSecretProvider
 } = require('../server/platform-adapters');
 
