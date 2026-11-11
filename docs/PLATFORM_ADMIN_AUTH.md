@@ -36,7 +36,7 @@ Still required before production activation:
 - First-admin bootstrap and forced initial MFA enrollment.
 - Admin re-enable/recovery procedures and production key-rotation runbooks.
 - Production KMS/HSM provisioning, key rotation and denied-key drills.
-- Real Secret Manager and least-privilege tenant DB provisioning adapters.
+- Real Secret Manager and least-privilege tenant DB provisioning adapters. The new adapter composition provides a MariaDB database/user adapter with grants scoped to that tenant database, a Secret Manager write/delete wrapper, migration/verifier wrappers, and platform-registry lifecycle persistence; production must inject actual Secret Manager, migration executor and isolation-verifier implementations.
 - Rental/Hotel/Property historical data migration and isolation verification.
 - Backup/restore, rollback, load and clean-host deployment drills.
 
