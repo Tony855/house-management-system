@@ -93,7 +93,7 @@ test('platform login limiter stores only keyed identity hashes and blocks after 
   const pool = {
     async query(sql, params) {
       state.sql.push([sql, params]);
-      if (sql.startsWith('SELECT blocked_until')) return [[state.row ? { blocked_until: state.row.blocked_until } : undefined].filter(Boolean), []];
+      if (sql.startsWith('SELECT (blocked_until')) return [[state.row ? { blocked: state.row.blocked_until ? 1 : 0 } : undefined].filter(Boolean), []];
       if (sql.startsWith('DELETE FROM platform_login_attempts')) { state.row = null; return [{ affectedRows: 1 }, []]; }
       return [[], []];
     },
@@ -111,7 +111,7 @@ test('platform login limiter stores only keyed identity hashes and blocks after 
           }
           if (sql.startsWith('SELECT window_started_at')) return [[state.row], []];
           if (sql.startsWith('UPDATE platform_login_attempts')) {
-            state.row = { window_started_at: params[0], failures: params[1], blocked_until: params[2] };
+            state.row = { window_started_at: params[0] ? new Date() : state.row.window_started_at, failures: params[1], blocked_until: params[2] ? new Date(Date.now() + params[3] * 1000) : null };
             return [{ affectedRows: 1 }, []];
           }
           throw new Error('unexpected SQL: ' + sql);
