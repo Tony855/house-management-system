@@ -2,6 +2,11 @@
 
 const { resolveTenantContext } = require('./tenant-registry');
 
+function publicErrorCode(error) {
+  return typeof error?.code === 'string' && /^[A-Z][A-Z0-9_]{1,63}$/.test(error.code)
+    ? error.code : 'TENANT_CONTEXT_UNAVAILABLE';
+}
+
 /**
  * appId is supplied by the API service configuration, never by request input.
  * req.auth must be populated by the product-specific JWT/session verifier.
@@ -25,8 +30,8 @@ function createTenantMiddleware({ appId, registry, secretProvider, poolManager }
       req.tenantDb = tenantPool;
       return next();
     } catch (error) {
-      const status = Number.isInteger(error.status) ? error.status : 503;
-      return res.status(status).json({ error: error.code || 'TENANT_CONTEXT_UNAVAILABLE' });
+      const status = Number.isInteger(error.status) && error.status >= 400 && error.status <= 599 ? error.status : 503;
+      return res.status(status).json({ error: publicErrorCode(error) });
     }
   };
 }
