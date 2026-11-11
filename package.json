@@ -6,7 +6,8 @@
   "main": "server/app.js",
   "scripts": {
     "start": "node server/app.js",
-    "seed": "node server/seed.js"
+    "seed": "node server/seed.js",
+    "test:db-mode": "node db/test_db_mode.js"
   },
   "dependencies": {
     "express": "^4.19.2",
