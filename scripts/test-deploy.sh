@@ -5,7 +5,7 @@ cd "$ROOT"
 bash -n deploy.sh
 node --check server/seed.js
 bash deploy.sh --help >/dev/null
-if grep -Eq '^[[:space:]]*--force\\)' deploy.sh; then
+if grep -Fq -- '  --force)' deploy.sh; then
   echo "Unsafe --force option found in installer" >&2
   exit 1
 fi
