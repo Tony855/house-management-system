@@ -45,6 +45,6 @@ test('tenant write audit rejects control characters and malformed session ids', 
     operation: 'create', reason: 'Create room for tenant',
     requestId: 'request-1234567890', event: 'tenant_write_started'
   };
-  await assert.rejects(store.append(tx, { ...base, reason: 'Create room\\nmalicious log' }), /TENANT_WRITE_AUDIT_EVENT_INVALID/);
+  await assert.rejects(store.append(tx, { ...base, reason: 'Create room' + String.fromCharCode(10) + 'malicious log' }), /TENANT_WRITE_AUDIT_EVENT_INVALID/);
   await assert.rejects(store.append(tx, { ...base, sessionId: 'short' }), /TENANT_WRITE_AUDIT_EVENT_INVALID/);
 });
