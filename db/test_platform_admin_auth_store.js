@@ -76,7 +76,7 @@ test('admin disable locks active admins and atomically revokes all target sessio
     release: () => calls.push('release')
   };
   const store = createPlatformAdminAuthStore({ query: async () => [[], []], getConnection: async () => connection });
-  assert.equal(await store.disableAdmin({ actorAdminId: 7, targetAdminId: 8 }), true);
+  assert.equal(await store.disableAdmin({ actorAdminId: 7, targetAdminId: 8, sessionId: 'session-id-1234567890' }), true);
   assert.match(calls[1][0], /FOR UPDATE/);
   assert.match(calls[2][0], /status = 'disabled'/);
   assert.match(calls[3][0], /UPDATE platform_admin_sessions SET revoked_at/);
@@ -94,5 +94,5 @@ test('admin disable refuses self-disable and last active administrator', async (
   const store = createPlatformAdminAuthStore({ query: async () => [[], []], getConnection: async () => { connections++; return connection; } });
   assert.equal(await store.disableAdmin({ actorAdminId: 7, targetAdminId: 7 }), false);
   assert.equal(connections, 0);
-  assert.equal(await store.disableAdmin({ actorAdminId: 7, targetAdminId: 8 }), false);
+  assert.equal(await store.disableAdmin({ actorAdminId: 7, targetAdminId: 8, sessionId: 'session-id-1234567890' }), false);
 });
