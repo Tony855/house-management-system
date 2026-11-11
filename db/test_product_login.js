@@ -39,7 +39,7 @@ function setup(overrides = {}) {
       createSession: async input => { calls.push(['create', input]); },
       revokeSession: async input => { calls.push(['revoke', input]); }
     },
-    signingKeyProvider: { getSigningKey: async () => ({ kid: 'key-1', key: secret }) },
+    signingKeyProvider: { getSigningKey: async () => ({ kid: 'key-1', key: secret }) },\n    loginRateLimiter: { assertAllowed: async input => { calls.push(['rate-allowed', input]); }, recordFailure: async input => { calls.push(['rate-failure', input]); }, clear: async input => { calls.push(['rate-clear', input]); } },
     verifyPassword: (password, hash) => password === 'correct' && hash === 'hash',
     now: () => issuedAt,
     ...overrides
@@ -67,7 +67,7 @@ test('issues product/tenant-bound JWT and persists active session after password
   assert.equal(decoded.tenantId, tenantA);
   assert.equal(decoded.sub, '17');
   assert.equal(Buffer.from(signature, 'base64url').length, 32);
-  assert.equal(calls.some(x => x[0] === 'create'), true);
+  assert.equal(calls.some(x => x[0] === 'create'), true);\n  assert.equal(calls[0][0], 'rate-allowed');\n  assert.equal(calls.some(x => x[0] === 'rate-clear'), true);
 });
 
 test('same username in another tenant cannot be selected by client tenant input', async () => {
@@ -75,14 +75,14 @@ test('same username in another tenant cannot be selected by client tenant input'
   await assert.rejects(service.login({
     host: 'other.example.test', username: 'same-user', password: 'correct', tenantId: tenantB
   }), error => error.code === 'INVALID_CREDENTIALS' && error.status === 401);
-  assert.equal(calls.some(x => x[0] === 'pool'), false);
+  assert.equal(calls.some(x => x[0] === 'pool'), false);\n  assert.equal(calls.some(x => x[0] === 'rate-failure'), true);
 });
 
 test('rejects wrong password without creating a session', async () => {
   const { service, calls } = setup();
   await assert.rejects(service.login({ host: 'tenant.example.test', username: 'same-user', password: 'wrong' }),
     error => error.code === 'INVALID_CREDENTIALS' && error.status === 401);
-  assert.equal(calls.some(x => x[0] === 'create'), false);
+  assert.equal(calls.some(x => x[0] === 'create'), false);\n  assert.equal(calls.some(x => x[0] === 'rate-failure'), true);
 });
 
 test('fails closed for inactive tenant and missing signing key', async () => {
@@ -116,4 +116,29 @@ test('invalid host and credential payloads are rejected before tenant lookup', a
   await assert.rejects(service.login({ host: 'tenant.example.test:443', username: 'bad/name', password: 'x' }),
     error => error.code === 'LOGIN_INVALID');
   assert.equal(calls.length, 0);
+});
+
+test('login throttling blocks requests before tenant lookup and propagates limiter outages', async () => {
+  const blocked = setup({ loginRateLimiter: {
+    assertAllowed: async () => { throw Object.assign(new Error('LOGIN_RATE_LIMITED'), { code: 'LOGIN_RATE_LIMITED', status: 429 }); },
+    recordFailure: async () => {}, clear: async () => {}
+  } });
+  await assert.rejects(blocked.service.login({ host: 'tenant.example.test', username: 'same-user', password: 'wrong' }),
+    error => error.code === 'LOGIN_RATE_LIMITED' && error.status === 429);
+  assert.equal(blocked.calls.some(x => x[0] === 'host'), false);
+
+  const unavailable = setup({ loginRateLimiter: {
+    assertAllowed: async () => { throw new Error('platform DB offline'); },
+    recordFailure: async () => {}, clear: async () => {}
+  } });
+  await assert.rejects(unavailable.service.login({ host: 'tenant.example.test', username: 'same-user', password: 'wrong' }),
+    /platform DB offline/);
+  assert.equal(unavailable.calls.some(x => x[0] === 'host'), false);
+});
+
+test('successful login clears only the matching normalized host/user rate-limit identity', async () => {
+  const { service, calls } = setup();
+  await service.login({ host: 'TENANT.example.test.', username: 'same-user', password: 'correct' });
+  const identity = calls.find(x => x[0] === 'rate-clear')[1];
+  assert.deepEqual(identity, { appId: 'rental', host: 'tenant.example.test', username: 'same-user' });
 });
