@@ -5,6 +5,7 @@ const { createProductLoginService } = require('./product-login');
 const {
   createPlatformTenantRegistry,
   createPlatformProductSessionStore,
+  createPlatformLoginRateLimiter,
   createTenantDatabaseSecretProvider
 } = require('./platform-adapters');
 const { TenantPoolManager } = require('./tenant-db');
@@ -17,6 +18,7 @@ function createProductControlPlaneDependencies({
   secretManager,
   keyProvider,
   signingKeyProvider,
+  loginRateLimitHmacKey,
   poolManager,
   createPool = mysql.createPool,
   authOptions = {}
@@ -49,7 +51,8 @@ function createProductControlPlaneDependencies({
   if (signingKeyProvider !== undefined) {
     dependencies.loginService = createProductLoginService({
       appId, issuer, registry, secretProvider, poolManager: resolvedPoolManager,
-      sessionStore: createPlatformProductSessionStore(platformPool), signingKeyProvider
+      sessionStore: createPlatformProductSessionStore(platformPool), signingKeyProvider,
+      loginRateLimiter: createPlatformLoginRateLimiter(platformPool, { hmacKey: loginRateLimitHmacKey })
     });
   }
   return Object.freeze(dependencies);
