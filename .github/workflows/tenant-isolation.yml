@@ -49,3 +49,64 @@ jobs:
           DB_USER: root
           DB_PASSWORD: platform-test-root
         run: bash scripts/test-platform-billing-schema.sh
+
+
+  legacy-api-express5-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      mariadb:
+        image: mariadb:11.4
+        env:
+          MARIADB_ROOT_PASSWORD: house-api-test-root
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install MariaDB client
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mariadb-client
+      - name: Install dependencies
+        run: npm ci
+      - name: Initialize disposable legacy test databases
+        env:
+          DB_HOST: 127.0.0.1
+          DB_PORT: 3306
+          DB_USER: root
+          DB_PASSWORD: house-api-test-root
+        run: |
+          mariadb --protocol=tcp --host="$DB_HOST" --port="$DB_PORT" --user="$DB_USER" --password="$DB_PASSWORD" < db/schema.sql
+          node server/seed.js core
+      - name: Start Express 5 API and run end-to-end regression
+        env:
+          NODE_ENV: test
+          PORT: 16088
+          DB_HOST: 127.0.0.1
+          DB_PORT: 3306
+          DB_USER: root
+          DB_PASSWORD: house-api-test-root
+        run: |
+          node server/app.js > /tmp/house-api.log 2>&1 &
+          SERVER_PID=$!
+          trap 'kill "$SERVER_PID" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 40); do
+            if curl -fsS http://127.0.0.1:16088/api/app-config >/dev/null; then
+              break
+            fi
+            if [ "$attempt" -eq 40 ]; then
+              cat /tmp/house-api.log
+              exit 1
+            fi
+            sleep 1
+          done
+          BASE=http://127.0.0.1:16088/api node db/test_api.js
