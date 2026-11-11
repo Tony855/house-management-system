@@ -53,6 +53,12 @@ function assertTable(appId, table) {
   if (!TABLES[appId] || !TABLES[appId].has(table)) throw new TypeError('TENANT_TABLE_NOT_ALLOWED');
   return identifier(table);
 }
+function assertColumn(appId, table, column) {
+  if (typeof column !== 'string' || !COLUMNS[appId]?.[table]?.includes(column)) {
+    throw new TypeError('TENANT_COLUMN_NOT_ALLOWED');
+  }
+  return identifier(column);
+}
 function normalizeFields(fields) {
   if (!fields || typeof fields !== 'object' || Array.isArray(fields)) throw new TypeError('TENANT_FIELDS_INVALID');
   const entries = Object.entries(fields);
