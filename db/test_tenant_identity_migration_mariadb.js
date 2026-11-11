@@ -173,4 +173,4 @@ async function main() {
     await admin.end();
   }
 }
-main().catch(error => { console.error(error.code || error.message || 'TENANT_IDENTITY_MARIADB_TEST_FAILED'); process.exitCode = 1; });
+main().catch(error => { console.error([error.code, error.sqlMessage, error.message].filter(Boolean).join(': ') || 'TENANT_IDENTITY_MARIADB_TEST_FAILED'); process.exitCode = 1; });
