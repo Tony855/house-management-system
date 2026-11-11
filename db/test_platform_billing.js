@@ -44,7 +44,7 @@ test('platform billing authorization requires platform audience, active admin, M
   assert.throws(() => assertPlatformAdmin(base, 'billing:write'), /PLATFORM_PERMISSION_DENIED/);
 });
 test('billing mutations require step-up verification and reason for sensitive actions', () => {
-  const base = { authenticated: true, audience: 'platform', appId: 'platform', adminStatus: 'active', mfaVerified: true, permissions: ['billing:write', 'billing:refund'], stepUpVerified: true, reason: 'Customer requested refund' };
+  const base = { authenticated: true, audience: 'platform', appId: 'platform', adminStatus: 'active', adminId: 1, mfaVerified: true, permissions: ['billing:write', 'billing:refund'], stepUpVerified: true, reason: 'Customer requested refund' };
   assert.equal(assertPlatformAdmin(base, 'billing:refund', { reason: 'Customer requested refund' }), true);
   assert.throws(() => assertPlatformAdmin({ ...base, stepUpVerified: false }, 'billing:write'), /PLATFORM_STEP_UP_REQUIRED/);
   assert.throws(() => assertPlatformAdmin(base, 'billing:refund', { reason: '' }), /PLATFORM_ACTION_REASON_REQUIRED/);
