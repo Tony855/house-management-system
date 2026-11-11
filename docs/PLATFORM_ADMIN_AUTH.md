@@ -21,7 +21,7 @@ The runtime fails startup if security dependencies are absent. It has no develop
 4. Sensitive mutations require fresh step-up MFA.
 5. Logout revokes the exact server-side session.
 6. Admin disable requires `platform:admins:write` plus fresh step-up MFA, refuses self-disable/last-active-admin disable, and revokes every session for the target in one transaction.
-7. Admin MFA reset requires `platform:admins:write`, fresh step-up MFA and an 8–500 character operator reason. It disables the target factor, deletes pending enrollment and recovery-code hashes, revokes all target sessions, and writes the audit event in one transaction. The target administrator must authenticate again and enroll a new factor.
+7. Admin MFA reset requires `platform:admins:write`, fresh step-up MFA and an 8–500 character operator reason. It disables the target factor, deletes pending enrollment and recovery-code hashes, revokes all target sessions, and writes the audit event in one transaction. **The reset endpoint is not production-ready as a standalone recovery flow:** the target cannot complete normal MFA login after the factor is disabled. A separate trusted-channel, one-time enrollment grant and delivery/identity-proofing process must be implemented before enabling this operation in production.
 8. Enrollment and recovery-code rotation require a recent MFA-verified session; plaintext recovery codes are returned once and never stored.
 
 ## Persistent security audit
@@ -36,6 +36,7 @@ The one-time first-admin bootstrap is provided by `npm run bootstrap:platform-ad
 
 Still required before production activation:
 - Admin re-enable is now a two-person workflow: an active administrator with fresh step-up submits a reasoned request, and a different active administrator with fresh step-up approves it. Approval requires the target to retain an enabled MFA factor and atomically restores the account with audit history. Production identity-proofing, emergency break-glass and key-rotation runbooks still require deployment-specific approval.
+- Trusted-channel MFA recovery enrollment grant, identity proofing and secure delivery; do not use the current MFA reset endpoint operationally until this is implemented.
 - Production KMS/HSM provisioning, key rotation and denied-key drills.
 - Real Secret Manager and least-privilege tenant DB provisioning adapters. The new adapter composition provides a MariaDB database/user adapter with grants scoped to that tenant database, a Secret Manager write/delete wrapper, migration/verifier wrappers, and platform-registry lifecycle persistence; production must inject actual Secret Manager, migration executor and isolation-verifier implementations.
 - Rental/Hotel/Property historical data migration and isolation verification.
