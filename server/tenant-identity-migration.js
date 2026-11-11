@@ -18,11 +18,14 @@ function normalizeTenantIdentity({ appId, tenantId, sourceOrgId, snapshot }) {
   const userIds = new Set(users.map(r => String(r.id)));
   if (userIds.size !== users.length) throw new Error('TENANT_IDENTITY_MIGRATION_DUPLICATE_USER');
   const codes = new Set(users.map(r => r.role).filter(Boolean));
-  const roles = snapshot.roles.filter(r => (r.org_id === null || Number(r.org_id) === sourceOrgId) && codes.has(r.code));
+  const tenantRoles = snapshot.roles.filter(r => Number(r.org_id) === sourceOrgId && codes.has(r.code));
+  const tenantRoleCodes = new Set(tenantRoles.map(r => r.code));
+  const roles = [...tenantRoles, ...snapshot.roles.filter(r => r.org_id === null && codes.has(r.code) && !tenantRoleCodes.has(r.code))];
   for (const code of codes) if (!roles.some(r => r.code === code)) throw new Error('TENANT_IDENTITY_MIGRATION_ROLE_MISSING');
   const roleIds = new Set(roles.map(r => String(r.id)));
   const cleanRoles = roles.map(({ org_id: _org, ...r }) => r);
-  const userPermissions = snapshot.user_permissions.filter(r => userIds.has(String(r.user_id)));
+  const userPermissions = snapshot.user_permissions;
+  if (userPermissions.some(r => !userIds.has(String(r.user_id)))) throw new Error('TENANT_IDENTITY_MIGRATION_USER_PERMISSION_SCOPE_INVALID');
   const byRole = new Map();
   for (const r of snapshot.role_permissions) {
     if (!roleIds.has(String(r.role_id))) continue;
