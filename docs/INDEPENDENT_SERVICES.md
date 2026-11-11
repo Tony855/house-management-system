@@ -16,6 +16,9 @@ The current portal pages are architecture/UI shells. Business screens, real logi
 - `server/product-api.js` builds a product API only when a verified authenticator, platform tenant registry, secret provider and tenant pool manager are injected.
 - `services/rental-api/app.js`, `services/hotel-api/app.js`, and `services/property-api/app.js` pin the service audience in code.
 - Authentication must validate JWT/session signature, issuer, expiry, audience and app ID before setting `req.auth`.
+- `server/product-auth.js` now provides a fail-closed HS256 access-token verifier. It requires a key-rotation adapter (`getVerificationKey({ kid, appId })`) and a revocation-aware session adapter (`isSessionActive({ sessionId, userId, tenantId, appId })`); missing keys, unavailable session storage and revoked sessions fail closed.
+- Product access tokens require `iss`, `aud`, fixed `appId`, `sub`, UUID `tenantId`, `jti`, `iat` and `exp`; token lifetime is capped at 15 minutes by default. Only verified claims are copied to `req.auth`. The helper does not issue tokens, manage passwords/MFA, or replace a production key manager/session database.
+- Product API error responses now restrict status codes to 400–599 and do not return arbitrary exception messages or secret-bearing middleware errors to clients.
 - Tenant ID is read only from that verified context. Request headers, query strings and bodies are ignored for tenant selection.
 - `createTenantMiddleware` resolves active tenant registry state and retrieves credentials through the secret provider before opening a tenant pool.
 - `/api/tenant-context` exposes only opaque tenant ID, app ID and schema version; it never returns DB host, DB name or credentials.
