@@ -164,3 +164,45 @@ test('product API injects repository bound to the resolved tenant pool', async (
     assert.deepEqual(calls[0].params, ['vacant', 50, 0]);
   });
 });
+
+
+test('product API binds optional tenant write capability to verified request context', async () => {
+  const calls = [];
+  const writeService = { execute: async input => {
+    calls.push(input);
+    return { saved: true };
+  } };
+  const { app } = setup({
+    authenticate: (req, _res, next) => {
+      req.auth = {
+        authenticated: true, appId: 'rental', tenantId,
+        userId: 'user-1', sessionId: 'session-identifier-1234'
+      };
+      next();
+    },
+    writeService,
+    routes: () => {
+      const router = express.Router();
+      router.post('/write-check', async (req, res, next) => {
+        try {
+          const result = await req.tenantWrite({ operation: 'update', reason: 'Correct room rent after review' });
+          res.json(result);
+        } catch (error) { next(error); }
+      });
+      return router;
+    }
+  });
+  await withServer(app, async base => {
+    const response = await fetch(base + '/api/write-check', { method: 'POST' });
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { saved: true });
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].auth.tenantId, tenantId);
+    assert.equal(calls[0].tenantContext.tenantId, tenantId);
+    assert.equal(calls[0].repository !== undefined, true);
+  });
+});
+
+test('product API rejects malformed optional tenant write service at construction', () => {
+  assert.throws(() => setup({ writeService: {} }), /PRODUCT_TENANT_WRITE_SERVICE_INVALID/);
+});
