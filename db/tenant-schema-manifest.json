@@ -54,6 +54,7 @@
       "meters",
       "room_net_lines",
       "net_changes",
+      "net_requests",
       "bills",
       "repairs",
       "complaints"
