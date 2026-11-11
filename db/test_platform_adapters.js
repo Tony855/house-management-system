@@ -25,6 +25,17 @@ test('platform tenant registry reads only required tenant routing metadata', asy
   assert.doesNotMatch(query[0], /password|credential/i);
 });
 
+test('platform registry resolves exact active login host and fixed product audience', async () => {
+  let captured;
+  const registry = createPlatformTenantRegistry({ query: async (...args) => { captured = args; return [[{ tenant_uuid: tenantId, app_id: 'rental', lifecycle_state: 'active' }], []]; } });
+  const row = await registry.findTenantByLoginHost('tenant.example.test', 'rental');
+  assert.equal(row.tenant_uuid, tenantId);
+  assert.deepEqual(captured[1], ['tenant.example.test', 'rental']);
+  assert.match(captured[0], /h\.hostname = \?/);
+  assert.match(captured[0], /h\.status = 'active'/);
+  assert.equal(await registry.findTenantByLoginHost('tenant.example.test', 'platform'), null);
+});
+
 test('product session store binds session to subject, tenant, app and expiry', async () => {
   let captured;
   const store = createPlatformProductSessionStore({
@@ -39,6 +50,16 @@ test('product session store binds session to subject, tenant, app and expiry', a
   assert.deepEqual(captured[1], ['session-identifier-1234', 'user-1', tenantId, 'rental']);
   assert.match(captured[0], /revoked_at IS NULL/);
   assert.match(captured[0], /expires_at > UTC_TIMESTAMP\(\)/);
+});
+
+test('platform product session store creates and revokes an exact scoped session', async () => {
+  const calls = [];
+  const store = createPlatformProductSessionStore({ query: async (...args) => { calls.push(args); return [{ affectedRows: 1 }, []]; } });
+  await store.createSession({ sessionId: 'session-1', userId: 'u-1', tenantId, appId: 'rental', issuedAt: 1800000000, expiresAt: 1800000900 });
+  assert.deepEqual(calls[0][1].slice(0, 4), ['session-1', 'rental', tenantId, 'u-1']);
+  assert.equal(await store.revokeSession({ sessionId: 'session-1', userId: 'u-1', tenantId, appId: 'rental' }), true);
+  assert.deepEqual(calls[1][1], ['session-1', 'u-1', tenantId, 'rental']);
+  assert.match(calls[1][0], /revoked_at IS NULL/);
 });
 
 test('product session store rejects cross-product and incomplete session contexts', async () => {
