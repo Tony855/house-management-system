@@ -45,8 +45,8 @@ async function createTenantDb(adminPool, config, appId, tenantId, created, creat
   }
   const dbUser = 't_' + tenantId.replace(/-/g, '').slice(0, 24);
   const dbPassword = crypto.randomBytes(24).toString('base64url');
-  await adminPool.query('CREATE USER ' + mysql.escapeId(dbUser) + '@\'%\' IDENTIFIED BY ?', [dbPassword]);
-  await adminPool.query('GRANT SELECT, INSERT, UPDATE, DELETE ON ' + mysql.escapeId(database) + '.* TO ' + mysql.escapeId(dbUser) + '@\'%\'');
+  await adminPool.query('CREATE USER ' + mysql.escape(dbUser) + '@' + mysql.escape('%') + ' IDENTIFIED BY ?', [dbPassword]);
+  await adminPool.query('GRANT SELECT, INSERT, UPDATE, DELETE ON ' + mysql.escapeId(database) + '.* TO ' + mysql.escape(dbUser) + '@' + mysql.escape('%'));
   createdUsers.push(dbUser);
   return { pool, credentials: { user: dbUser, password: dbPassword } };
 }
@@ -98,8 +98,8 @@ async function main() {
       try {
         const [[ownDb]] = await runtimeProbe.query('SELECT DATABASE() AS dbName');
         assert.equal(ownDb.dbName, tenantDatabaseName(appId, tenantId), appId + ' tenant principal database scope');
-        await assert.rejects(runtimeProbe.query('SELECT id FROM `house_sys_' + appId + '`.`buildings`'), appId + ' legacy shared DB denied');
-        await assert.rejects(runtimeProbe.query('CREATE TABLE tenant_ddl_must_be_denied (id INT)'), appId + ' DDL denied');
+        await assert.rejects(runtimeProbe.query('SELECT id FROM `house_sys_' + appId + '`.`buildings`'), /denied/i);
+        await assert.rejects(runtimeProbe.query('CREATE TABLE tenant_ddl_must_be_denied (id INT)'), /denied/i);
       } finally { await runtimeProbe.end(); }
       const poolManager = new TenantPoolManager({ createPool: options => mysql.createPool(options), maxPools: 2 });
       managers.push(poolManager);
@@ -184,7 +184,7 @@ async function main() {
     for (const manager of managers) await manager.closeAll();
     for (const pool of pools) await pool.end();
     for (const user of createdUsers) {
-      try { await adminPool.query('DROP USER IF EXISTS ' + mysql.escapeId(user) + '@\'%\''); } catch (_) {}
+      try { await adminPool.query('DROP USER IF EXISTS ' + mysql.escape(user) + '@' + mysql.escape('%')); } catch (_) {}
     }
     for (const database of created) {
       try { await adminPool.execute('DROP DATABASE `' + database + '`'); } catch (_) {}
