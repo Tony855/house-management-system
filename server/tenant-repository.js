@@ -78,13 +78,13 @@ function createTenantRepository({ pool, appId, queryable = pool, allowTransactio
 
   async function list(table, { columns = COLUMNS[appId]?.[table], filters = {}, orderBy = 'id', direction = 'ASC', limit = 50, offset = 0 } = {}) {
     const tableSql = assertTable(appId, table);
-    if (!Array.isArray(columns) || !columns.length || columns.some(column => column !== '*' && !IDENTIFIER.test(column))) {
-      throw new TypeError('TENANT_COLUMNS_INVALID');
-    }
+    if (!Array.isArray(columns) || !columns.length) throw new TypeError('TENANT_COLUMNS_INVALID');
+    columns.forEach(column => assertColumn(appId, table, column));
     if (!Number.isInteger(limit) || limit < 1 || limit > 100 || !Number.isInteger(offset) || offset < 0 || offset > 1000000) {
       throw new TypeError('TENANT_PAGINATION_INVALID');
     }
     const where = normalizeFilters(filters);
+    where.forEach(([key]) => assertColumn(appId, table, key));
     if (direction !== 'ASC' && direction !== 'DESC') throw new TypeError('TENANT_ORDER_INVALID');
     const whereSql = where.length ? ' WHERE ' + where.map(([key]) => identifier(key) + ' = ?').join(' AND ') : '';
     const orderSql = orderBy === null ? '' : ' ORDER BY ' + assertColumn(appId, table, orderBy) + ' ' + direction;
@@ -104,6 +104,7 @@ function createTenantRepository({ pool, appId, queryable = pool, allowTransactio
   async function count(table, filters = {}) {
     const tableSql = assertTable(appId, table);
     const where = normalizeFilters(filters);
+    where.forEach(([key]) => assertColumn(appId, table, key));
     const whereSql = where.length ? ' WHERE ' + where.map(([key]) => identifier(key) + ' = ?').join(' AND ') : '';
     const [rows] = await queryable.execute(
       'SELECT COUNT(*) AS total FROM ' + tableSql + whereSql,
@@ -115,6 +116,7 @@ function createTenantRepository({ pool, appId, queryable = pool, allowTransactio
   async function insert(table, fields) {
     const tableSql = assertTable(appId, table);
     const entries = normalizeFields(fields);
+    entries.forEach(([key]) => assertColumn(appId, table, key));
     const [result] = await queryable.execute(
       'INSERT INTO ' + tableSql + ' (' + entries.map(([key]) => identifier(key)).join(', ') + ')' +
       ' VALUES (' + entries.map(() => '?').join(', ') + ')',
@@ -126,6 +128,7 @@ function createTenantRepository({ pool, appId, queryable = pool, allowTransactio
   async function updateById(table, id, fields) {
     const tableSql = assertTable(appId, table);
     const entries = normalizeFields(fields);
+    entries.forEach(([key]) => assertColumn(appId, table, key));
     if (entries.some(([key]) => key === 'id')) throw new TypeError('TENANT_PRIMARY_KEY_IMMUTABLE');
     const [result] = await queryable.execute(
       'UPDATE ' + tableSql + ' SET ' + entries.map(([key]) => identifier(key) + ' = ?').join(', ') + ' WHERE `id` = ?',
