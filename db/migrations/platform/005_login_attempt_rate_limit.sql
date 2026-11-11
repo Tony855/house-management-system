@@ -1,7 +1,7 @@
 -- Persistent, privacy-preserving login failure throttling in the platform control plane.
 -- Identity values are HMAC digests; raw usernames and hostnames are never stored.
 CREATE TABLE IF NOT EXISTS platform_login_attempts (
-  app_id ENUM('rental','hotel','property') NOT NULL,
+  app_id ENUM('rental','hotel','property','platform') NOT NULL,
   identity_hash CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   window_started_at DATETIME NOT NULL,
   failures INT UNSIGNED NOT NULL DEFAULT 0,
