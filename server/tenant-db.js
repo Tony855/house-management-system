@@ -42,25 +42,35 @@ class TenantPoolManager {
 
   async getPool(context) {
     const key = this._key(context);
-    await this._evictExpired();
-    let entry = this.entries.get(key);
-    if (entry) {
-      entry.lastUsedAt = this.now();
+    const cached = this.entries.get(key);
+    if (cached && cached.lastUsedAt > this.now() - this.idleTtlMs) {
+      cached.lastUsedAt = this.now();
       this.entries.delete(key);
-      this.entries.set(key, entry);
-      return entry.pool;
+      this.entries.set(key, cached);
+      return cached.pool;
     }
     if (this.pending.has(key)) return this.pending.get(key).promise;
-    // A changed password produces a new key; retire older pools for this tenant immediately.
-    for (const [oldKey, oldEntry] of this.entries) {
-      if (oldEntry.tenantId === context.tenantId && oldKey !== key) {
-        this.entries.delete(oldKey);
-        await this._close(oldEntry);
-      }
-    }
+
+    // Reserve the key synchronously before the first await. This makes closeAll()
+    // and concurrent callers observe the in-flight operation immediately.
     const epoch = this.tenantEpoch.get(context.tenantId) || 0;
     const pending = { tenantId: context.tenantId, promise: null };
-    pending.promise = Promise.resolve().then(() => this._createPool(context, key, epoch)).finally(() => this.pending.delete(key));
+    pending.promise = Promise.resolve().then(async () => {
+      await this._evictExpired();
+      const existing = this.entries.get(key);
+      if (existing) {
+        existing.lastUsedAt = this.now();
+        return existing.pool;
+      }
+      // A changed password produces a new key; retire older pools for this tenant.
+      for (const [oldKey, oldEntry] of this.entries) {
+        if (oldEntry.tenantId === context.tenantId && oldKey !== key) {
+          this.entries.delete(oldKey);
+          await this._close(oldEntry);
+        }
+      }
+      return this._createPool(context, key, epoch);
+    }).finally(() => this.pending.delete(key));
     this.pending.set(key, pending);
     return pending.promise;
   }
