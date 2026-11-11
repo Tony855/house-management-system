@@ -25,12 +25,21 @@ class TenantPoolManager {
     if (!context || !context.tenantId || !context.appId || !context.db) throw new Error('TENANT_CONTEXT_REQUIRED');
     if (!APP_IDS.has(context.appId) || typeof context.tenantId !== 'string' || !UUID_RE.test(context.tenantId)) throw new Error('TENANT_CONTEXT_INVALID');
     if (typeof context.db.database !== 'string' || !IDENTIFIER_RE.test(context.db.database)) throw new Error('TENANT_DATABASE_IDENTIFIER_INVALID');
-    if (typeof context.db.host !== 'string' || !context.db.host || context.db.host.length > 253 || /[\s\u0000-\u001f]/.test(context.db.host) ||
-        !Number.isInteger(context.db.port) || context.db.port < 1 || context.db.port > 65535 ||
-        typeof context.db.user !== 'string' || !context.db.user || context.db.user.length > 128 ||
-        typeof context.db.password !== 'string' || !context.db.password || context.db.password.length > 1024 ||
-        (context.db.credentialVersion !== undefined && (typeof context.db.credentialVersion !== 'string' || context.db.credentialVersion.length > 128))) {
-      throw new Error('TENANT_DATABASE_CREDENTIALS_INVALID');
+    if (typeof context.db.host !== 'string' || !context.db.host || context.db.host.length > 253 || /[\s\u0000-\u001f]/.test(context.db.host)) {
+      throw new Error('TENANT_DATABASE_HOST_INVALID');
+    }
+    if (!Number.isInteger(context.db.port) || context.db.port < 1 || context.db.port > 65535) {
+      throw new Error('TENANT_DATABASE_PORT_INVALID');
+    }
+    if (typeof context.db.user !== 'string' || !context.db.user || context.db.user.length > 128) {
+      throw new Error('TENANT_DATABASE_USER_INVALID');
+    }
+    if (typeof context.db.password !== 'string' || !context.db.password || context.db.password.length > 1024) {
+      throw new Error('TENANT_DATABASE_PASSWORD_INVALID');
+    }
+    if (context.db.credentialVersion !== undefined &&
+        (typeof context.db.credentialVersion !== 'string' || context.db.credentialVersion.length > 128)) {
+      throw new Error('TENANT_DATABASE_CREDENTIAL_VERSION_INVALID');
     }
     const credentialFingerprint = crypto.createHash('sha256').update(context.db.password).digest('hex');
     return JSON.stringify([context.appId, context.tenantId, context.db.host.toLowerCase(), context.db.port, context.db.database, context.db.user, context.db.credentialVersion || '', credentialFingerprint]);
