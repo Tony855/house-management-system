@@ -17,6 +17,8 @@ test('four independent portal entrypoints have distinct app and session boundari
     assert.match(html, new RegExp('data-app-id="' + app + '"'));
     assert.match(html, new RegExp('data-session-cookie="' + cookie + '"'));
     assert.match(html, /type="module"/);
+    assert.match(html, /Content-Security-Policy/);
+    assert.match(html, /default-src 'self'/);
     assert.match(html, /\.\/portal\.css/);
     assert.ok(fs.existsSync('apps/' + dir + '-web/portal.css'));
     assert.match(js, /credentials:\s*'omit'/);
