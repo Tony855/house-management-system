@@ -16,6 +16,7 @@ The current portal pages are architecture/UI shells. Business screens, real logi
 - `server/product-api.js` builds a product API only when a verified authenticator, platform tenant registry, secret provider and tenant pool manager are injected.
 - `services/rental-api/app.js`, `services/hotel-api/app.js`, and `services/property-api/app.js` pin the service audience in code.
 - Authentication must validate JWT/session signature, issuer, expiry, audience and app ID before setting `req.auth`.
+- `server/product-dependencies.js` composes the verifier, platform registry, session store, secret manager adapter and tenant pool manager into one fail-closed dependency bundle for each product API.
 - `server/platform-adapters.js` now provides the production-shaped platform tenant registry reader, revocation-aware product session lookup (using database UTC time), and a secret-manager adapter. The adapter keeps DB credentials outside the registry and fails closed on malformed secret payloads.
 - Migration `003_product_sessions.sql` adds platform-side session revocation records bound to app, tenant and opaque subject IDs; tenant user profiles and credentials remain outside the platform database.
 - `server/product-auth.js` now provides a fail-closed HS256 access-token verifier. It requires a key-rotation adapter (`getVerificationKey({ kid, appId })`) and a revocation-aware session adapter (`isSessionActive({ sessionId, userId, tenantId, appId })`); missing keys, unavailable session storage and revoked sessions fail closed.
