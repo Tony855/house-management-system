@@ -35,6 +35,8 @@ function createPools(appId, sourceOrgId) {
         async beginTransaction() { targetCalls.push('BEGIN'); },
         async execute(sql, params = []) {
           targetCalls.push(sql);
+          if (sql.startsWith('SELECT GET_LOCK')) return [[{ acquired: 1 }]];
+          if (sql.startsWith('SELECT RELEASE_LOCK')) return [[{ released: 1 }]];
           const countTable = sql.match(/SELECT COUNT\(\*\) AS total FROM `([a-z_]+)`/i)?.[1];
           if (countTable) return [[{ total: targetTables[countTable].length }]];
           const insertMatch = sql.match(/INSERT INTO `([a-z_]+)` \(([^)]+)\) VALUES/i);
