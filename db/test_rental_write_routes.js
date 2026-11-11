@@ -50,7 +50,7 @@ test('POST /rooms delegates a validated payload to the transactional tenant writ
   const calls = [];
   const response = await request(async input => {
     calls.push(input);
-    const [buildings] = await input.mutate({
+    const result = await input.mutate({
       execute: async (sql, params) => {
         calls.push({ sql, params });
         return sql.includes('FROM buildings') ? [[{ id: 7 }]] : [[]];
@@ -60,7 +60,7 @@ test('POST /rooms delegates a validated payload to the transactional tenant writ
         return { insertId: 88, affectedRows: 1 };
       }
     });
-    return { id: 88, ...input.payload };
+    return result;
   }, valid, {
     'x-operation-reason': 'Create approved rental room',
     'x-step-up-token': 'step-up-token-123456789',
