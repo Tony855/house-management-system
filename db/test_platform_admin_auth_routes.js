@@ -245,3 +245,89 @@ test('administrator MFA reset rejects callers without fresh step-up or admin-wri
   });
   assert.equal(called, false);
 });
+
+
+test('administrator re-enable requires step-up and exposes separate request and approval actions', async () => {
+  const calls = [];
+  const authService = {
+    login: async () => ({}), verifyChallenge: async () => ({}),
+    authenticate: (req, _res, next) => {
+      req.platformAuth = {
+        adminId: 9, sessionId: 'session-id-9876543210',
+        permissions: ['platform:admins:write'], stepUpVerified: true, mfaVerified: true
+      };
+      next();
+    },
+    stepUp: async () => ({}), logout: async () => true
+  };
+  const mfaService = {
+    getStatus: async () => ({}), beginEnrollment: async () => ({}),
+    confirmEnrollment: async () => ({}), rotateRecoveryCodes: async () => ({})
+  };
+  const adminStore = {
+    requestAdminReenable: async input => { calls.push(['request', input]); return 42; },
+    approveAdminReenable: async input => { calls.push(['approve', input]); return true; }
+  };
+  const app = createPlatformApi({
+    pool: { query: async () => [[], []], getConnection: async () => ({}) },
+    adminAuthService: authService, mfaService, adminStore
+  });
+  await withServer(app, async base => {
+    const request = await fetch(base + '/api/platform/auth/admins/8/reenable/request', {
+      method: 'POST', headers: {
+        authorization: 'Bearer session-token', 'content-type': 'application/json'
+      }, body: JSON.stringify({ reason: 'Restore after identity verification' })
+    });
+    assert.equal(request.status, 201);
+    assert.deepEqual(await request.json(), { requestId: 42, status: 'pending' });
+
+    const approve = await fetch(base + '/api/platform/auth/admins/8/reenable/approve', {
+      method: 'POST', headers: {
+        authorization: 'Bearer session-token', 'content-type': 'application/json'
+      }, body: JSON.stringify({ requestId: 42 })
+    });
+    assert.equal(approve.status, 204);
+  });
+  assert.deepEqual(calls.map(call => call[0]), ['request', 'approve']);
+  assert.deepEqual(calls[0][1], {
+    actorAdminId: 9, targetAdminId: 8, sessionId: 'session-id-9876543210',
+    reason: 'Restore after identity verification'
+  });
+  assert.deepEqual(calls[1][1], {
+    actorAdminId: 9, targetAdminId: 8, requestId: 42,
+    sessionId: 'session-id-9876543210'
+  });
+});
+
+test('administrator re-enable request rejects missing reason before calling the store', async () => {
+  const authService = {
+    login: async () => ({}), verifyChallenge: async () => ({}),
+    authenticate: (req, _res, next) => {
+      req.platformAuth = {
+        adminId: 9, sessionId: 'session-id-9876543210',
+        permissions: ['platform:admins:write'], stepUpVerified: true
+      };
+      next();
+    },
+    stepUp: async () => ({}), logout: async () => true
+  };
+  const mfaService = {
+    getStatus: async () => ({}), beginEnrollment: async () => ({}),
+    confirmEnrollment: async () => ({}), rotateRecoveryCodes: async () => ({})
+  };
+  let called = false;
+  const app = createPlatformApi({
+    pool: { query: async () => [[], []], getConnection: async () => ({}) },
+    adminAuthService: authService, mfaService,
+    adminStore: { requestAdminReenable: async () => { called = true; return 1; } }
+  });
+  await withServer(app, async base => {
+    const response = await fetch(base + '/api/platform/auth/admins/8/reenable/request', {
+      method: 'POST', headers: {
+        authorization: 'Bearer session-token', 'content-type': 'application/json'
+      }, body: JSON.stringify({ reason: 'short' })
+    });
+    assert.equal(response.status, 400);
+  });
+  assert.equal(called, false);
+});
