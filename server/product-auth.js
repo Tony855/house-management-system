@@ -65,6 +65,7 @@ function createProductAuthenticator({
       const protectedHeader = parseJsonPart(parts[0]);
       const claims = parseJsonPart(parts[1]);
       if (!protectedHeader || protectedHeader.alg !== 'HS256' || protectedHeader.typ !== 'JWT' ||
+          Object.keys(protectedHeader).some(name => !['alg', 'typ', 'kid'].includes(name)) ||
           typeof protectedHeader.kid !== 'string' || !/^[A-Za-z0-9._-]{1,128}$/.test(protectedHeader.kid)) {
         throw new ProductAuthError('TOKEN_INVALID');
       }
@@ -81,7 +82,7 @@ function createProductAuthenticator({
 
       const current = now();
       if (!claims || claims.iss !== issuer ||
-          !(claims.aud === appId || (Array.isArray(claims.aud) && claims.aud.includes(appId))) ||
+          claims.aud !== appId ||
           claims.appId !== appId) throw new ProductAuthError('TOKEN_AUDIENCE_INVALID', 403);
       if (typeof claims.sub !== 'string' || !claims.sub ||
           typeof claims.jti !== 'string' || claims.jti.length < 16 || claims.jti.length > 128 ||
