@@ -8,7 +8,7 @@ const { createPropertyApi } = require('../services/property-api/app');
 
 const TENANT_ID = '123e4567-e89b-42d3-a456-426614174000';
 
-function harness(appId, { ownerExists = true, writeEnabled = true } = {}) {
+function harness(appId, { ownerExists = true, buildingExists = true, roomExists = false, writeEnabled = true } = {}) {
   const statements = [];
   const txEvents = [];
   let registryTenantId;
@@ -19,8 +19,8 @@ function harness(appId, { ownerExists = true, writeEnabled = true } = {}) {
     release() { txEvents.push('release'); },
     async execute(sql, params = []) {
       statements.push({ sql, params });
-      if (sql.includes('FROM buildings')) return [[{ id: 7 }], []];
-      if (sql.includes('FROM rooms')) return [[], []];
+      if (sql.includes('FROM buildings')) return [buildingExists ? [{ id: 7 }] : [], []];
+      if (sql.includes('FROM rooms')) return [roomExists ? [{ id: 80 }] : [], []];
       if (sql.includes('FROM tenants')) return [ownerExists ? [{ id: 9 }] : [], []];
       if (sql.startsWith('INSERT INTO')) return [{ insertId: 81, affectedRows: 1 }, []];
       throw new Error('UNEXPECTED_SQL');
@@ -106,4 +106,18 @@ test('product API fails closed when the tenant write service is not configured',
   assert.equal(response.status, 503);
   assert.deepEqual(await response.json(), { error: 'TENANT_WRITE_UNAVAILABLE' });
   assert.deepEqual(h.txEvents, []);
+});
+
+test('room write rejects a missing building and duplicate room without committing', async () => {
+  const missingBuilding = harness('hotel', { buildingExists: false });
+  const missing = await post(missingBuilding.app, { building_id: 7, room_no: 'H-404' });
+  assert.equal(missing.status, 404);
+  assert.deepEqual(await missing.json(), { error: 'BUILDING_NOT_FOUND' });
+  assert.deepEqual(missingBuilding.txEvents, ['begin', 'rollback', 'release']);
+
+  const duplicateRoom = harness('hotel', { roomExists: true });
+  const duplicate = await post(duplicateRoom.app, { building_id: 7, room_no: 'H-101' });
+  assert.equal(duplicate.status, 409);
+  assert.deepEqual(await duplicate.json(), { error: 'ROOM_ALREADY_EXISTS' });
+  assert.deepEqual(duplicateRoom.txEvents, ['begin', 'rollback', 'release']);
 });
