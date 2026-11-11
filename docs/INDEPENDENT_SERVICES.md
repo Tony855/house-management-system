@@ -40,7 +40,7 @@ PLATFORM_DB_PASSWORD
 PLATFORM_DB_POOL_SIZE
 ```
 
-The Platform API currently exposes read endpoints for overview, products, plans, tenants, invoices and revenue ledger, plus draft plan creation. Payment provider adapters, webhook signature verification, subscription lifecycle commands, invoice issuance/collection scheduler, refund execution and reconciliation remain unimplemented. Do not enable public billing writes or production collection until those controls exist.
+The Platform API currently exposes read endpoints for overview, products, plans, tenants, invoices and revenue ledger, plus draft plan creation. A generic payment-provider adapter contract and raw-body HMAC-SHA256 verifier are implemented and unit-tested, but no provider-specific adapter or webhook HTTP endpoint is enabled. Subscription lifecycle commands, invoice issuance/collection scheduler, refund execution and reconciliation remain unimplemented. Do not enable public billing writes or production collection until those controls exist.
 
 ## Isolation and rollout
 
