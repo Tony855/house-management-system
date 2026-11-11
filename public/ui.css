@@ -167,7 +167,7 @@ main.flex-grow-1 {
   main.flex-grow-1 { padding: 22px 18px 34px !important; }
 }
 @media (max-width: 680px) {
-  #root > .d-flex { display: block !important; }
+  #root > .d-flex:has(> .sidebar) { display: block !important; }
   .sidebar {
     position: sticky;
     z-index: 20;
@@ -202,4 +202,33 @@ main.flex-grow-1 {
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+}
+
+/* Entry and login surfaces */
+#root > .d-flex:not(:has(.sidebar)) {
+  background:
+    radial-gradient(ellipse at 15% 12%, rgba(88,125,230,.13), transparent 38%),
+    radial-gradient(ellipse at 88% 84%, rgba(24,165,139,.09), transparent 34%),
+    var(--ui-bg);
+}
+#root > .d-flex:not(:has(.sidebar)) > .w-100,
+#root > .d-flex:not(:has(.sidebar)) > .card {
+  animation: ui-enter .32s ease both;
+}
+#root > .d-flex:not(:has(.sidebar)) .card {
+  border-radius: 20px !important;
+}
+#root > .d-flex:not(:has(.sidebar)) .card-body { padding: clamp(22px, 4vw, 34px); }
+#root > .d-flex:not(:has(.sidebar)) h3,
+#root > .d-flex:not(:has(.sidebar)) h4 { color: #172544; font-weight: 780; letter-spacing: -.035em; }
+#root > .d-flex:not(:has(.sidebar)) .display-5 { color: var(--ui-primary) !important; }
+#root > .d-flex:not(:has(.sidebar)) .col > .card { min-height: 210px; }
+#root > .d-flex:not(:has(.sidebar)) .col > .card:hover {
+  transform: translateY(-4px);
+  box-shadow: var(--ui-shadow-hover) !important;
+}
+@keyframes ui-enter { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+@media (max-width: 680px) {
+  #root > .d-flex:not(:has(.sidebar)) { padding: 16px; }
+  #root > .d-flex:not(:has(.sidebar)) .row { margin-inline: 0; }
 }
