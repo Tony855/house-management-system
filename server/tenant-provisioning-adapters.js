@@ -3,7 +3,8 @@
 const mysql = require('mysql2/promise');
 const { createPlatformTenantRegistry } = require('./platform-adapters');
 
-const IDENTIFIER_RE = /^[A-Za-z0-9_]{1,64}$/;\nconst UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const IDENTIFIER_RE = /^[A-Za-z0-9_]{1,64}$/;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function assertIdentifier(value, code) {
   if (typeof value !== 'string' || !IDENTIFIER_RE.test(value)) throw new TypeError(code);
@@ -66,14 +67,14 @@ function createTenantProvisioningSecretStore(secretManager) {
   }
   return Object.freeze({
     async put(secretRef, value) {
-      if (typeof secretRef !== 'string' || !/^tenant-db\/[0-9a-f-]{36}$/i.test(secretRef) ||
+      if (typeof secretRef !== 'string' || !/^tenant-db\/[0-9a-f-]{36}$/i.test(secretRef) || !UUID_RE.test(secretRef.slice('tenant-db/'.length)) ||
           !value || typeof value.user !== 'string' || typeof value.password !== 'string') {
         throw new TypeError('TENANT_SECRET_INPUT_INVALID');
       }
       await secretManager.putSecret(secretRef, value);
     },
     async delete(secretRef) {
-      if (typeof secretRef !== 'string' || !/^tenant-db\/[0-9a-f-]{36}$/i.test(secretRef)) {
+      if (typeof secretRef !== 'string' || !/^tenant-db\/[0-9a-f-]{36}$/i.test(secretRef) || !UUID_RE.test(secretRef.slice('tenant-db/'.length))) {
         throw new TypeError('TENANT_SECRET_REFERENCE_INVALID');
       }
       await secretManager.deleteSecret(secretRef);
