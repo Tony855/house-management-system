@@ -159,7 +159,7 @@ test('pool manager rejects invalid tenant identity, database port and malformed 
   await assert.rejects(manager.getPool({ ...valid, appId: 'platform' }), /TENANT_CONTEXT_INVALID/);
   await assert.rejects(manager.getPool({ ...valid, tenantId: 'not-a-uuid' }), /TENANT_CONTEXT_INVALID/);
   await assert.rejects(manager.getPool({ ...valid, db: { ...valid.db, port: 70000 } }), /TENANT_DATABASE_PORT_INVALID/);
-  await assert.rejects(manager.getPool({ ...valid, db: { ...valid.db, host: 'db.internal\\nmalicious' } }), /TENANT_DATABASE_CREDENTIALS_INVALID/);
+  await assert.rejects(manager.getPool({ ...valid, db: { ...valid.db, host: 'db.internal\nmalicious' } }), /TENANT_DATABASE_HOST_INVALID/);
   await assert.rejects(manager.getPool({ ...valid, db: { ...valid.db, password: 'p'.repeat(1025) } }), /TENANT_DATABASE_PASSWORD_INVALID/);
 });
 
