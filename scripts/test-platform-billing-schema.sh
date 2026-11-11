@@ -20,6 +20,7 @@ export MYSQL_PWD="$DB_PASSWORD"
 "${mysql_cmd[@]}" "$DB_NAME" < "$ROOT_DIR/db/migrations/platform/005_login_attempt_rate_limit.sql"
 "${mysql_cmd[@]}" "$DB_NAME" < "$ROOT_DIR/db/migrations/platform/007_platform_admin_mfa.sql"
 "${mysql_cmd[@]}" "$DB_NAME" < "$ROOT_DIR/db/migrations/platform/008_platform_admin_auth.sql"
+"${mysql_cmd[@]}" "$DB_NAME" < "$ROOT_DIR/db/migrations/platform/009_platform_admin_login_rate_limit.sql"
 
 expected_tables=11
 actual_tables="$("${mysql_cmd[@]}" -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '$DB_NAME' AND table_type = 'BASE TABLE' AND table_name IN ('platform_billing_accounts','platform_products','platform_plans','platform_subscriptions','platform_invoices','platform_invoice_lines','platform_payment_transactions','platform_payment_webhook_events','platform_refunds','platform_ledger_entries','platform_billing_audit')")"
