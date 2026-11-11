@@ -88,5 +88,9 @@
     "settings",
     "user_permissions",
     "role_permissions"
+  ],
+  "tenantSystemTables": [
+    "tenant_write_idempotency",
+    "tenant_write_audit_events"
   ]
 }
