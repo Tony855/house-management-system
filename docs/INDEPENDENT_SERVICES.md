@@ -79,3 +79,12 @@ No production DB migration or data deletion is performed by the CI jobs.
 - Copy mode requires a complete target writer, target reader and durable audit adapter. The target writer must import the complete snapshot in one transaction; the target reader must read back all tables for count/digest reconciliation.
 - A mismatch fails closed and is audited. The migration result never performs cutover; legacy source data and routing are not modified or deleted.
 - This is an orchestration contract with adapter interfaces, not a production migration runner. No live source/target adapters, tenant-specific database cutover, rollback window or production rehearsal are claimed complete. The next step is to implement and test the actual read-only legacy export and transactional tenant import adapters against disposable MariaDB fixtures.
+
+
+### MariaDB migration adapters
+
+- `server/tenant-data-migration-mariadb.js` provides mysql2-compatible source reader, tenant target writer and target read-back adapters.
+- Every legacy source query is restricted by a bound `org_id = ?` predicate and uses the fixed product table allowlist. Configure the source connection with a read-only principal limited to the legacy product database.
+- The tenant writer acquires a MariaDB advisory lock for the tenant, refuses any non-empty target table, inserts all reviewed rows in one transaction, and rolls back on any error. The lock is released before the connection is returned.
+- The target reader reads back the full tenant table set for count and SHA-256 reconciliation. The target schema must be pre-migrated without `org_id`; the writer rejects attempts to insert that legacy column.
+- Adapter contract tests cover source scoping, transaction commit/rollback, non-empty target refusal, lock lifecycle and org_id injection. These are adapter tests using mysql2-compatible fakes; a live legacy-to-tenant production migration, backup restore and cutover remain separate acceptance gates.
