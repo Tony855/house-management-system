@@ -131,6 +131,14 @@ jobs:
           DB_USER: root
           DB_PASSWORD: house-api-test-root
         run: npm run test:tenant-identity-mariadb
+      - name: Verify product room write APIs against isolated MariaDB tenant schemas
+        env:
+          NODE_ENV: test
+          DB_HOST: 127.0.0.1
+          DB_PORT: 3306
+          DB_USER: root
+          DB_PASSWORD: house-api-test-root
+        run: npm run test:product-room-write-mariadb
       - name: Start Express 5 API and run end-to-end regression
         env:
           NODE_ENV: test
