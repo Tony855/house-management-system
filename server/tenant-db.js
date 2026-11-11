@@ -1,5 +1,6 @@
 'use strict';
 
+const crypto = require('crypto');
 const IDENTIFIER_RE = /^[A-Za-z0-9_]{1,64}$/;
 
 class TenantPoolManager {
@@ -11,6 +12,7 @@ class TenantPoolManager {
     this.idleTtlMs = idleTtlMs;
     this.now = now;
     this.entries = new Map();
+    this.pending = new Map();
   }
 
   _key(context) {
@@ -19,7 +21,8 @@ class TenantPoolManager {
     if (!context.db.host || !context.db.user || typeof context.db.password !== 'string' || !context.db.password) {
       throw new Error('TENANT_DATABASE_CREDENTIALS_INVALID');
     }
-    return [context.appId, context.tenantId, context.db.host, context.db.port, context.db.database, context.db.user].join(':');
+    const credentialFingerprint = crypto.createHash('sha256').update(context.db.password).digest('hex');
+    return [context.appId, context.tenantId, context.db.host, context.db.port, context.db.database, context.db.user, context.db.credentialVersion || '', credentialFingerprint].join(':');
   }
 
   async _close(entry) {
@@ -46,6 +49,14 @@ class TenantPoolManager {
       this.entries.set(key, entry);
       return entry.pool;
     }
+    if (this.pending.has(key)) return this.pending.get(key);
+    const pending = this._createPool(context, key);
+    this.pending.set(key, pending);
+    try { return await pending; }
+    finally { this.pending.delete(key); }
+  }
+
+  async _createPool(context, key) {
     while (this.entries.size >= this.maxPools) {
       const oldestKey = this.entries.keys().next().value;
       const oldest = this.entries.get(oldestKey);
