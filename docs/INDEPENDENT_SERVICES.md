@@ -69,3 +69,13 @@ The Platform API currently exposes read endpoints for overview, products, plans,
 - A failed failure-audit write is attached to the original provisioning error as `auditFailure` and included in `cleanupFailures`; it is never silently discarded. Production audit storage must be durable and alert on write failure.
 
 No production DB migration or data deletion is performed by the CI jobs.
+
+
+## Tenant data copy gate (non-destructive)
+
+`server/tenant-data-migration.js` defines the next migration boundary for moving a legacy `org_id` into a database-per-tenant product database:
+
+- Dry-run is the default. It exports the complete reviewed product-table set for one positive integer `sourceOrgId`, verifies every source row belongs to that org, strips the legacy `org_id` column, and produces per-table row counts and canonical SHA-256 digests.
+- Copy mode requires a complete target writer, target reader and durable audit adapter. The target writer must import the complete snapshot in one transaction; the target reader must read back all tables for count/digest reconciliation.
+- A mismatch fails closed and is audited. The migration result never performs cutover; legacy source data and routing are not modified or deleted.
+- This is an orchestration contract with adapter interfaces, not a production migration runner. No live source/target adapters, tenant-specific database cutover, rollback window or production rehearsal are claimed complete. The next step is to implement and test the actual read-only legacy export and transactional tenant import adapters against disposable MariaDB fixtures.
