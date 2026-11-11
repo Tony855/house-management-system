@@ -145,7 +145,7 @@ jobs:
           DB_USER: root
           DB_PASSWORD: house-api-test-root
         run: npm run test:tenant-identity-mariadb
-      - name: Verify product room write APIs against isolated MariaDB tenant schemas
+      - name: Verify tenant-local idempotency and write-audit migrations\n        env:\n          NODE_ENV: test\n          DB_HOST: 127.0.0.1\n          DB_PORT: 3306\n          DB_USER: root\n          DB_PASSWORD: house-api-test-root\n        run: bash scripts/test-tenant-system-schema.sh\n      - name: Verify product room write APIs against isolated MariaDB tenant schemas
         env:
           NODE_ENV: test
           DB_HOST: 127.0.0.1
