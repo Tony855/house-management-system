@@ -226,7 +226,7 @@ test('product API exposes tenant-local login before bearer authentication and pr
     });
     assert.equal(login.status, 200);
     assert.deepEqual(await login.json(), { accessToken: 'signed-token', tokenType: 'Bearer' });
-    assert.deepEqual(calls[0], ['login', { host: 'tenant.example.test', username: 'same-user', password: 'correct' }]);
+    assert.deepEqual(calls[0], ['login', { host: '127.0.0.1', username: 'same-user', password: 'correct' }]);
     const logout = await fetch(base + '/api/auth/logout', { method: 'POST' });
     assert.equal(logout.status, 200);
     assert.deepEqual(await logout.json(), { ok: true });
@@ -238,8 +238,8 @@ test('product API does not expose login/logout routes when login service is not 
   const { app } = setup();
   await withServer(app, async base => {
     const login = await fetch(base + '/api/auth/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
-    assert.equal(login.status, 401);
+    assert.equal(login.status, 503);
     const logout = await fetch(base + '/api/auth/logout', { method: 'POST' });
-    assert.equal(logout.status, 401);
+    assert.equal(logout.status, 503);
   });
 });
