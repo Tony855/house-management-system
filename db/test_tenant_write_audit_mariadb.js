@@ -35,3 +35,16 @@ test('tenant write audit rejects arbitrary payloads and cross-app identities', a
   await assert.rejects(store.append(tx, { ...base, appId: 'platform' }), /TENANT_WRITE_AUDIT_EVENT_INVALID/);
   await assert.rejects(store.append(tx, { ...base, reason: 'short' }), /TENANT_WRITE_AUDIT_EVENT_INVALID/);
 });
+
+test('tenant write audit rejects control characters and malformed session ids', async () => {
+  const store = createMariaDbTenantWriteAuditStore();
+  const tx = { execute: async () => [{ affectedRows: 1 }, []] };
+  const base = {
+    appId: 'rental', tenantId: '12345678-1234-4123-8123-123456789abc',
+    userId: 'user-1', sessionId: 'session-1234567890',
+    operation: 'create', reason: 'Create room for tenant',
+    requestId: 'request-1234567890', event: 'tenant_write_started'
+  };
+  await assert.rejects(store.append(tx, { ...base, reason: 'Create room\\nmalicious log' }), /TENANT_WRITE_AUDIT_EVENT_INVALID/);
+  await assert.rejects(store.append(tx, { ...base, sessionId: 'short' }), /TENANT_WRITE_AUDIT_EVENT_INVALID/);
+});
