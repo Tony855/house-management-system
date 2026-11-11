@@ -12,4 +12,6 @@ assert.match(css, /\.sidebar \.nav-link\.active/);
 assert.match(css, /@media \(max-width: 680px\)/);
 assert.match(css, /:focus-visible/);
 assert.match(css, /prefers-reduced-motion/);
+assert.match(css, /\.sidebar \.mt-auto \.btn/);
+assert.doesNotMatch(css, /\.sidebar \.mt-auto \{ display: none/);
 console.log('Frontend theme and accessibility smoke checks passed.');
