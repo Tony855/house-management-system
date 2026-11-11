@@ -5,7 +5,7 @@ const { createPlatformBillingRouter } = require('./routes');
 const { createPlatformRepository } = require('./repository');
 const { createPlatformAuthRouter } = require('./auth-routes');
 
-function createPlatformApi({ pool, authenticate, adminAuthService, mfaService, auditStore }) {
+function createPlatformApi({ pool, authenticate, adminAuthService, mfaService, auditStore, adminStore }) {
   if (!pool) throw new TypeError('PLATFORM_DB_POOL_REQUIRED');
   const resolvedAuthenticate = authenticate || (adminAuthService && adminAuthService.authenticate);
   if (typeof resolvedAuthenticate !== 'function') throw new TypeError('PLATFORM_AUTHENTICATOR_REQUIRED');
@@ -13,7 +13,7 @@ function createPlatformApi({ pool, authenticate, adminAuthService, mfaService, a
   app.disable('x-powered-by');
   app.use(express.json({ limit: '256kb', strict: true }));
   app.get('/health/live', (_req, res) => res.json({ ok: true, service: 'platform-api' }));
-  if (adminAuthService) app.use('/api/platform/auth', createPlatformAuthRouter({ authService: adminAuthService, mfaService, auditStore }));
+  if (adminAuthService) app.use('/api/platform/auth', createPlatformAuthRouter({ authService: adminAuthService, mfaService, auditStore, adminStore }));
   app.use('/api/platform', createPlatformBillingRouter({
     repository: createPlatformRepository(pool),
     authenticate: resolvedAuthenticate
