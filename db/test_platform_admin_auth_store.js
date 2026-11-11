@@ -80,6 +80,8 @@ test('admin disable locks active admins and atomically revokes all target sessio
   assert.match(calls[1][0], /FOR UPDATE/);
   assert.match(calls[2][0], /status = 'disabled'/);
   assert.match(calls[3][0], /UPDATE platform_admin_sessions SET revoked_at/);
+  assert.match(calls[4][0], /INSERT INTO platform_admin_audit_events/);
+  assert.deepEqual(calls[4][1], [7, 'session-id-1234567890', 'admin.disable', 'success', 'TARGET_ADMIN_8']);
   assert.equal(calls.includes('commit'), true);
   assert.equal(calls.includes('release'), true);
 });
