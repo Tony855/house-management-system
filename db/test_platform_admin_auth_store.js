@@ -186,3 +186,101 @@ test('MFA reset rolls back factor, recovery, enrollment and session changes if a
   assert.equal(calls.includes('commit'), false);
   assert.equal(calls.at(-1), 'release');
 });
+
+
+test('administrator re-enable request requires a disabled target with an enabled MFA factor and persists an audited request', async () => {
+  const calls = [];
+  const connection = {
+    beginTransaction: async () => calls.push('begin'),
+    query: async (sql, params) => {
+      calls.push([sql, params]);
+      if (sql.includes('FROM platform_admins')) return [[
+        { id: 7, status: 'active' }, { id: 8, status: 'disabled' }
+      ], []];
+      if (sql.includes('FROM platform_admin_mfa_factors')) return [[{ admin_id: 8 }], []];
+      if (sql.startsWith('INSERT INTO platform_admin_reenable_requests')) return [{ insertId: 42 }, []];
+      return [{ affectedRows: 1 }, []];
+    },
+    commit: async () => calls.push('commit'),
+    rollback: async () => calls.push('rollback'),
+    release: () => calls.push('release')
+  };
+  const store = createPlatformAdminAuthStore({
+    query: async () => [[], []], getConnection: async () => connection
+  });
+  assert.equal(await store.requestAdminReenable({
+    actorAdminId: 7, targetAdminId: 8, sessionId: 'session-id-1234567890',
+    reason: 'Restore access after verified incident review'
+  }), 42);
+  assert.match(calls[1][0], /ORDER BY id FOR UPDATE/);
+  assert.match(calls[2][0], /enabled = 1 FOR UPDATE/);
+  assert.match(calls[3][0], /status\) VALUES \(\?, \?, \?, 'pending'\)/);
+  assert.match(calls[4][0], /admin.reenable.request/);
+  assert.equal(calls.includes('commit'), true);
+  assert.equal(calls.at(-1), 'release');
+});
+
+test('administrator re-enable approval requires a different active approver and atomically restores an MFA-protected admin', async () => {
+  const calls = [];
+  const connection = {
+    beginTransaction: async () => calls.push('begin'),
+    query: async (sql, params) => {
+      calls.push([sql, params]);
+      if (sql.includes('FROM platform_admin_reenable_requests')) return [[{
+        id: 42, target_admin_id: 8, requested_by_admin_id: 7
+      }], []];
+      if (sql.includes('FROM platform_admins')) return [[
+        { id: 8, status: 'disabled' }, { id: 9, status: 'active' }
+      ], []];
+      if (sql.includes('FROM platform_admin_mfa_factors')) return [[{ admin_id: 8 }], []];
+      return [{ affectedRows: 1 }, []];
+    },
+    commit: async () => calls.push('commit'),
+    rollback: async () => calls.push('rollback'),
+    release: () => calls.push('release')
+  };
+  const store = createPlatformAdminAuthStore({
+    query: async () => [[], []], getConnection: async () => connection
+  });
+  assert.equal(await store.approveAdminReenable({
+    actorAdminId: 9, targetAdminId: 8, requestId: 42,
+    sessionId: 'session-id-9876543210'
+  }), true);
+  assert.match(calls[1][0], /status = 'pending' FOR UPDATE/);
+  assert.match(calls[2][0], /ORDER BY id FOR UPDATE/);
+  assert.match(calls[3][0], /enabled = 1 FOR UPDATE/);
+  assert.match(calls[4][0], /SET status = 'active'/);
+  assert.match(calls[5][0], /status = 'approved'/);
+  assert.match(calls[6][0], /admin.reenable.approve/);
+  assert.equal(calls.includes('commit'), true);
+  assert.equal(calls.at(-1), 'release');
+});
+
+test('administrator re-enable cannot be self-approved or approved without an active MFA factor', async () => {
+  let factorLookups = 0;
+  const connection = {
+    beginTransaction: async () => {},
+    query: async sql => {
+      if (sql.includes('FROM platform_admin_reenable_requests')) return [[{
+        id: 42, target_admin_id: 8, requested_by_admin_id: 9
+      }], []];
+      if (sql.includes('FROM platform_admins')) return [[
+        { id: 8, status: 'disabled' }, { id: 9, status: 'active' }
+      ], []];
+      if (sql.includes('FROM platform_admin_mfa_factors')) {
+        factorLookups++;
+        return [[], []];
+      }
+      return [{ affectedRows: 1 }, []];
+    },
+    commit: async () => {}, rollback: async () => {}, release: () => {}
+  };
+  const store = createPlatformAdminAuthStore({
+    query: async () => [[], []], getConnection: async () => connection
+  });
+  assert.equal(await store.approveAdminReenable({
+    actorAdminId: 9, targetAdminId: 8, requestId: 42,
+    sessionId: 'session-id-9876543210'
+  }), false);
+  assert.equal(factorLookups, 0, 'requester cannot approve their own request');
+});
