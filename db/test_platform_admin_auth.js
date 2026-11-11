@@ -76,6 +76,9 @@ test('platform login verifies password first and returns only a short-lived MFA 
   assert.equal(challenges.size, 1);
   assert.equal(calls.some(call => call[0] === 'create-session'), false);
   assert.equal(calls.some(call => call[0] === 'clear'), true);
+  assert.deepEqual(calls.find(call => call[0] === 'allowed')[1], {
+    appId: 'platform', host: 'platform', username: 'root'
+  });
 });
 
 test('invalid credentials are throttled and never create MFA challenge or session', async () => {
