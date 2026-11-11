@@ -7,8 +7,8 @@ const { tenantDatabaseName, tenantDatabaseUser, provisionTenant } = require('../
 const id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 
 test('database and principal names are deterministic and tenant-scoped', () => {
-  assert.equal(tenantDatabaseName('rental', id), 'rental_aaaaaaaaaaaaaaaaaaaaaaaa');
-  assert.equal(tenantDatabaseUser(id), 't_aaaaaaaaaaaaaaaaaaaaaaaa');
+  assert.equal(tenantDatabaseName('rental', id), 'rental_aaaaaaaaaaaa4aaa8aaaaaaa');
+  assert.equal(tenantDatabaseUser(id), 't_aaaaaaaaaaaa4aaa8aaaaaaa');
   assert.throws(() => tenantDatabaseName('super', id), /TENANT_PROVISIONING_INPUT_INVALID/);
 });
 
