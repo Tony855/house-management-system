@@ -15,20 +15,17 @@ function createPlatformTenantRegistry(pool) {
   };
 }
 
-function createPlatformProductSessionStore(pool, { now = () => new Date() } = {}) {
+function createPlatformProductSessionStore(pool) {
   if (!pool || typeof pool.query !== 'function') throw new TypeError('PLATFORM_DB_POOL_REQUIRED');
-  if (typeof now !== 'function') throw new TypeError('SESSION_STORE_CLOCK_INVALID');
   return {
     async isSessionActive({ sessionId, userId, tenantId, appId }) {
       if (typeof sessionId !== 'string' || !sessionId ||
           typeof userId !== 'string' || !userId ||
           typeof tenantId !== 'string' || !tenantId ||
           !APP_IDS.has(appId)) return false;
-      const current = now();
-      if (!(current instanceof Date) || Number.isNaN(current.getTime())) throw new TypeError('SESSION_STORE_CLOCK_INVALID');
       const [rows] = await pool.query(
-        'SELECT 1 AS active FROM platform_product_sessions WHERE session_id = ? AND subject_id = ? AND tenant_uuid = ? AND app_id = ? AND revoked_at IS NULL AND expires_at > ? LIMIT 1',
-        [sessionId, userId, tenantId, appId, current]
+        'SELECT 1 AS active FROM platform_product_sessions WHERE session_id = ? AND subject_id = ? AND tenant_uuid = ? AND app_id = ? AND revoked_at IS NULL AND expires_at > UTC_TIMESTAMP() LIMIT 1',
+        [sessionId, userId, tenantId, appId]
       );
       return rows.length === 1;
     }
