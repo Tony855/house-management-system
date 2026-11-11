@@ -47,6 +47,8 @@ test('challenge and session writes validate input and use one-time conditional S
   });
   assert.match(calls[4][0], /^INSERT INTO platform_admin_sessions/);
   assert.equal(await store.touchMfaVerified({ adminId: 7, sessionId: 's'.repeat(43), verifiedAt: 1800000010 }), true);
+  assert.equal(await store.touchStepUpVerified({ adminId: 7, sessionId: 's'.repeat(43), verifiedAt: 1800000020 }), true);
+  assert.match(calls[6][0], /last_step_up_at/);
   assert.equal(await store.revokeSession({ adminId: 7, sessionId: 's'.repeat(43) }), true);
 });
 
