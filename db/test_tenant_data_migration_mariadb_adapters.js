@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const { TABLES } = require('../server/tenant-repository');
 const { createMariaDbTenantMigrationAdapters } = require('../server/tenant-data-migration-mariadb');
+const { tenantDatabaseName } = require('../server/tenant-provisioner');
 
 const tenantId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 
@@ -18,15 +19,18 @@ function createPools(appId, sourceOrgId, { lockAcquired = true, releaseLockSucce
   let committed = false;
   let rolledBack = false;
   let destroyed = false;
+  const targetDatabase = tenantDatabaseName(appId, tenantId);
   const sourcePool = {
     async execute(sql, params) {
       sourceCalls.push({ sql, params });
+      if (sql === 'SELECT DATABASE() AS databaseName') return [[{ databaseName: 'house_sys_' + appId }]];
       const table = sql.match(/FROM `([a-z_]+)`/i)?.[1];
       return [sourceTables[table].filter(row => row.org_id === params[0]).map(row => ({ ...row }))];
     }
   };
   const targetPool = {
     async execute(sql) {
+      if (sql === 'SELECT DATABASE() AS databaseName') return [[{ databaseName: targetDatabase }]];
       const table = sql.match(/FROM `([a-z_]+)`/i)?.[1];
       if (sql.startsWith('SELECT *')) return [targetTables[table].map(row => ({ ...row }))];
       throw new Error('UNEXPECTED_TARGET_QUERY');
@@ -37,6 +41,7 @@ function createPools(appId, sourceOrgId, { lockAcquired = true, releaseLockSucce
         async beginTransaction() { targetCalls.push('BEGIN'); },
         async execute(sql, params = []) {
           targetCalls.push(sql);
+          if (sql === 'SELECT DATABASE() AS databaseName') return [[{ databaseName: targetDatabase }]];
           if (sql.startsWith('SELECT GET_LOCK')) return [[{ acquired: lockAcquired ? 1 : 0 }]];
           if (sql.startsWith('SELECT RELEASE_LOCK')) return [[{ released: releaseLockSucceeds ? 1 : 0 }]];
           const countTable = sql.match(/SELECT COUNT\(\*\) AS total FROM `([a-z_]+)`/i)?.[1];
@@ -146,4 +151,34 @@ test('MariaDB target adapter destroys a pooled connection if advisory lock relea
   assert.equal(f.destroyed, true);
   assert.equal(f.targetCalls.at(-1), 'DESTROY');
   assert.ok(!f.targetCalls.includes('RELEASE'));
+});
+
+
+test('MariaDB adapters reject a source pool connected to the wrong product database', async () => {
+  const f = createPools('rental', 71);
+  f.sourcePool.execute = async sql => sql === 'SELECT DATABASE() AS databaseName'
+    ? [[{ databaseName: 'house_sys_property' }]]
+    : [[]];
+  const adapters = createMariaDbTenantMigrationAdapters({ appId: 'rental', ...f });
+  await assert.rejects(
+    adapters.sourceReader.exportOrgSnapshot({ appId: 'rental', sourceOrgId: 71 }),
+    /TENANT_DATA_MIGRATION_SOURCE_DATABASE_MISMATCH/
+  );
+});
+
+test('MariaDB adapters reject a tenant target pool connected to another tenant database', async () => {
+  const f = createPools('rental', 81);
+  f.targetPool.getConnection = async () => ({
+    async execute(sql) {
+      if (sql === 'SELECT DATABASE() AS databaseName') return [[{ databaseName: 'rental_othertenant' }]];
+      return [[{ acquired: 1 }]];
+    },
+    async rollback() {}, release() {}
+  });
+  const adapters = createMariaDbTenantMigrationAdapters({ appId: 'rental', ...f });
+  const tables = Object.fromEntries([...TABLES.rental].map(table => [table, []]));
+  await assert.rejects(
+    adapters.targetWriter.importTenantSnapshot({ appId: 'rental', tenantId, tables }),
+    /TENANT_DATA_MIGRATION_TARGET_DATABASE_MISMATCH/
+  );
 });
