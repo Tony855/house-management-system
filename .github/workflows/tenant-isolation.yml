@@ -2,7 +2,7 @@ name: Tenant isolation and installer tests
 
 on:
   push:
-    branches: [main, refactor/independent-portals]
+    branches: [main]
   pull_request:
     branches: [main]
 
