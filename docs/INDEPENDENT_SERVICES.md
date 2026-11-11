@@ -7,7 +7,7 @@
 - Property: `apps/property-web/index.html` + `portal.js`, audience `property`, cookie contract `property_session`.
 - Super Admin: `apps/super-admin-web/index.html` + `portal.js`, audience `platform`, cookie contract `platform_session`.
 
-The entrypoints are separate static applications and do not import the legacy shared browser bundle or read/write localStorage/sessionStorage. `apps/portal.css` is a shared presentation stylesheet only; it does not share application state or credentials.
+The entrypoints are separate static applications and do not import the legacy shared browser bundle or read/write localStorage/sessionStorage. Each app ships its own `portal.css` so it can be deployed from its directory without a cross-app asset dependency. `apps/portal.css` is the shared design source only; it does not share application state or credentials.
 
 The current portal pages are architecture/UI shells. Business screens, real login/session refresh, permission-aware navigation, production API URLs, CSP and per-origin cookie issuance are not yet wired. The health probe is not authentication and must never be treated as proof of a user session.
 
