@@ -51,6 +51,10 @@ PLATFORM_DB_POOL_SIZE
 
 The Platform API currently exposes read endpoints for overview, products, plans, tenants, invoices and revenue ledger, plus draft plan creation. A generic payment-provider adapter contract and raw-body HMAC-SHA256 verifier are implemented and unit-tested, but no provider-specific adapter or webhook HTTP endpoint is enabled. Subscription lifecycle commands, invoice issuance/collection scheduler, refund execution and reconciliation remain unimplemented. Do not enable public billing writes or production collection until those controls exist.
 
+## Platform authentication operations
+
+See [Platform Super Admin authentication operations](PLATFORM_ADMIN_AUTH.md) for the dependency contract, MFA/session lifecycle, bootstrap limitations and production acceptance gates.
+
 ## Isolation and rollout
 
 1. Deploy the control-plane database separately from all tenant databases.
