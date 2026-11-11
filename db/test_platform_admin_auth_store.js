@@ -61,3 +61,38 @@ test('challenge and session adapters reject malformed IDs and hashes', async () 
   assert.equal(await store.findById(0), null);
   assert.equal(await store.touchMfaVerified({ adminId: 1, sessionId: '', verifiedAt: 2 }), false);
 });
+
+test('admin disable locks active admins and atomically revokes all target sessions', async () => {
+  const calls = [];
+  const connection = {
+    beginTransaction: async () => calls.push('begin'),
+    query: async (sql, params) => {
+      calls.push([sql, params]);
+      if (sql.includes('SELECT id FROM platform_admins')) return [[{ id: 7 }, { id: 8 }], []];
+      return [{ affectedRows: 1 }, []];
+    },
+    commit: async () => calls.push('commit'),
+    rollback: async () => calls.push('rollback'),
+    release: () => calls.push('release')
+  };
+  const store = createPlatformAdminAuthStore({ query: async () => [[], []], getConnection: async () => connection });
+  assert.equal(await store.disableAdmin({ actorAdminId: 7, targetAdminId: 8 }), true);
+  assert.match(calls[1][0], /FOR UPDATE/);
+  assert.match(calls[2][0], /status = 'disabled'/);
+  assert.match(calls[3][0], /UPDATE platform_admin_sessions SET revoked_at/);
+  assert.equal(calls.includes('commit'), true);
+  assert.equal(calls.includes('release'), true);
+});
+
+test('admin disable refuses self-disable and last active administrator', async () => {
+  let connections = 0;
+  const connection = {
+    beginTransaction: async () => {},
+    query: async sql => sql.includes('SELECT id FROM platform_admins') ? [[{ id: 7 }], []] : [{ affectedRows: 0 }, []],
+    commit: async () => {}, rollback: async () => {}, release: () => {}
+  };
+  const store = createPlatformAdminAuthStore({ query: async () => [[], []], getConnection: async () => { connections++; return connection; } });
+  assert.equal(await store.disableAdmin({ actorAdminId: 7, targetAdminId: 7 }), false);
+  assert.equal(connections, 0);
+  assert.equal(await store.disableAdmin({ actorAdminId: 7, targetAdminId: 8 }), false);
+});
