@@ -15,6 +15,7 @@ export MYSQL_PWD="$DB_PASSWORD"
 "${mysql_cmd[@]}" -e "CREATE DATABASE IF NOT EXISTS $DB_NAME CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
 "${mysql_cmd[@]}" "$DB_NAME" < "$ROOT_DIR/db/migrations/platform/001_platform_tenant_registry.sql"
 "${mysql_cmd[@]}" "$DB_NAME" < "$ROOT_DIR/db/migrations/platform/002_platform_billing.sql"
+"${mysql_cmd[@]}" "$DB_NAME" < "$ROOT_DIR/db/migrations/platform/003_product_sessions.sql"
 
 expected_tables=11
 actual_tables="$("${mysql_cmd[@]}" -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '$DB_NAME' AND table_type = 'BASE TABLE' AND table_name IN ('platform_billing_accounts','platform_products','platform_plans','platform_subscriptions','platform_invoices','platform_invoice_lines','platform_payment_transactions','platform_payment_webhook_events','platform_refunds','platform_ledger_entries','platform_billing_audit')")"
@@ -35,4 +36,7 @@ if (( check_count < 1 )); then
   exit 1
 fi
 
-echo "Platform registry + billing MariaDB migration passed: $actual_tables billing tables, $fk_count foreign keys."
+session_table="$("${mysql_cmd[@]}" -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '$DB_NAME' AND table_name = 'platform_product_sessions' AND table_type = 'BASE TABLE'")"
+if [[ "$session_table" != "1" ]]; then echo "Product session migration was not installed" >&2; exit 1; fi
+if (( fk_count < 11 )); then echo "Expected product session and billing foreign keys, found $fk_count" >&2; exit 1; fi
+echo "Platform registry + billing + product session MariaDB migrations passed: $actual_tables billing tables, $fk_count foreign keys."
