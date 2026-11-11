@@ -98,3 +98,63 @@ test('admin disable refuses self-disable and last active administrator', async (
   assert.equal(connections, 0);
   assert.equal(await store.disableAdmin({ actorAdminId: 7, targetAdminId: 8, sessionId: 'session-id-1234567890' }), false);
 });
+
+
+test('MFA reset disables the factor, deletes pending and recovery credentials, revokes sessions and audits atomically', async () => {
+  const calls = [];
+  const connection = {
+    beginTransaction: async () => calls.push('begin'),
+    query: async (sql, params) => {
+      calls.push([sql, params]);
+      if (sql.startsWith('SELECT id FROM platform_admins')) return [[{ id: 8 }], []];
+      return [{ affectedRows: 1 }, []];
+    },
+    commit: async () => calls.push('commit'),
+    rollback: async () => calls.push('rollback'),
+    release: () => calls.push('release')
+  };
+  const store = createPlatformAdminAuthStore({
+    query: async () => [[], []], getConnection: async () => connection
+  });
+  assert.equal(await store.resetAdminMfa({
+    actorAdminId: 7, targetAdminId: 8, sessionId: 'session-id-1234567890',
+    reason: 'Administrator lost enrolled authenticator'
+  }), true);
+  assert.match(calls[1][0], /status = 'active' FOR UPDATE/);
+  assert.match(calls[2][0], /UPDATE platform_admin_mfa_factors SET enabled = 0/);
+  assert.match(calls[3][0], /DELETE FROM platform_admin_mfa_recovery_codes/);
+  assert.match(calls[4][0], /DELETE FROM platform_admin_mfa_enrollments/);
+  assert.match(calls[5][0], /UPDATE platform_admin_sessions SET revoked_at/);
+  assert.deepEqual(calls[6][1], [
+    7, 'session-id-1234567890', 'admin.mfa.reset', 'success', 'TARGET_ADMIN_8'
+  ]);
+  assert.equal(calls.at(-2), 'commit');
+  assert.equal(calls.at(-1), 'release');
+});
+
+test('MFA reset rejects self-reset, invalid reason and inactive target before changing records', async () => {
+  let connections = 0;
+  const store = createPlatformAdminAuthStore({
+    query: async () => [[], []],
+    getConnection: async () => {
+      connections++;
+      return {
+        beginTransaction: async () => {},
+        query: async () => [[], []],
+        commit: async () => {},
+        rollback: async () => {},
+        release: () => {}
+      };
+    }
+  });
+  assert.equal(await store.resetAdminMfa({
+    actorAdminId: 7, targetAdminId: 7, sessionId: 'session-id-1234567890', reason: 'valid reason'
+  }), false);
+  assert.equal(await store.resetAdminMfa({
+    actorAdminId: 7, targetAdminId: 8, sessionId: 'session-id-1234567890', reason: 'short'
+  }), false);
+  assert.equal(connections, 0);
+  assert.equal(await store.resetAdminMfa({
+    actorAdminId: 7, targetAdminId: 8, sessionId: 'session-id-1234567890', reason: 'valid reset reason'
+  }), false);
+});
