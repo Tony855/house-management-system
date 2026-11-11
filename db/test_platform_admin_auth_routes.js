@@ -98,3 +98,27 @@ test('Platform API mounts password login, MFA challenge, step-up and logout rout
 test('Platform API requires an authenticator before it can be created', () => {
   assert.throws(() => createPlatformApi({ pool: { query() {} } }), /PLATFORM_AUTHENTICATOR_REQUIRED/);
 });
+
+test('MFA enrollment requires a recently MFA-verified authenticated session', async () => {
+  let enrollmentCalls = 0;
+  const authService = {
+    login: async () => ({}), verifyChallenge: async () => ({}),
+    authenticate: (req, _res, next) => { req.platformAuth = { adminId: 7, sessionId: 'session-id', mfaVerified: false }; next(); },
+    stepUp: async () => ({}), logout: async () => true
+  };
+  const mfaService = {
+    getStatus: async () => ({ enabled: false }),
+    beginEnrollment: async () => { enrollmentCalls++; return {}; },
+    confirmEnrollment: async () => ({}),
+    rotateRecoveryCodes: async () => ({})
+  };
+  const app = createPlatformApi({ pool: { query: async () => [[], []] }, adminAuthService: authService, mfaService });
+  await withServer(app, async base => {
+    const response = await fetch(base + '/api/platform/auth/mfa/enrollment', {
+      method: 'POST', headers: { authorization: 'Bearer session-token' }
+    });
+    assert.equal(response.status, 403);
+    assert.deepEqual(await response.json(), { error: 'PLATFORM_MFA_REAUTH_REQUIRED' });
+  });
+  assert.equal(enrollmentCalls, 0);
+});
