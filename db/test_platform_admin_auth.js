@@ -209,8 +209,9 @@ test('platform auth rejects non-canonical base64url token segments', async () =>
   const { service } = fixture();
   const pending = await service.login({ username: 'root', password: 'correct' });
   const issued = await service.verifyChallenge({ challenge: pending.challenge, code: '123456' });
-  const token = issued.accessToken;
-  const req = { headers: { authorization: 'Bearer ' + token.replace('.', '=.') } };
+  const [header, claims, signature] = issued.accessToken.split('.');
+  const malformedToken = [header + '_', claims, signature].join('.');
+  const req = { headers: { authorization: 'Bearer ' + malformedToken } };
   await service.authenticate(req, {}, error => {
     assert.equal(error.code, 'TOKEN_INVALID');
   });
