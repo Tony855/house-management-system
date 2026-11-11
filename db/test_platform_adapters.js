@@ -150,5 +150,5 @@ test('platform admin login limiter accepts only the dedicated platform namespace
   assert.equal(calls[1][1][0], 'platform');
   assert.match(calls[1][1][1], /^[a-f0-9]{64}$/);
   assert.notEqual(calls[1][1][1], identity.username);
-  assert.throws(() => limiter.assertAllowed({ appId: 'unknown', host: 'platform', username: 'root' }), /LOGIN_RATE_LIMIT_IDENTITY_INVALID/);
+  await assert.rejects(limiter.assertAllowed({ appId: 'unknown', host: 'platform', username: 'root' }), /LOGIN_RATE_LIMIT_IDENTITY_INVALID/);
 });
