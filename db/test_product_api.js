@@ -140,7 +140,7 @@ test('product API injects repository bound to the resolved tenant pool', async (
   const tenantPool = {
     async execute(sql, params) {
       calls.push({ sql, params });
-      return [[{ id: 1, name: 'isolated-room' }]];
+      return [[{ id: 1, room_no: '101' }]];
     }
   };
   const { app } = setup({
@@ -148,7 +148,7 @@ test('product API injects repository bound to the resolved tenant pool', async (
       const router = express.Router();
       router.get('/rooms', async (req, res, next) => {
         try {
-          const rows = await req.tenantRepository.list('rooms', { columns: ['id', 'name'], filters: { status: 'vacant' } });
+          const rows = await req.tenantRepository.list('rooms', { columns: ['id', 'room_no'], filters: { status: 'vacant' } });
           res.json(rows);
         } catch (error) { next(error); }
       });
