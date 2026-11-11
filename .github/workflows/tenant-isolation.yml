@@ -116,6 +116,14 @@ jobs:
           DB_USER: root
           DB_PASSWORD: house-api-test-root
         run: npm run test:product-read-mariadb
+      - name: Verify tenant org migration against real MariaDB
+        env:
+          NODE_ENV: test
+          DB_HOST: 127.0.0.1
+          DB_PORT: 3306
+          DB_USER: root
+          DB_PASSWORD: house-api-test-root
+        run: npm run test:tenant-data-migration-mariadb
       - name: Start Express 5 API and run end-to-end regression
         env:
           NODE_ENV: test
