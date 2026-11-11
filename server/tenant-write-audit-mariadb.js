@@ -14,7 +14,7 @@ function createMariaDbTenantWriteAuditStore() {
           typeof event.userId !== 'string' || !event.userId || event.userId.length > 128 ||
           typeof event.sessionId !== 'string' || !/^[A-Za-z0-9._~-]{16,128}$/.test(event.sessionId) ||
           !OPERATIONS.has(event.operation) || typeof event.reason !== 'string' ||
-          event.reason.length < 8 || event.reason.length > 500 || /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(event.reason) ||
+          event.reason.length < 8 || event.reason.length > 500 || /[\x00-\x1f\x7f]/.test(event.reason) ||
           !REQUEST_ID_RE.test(event.requestId || '') || !EVENTS.has(event.event)) {
         throw new TypeError('TENANT_WRITE_AUDIT_EVENT_INVALID');
       }
