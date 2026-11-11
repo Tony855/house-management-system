@@ -14,6 +14,7 @@ class TenantPoolManager {
     this.entries = new Map();
     this.pending = new Map();
     this.tenantEpoch = new Map();
+    this.creationQueue = Promise.resolve();
   }
 
   _key(context) {
@@ -76,30 +77,38 @@ class TenantPoolManager {
   }
 
   async _createPool(context, key, epoch) {
-    while (this.entries.size >= this.maxPools) {
-      const oldestKey = this.entries.keys().next().value;
-      const oldest = this.entries.get(oldestKey);
-      this.entries.delete(oldestKey);
-      await this._close(oldest);
-    }
-    const pool = this.createPool({
-      host: context.db.host,
-      port: context.db.port,
-      user: context.db.user,
-      password: context.db.password,
-      database: context.db.database,
-      charset: 'utf8mb4',
-      dateStrings: true,
-      waitForConnections: true,
-      connectionLimit: 5,
-      queueLimit: 50
-    });
-    if ((this.tenantEpoch.get(context.tenantId) || 0) !== epoch) {
-      await this._close({ pool });
-      throw new Error('TENANT_POOL_INVALIDATED');
-    }
-    this.entries.set(key, { pool, lastUsedAt: this.now(), tenantId: context.tenantId });
-    return pool;
+    const create = async () => {
+      if ((this.tenantEpoch.get(context.tenantId) || 0) !== epoch) throw new Error('TENANT_POOL_INVALIDATED');
+      while (this.entries.size >= this.maxPools) {
+        const oldestKey = this.entries.keys().next().value;
+        const oldest = this.entries.get(oldestKey);
+        this.entries.delete(oldestKey);
+        await this._close(oldest);
+        if ((this.tenantEpoch.get(context.tenantId) || 0) !== epoch) throw new Error('TENANT_POOL_INVALIDATED');
+      }
+      const pool = this.createPool({
+        host: context.db.host,
+        port: context.db.port,
+        user: context.db.user,
+        password: context.db.password,
+        database: context.db.database,
+        charset: 'utf8mb4',
+        dateStrings: true,
+        waitForConnections: true,
+        connectionLimit: 5,
+        queueLimit: 50
+      });
+      if ((this.tenantEpoch.get(context.tenantId) || 0) !== epoch) {
+        await this._close({ pool });
+        throw new Error('TENANT_POOL_INVALIDATED');
+      }
+      this.entries.set(key, { pool, lastUsedAt: this.now(), tenantId: context.tenantId });
+      return pool;
+    };
+    // Serialize capacity checks and inserts so concurrent tenants cannot exceed maxPools.
+    const run = this.creationQueue.then(create);
+    this.creationQueue = run.then(() => undefined, () => undefined);
+    return run;
   }
 
   async closeTenant(tenantId) {
