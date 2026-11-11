@@ -13,7 +13,7 @@ const tenantContext = Object.freeze({ appId: 'rental', tenantId: auth.tenantId, 
 const request = Object.freeze({
   auth, tenantContext, operation: 'update', reason: 'Correct room rent after review',
   stepUpToken: 'step-up-token-1234567890', requestId: 'request-identifier-0001',
-  requestFingerprint: 'a'.repeat(64),
+  payload: { amount: 100, note: 'approved' },
   mutate: async tx => { tx.calls.push('MUTATE'); return { updated: true }; }
 });
 
@@ -52,12 +52,12 @@ test('tenant write requires valid authenticated tenant and product context', asy
   await assert.rejects(service.execute({ ...request, repository, auth: { ...auth, appId: 'hotel' } }), /TENANT_WRITE_CONTEXT_INVALID/);
 });
 
-test('tenant write requires a reason, step-up token, request id and SHA-256 fingerprint', async () => {
+test('tenant write requires a reason, step-up token, request id and valid payload', async () => {
   const { service, repository } = setup();
   await assert.rejects(service.execute({ ...request, repository, reason: 'no' }), /TENANT_WRITE_REQUEST_INVALID/);
   await assert.rejects(service.execute({ ...request, repository, stepUpToken: '' }), /TENANT_WRITE_REQUEST_INVALID/);
   await assert.rejects(service.execute({ ...request, repository, requestId: 'short' }), /TENANT_WRITE_REQUEST_INVALID/);
-  await assert.rejects(service.execute({ ...request, repository, requestFingerprint: 'not-a-hash' }), /TENANT_WRITE_REQUEST_INVALID/);
+  await assert.rejects(service.execute({ ...request, repository, payload: null }), /TENANT_WRITE_PAYLOAD_INVALID/);
 });
 
 test('tenant write authorizes and step-up verifies before opening a transaction', async () => {
@@ -142,7 +142,7 @@ test('tenant write rejects reuse of an idempotency key with a different payload 
   });
   await f.service.execute({ ...request, repository: f.repository });
   await assert.rejects(
-    f.service.execute({ ...request, repository: f.repository, requestFingerprint: 'b'.repeat(64) }),
+    f.service.execute({ ...request, repository: f.repository, payload: { amount: 200, note: 'approved' } }),
     error => error.code === 'TENANT_WRITE_IDEMPOTENCY_CONFLICT' && error.status === 409
   );
 });
