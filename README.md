@@ -91,7 +91,7 @@
 | 层 | 技术 |
 |---|---|
 | 前端 | 原生 HTML/CSS/JS + Bootstrap 5（静态文件，无构建） |
-| 后端 | Node.js 20 + Express 4 |
+| 后端 | Node.js 24 + Express 4 |
 | 数据库 | MariaDB（mysql2/promise 连接池，utf8mb4） |
 | 认证 | 服务端 token 会话表 + scrypt 加盐哈希 |
 | 多租户隔离 | 所有业务表带 `org_id` 行级归属；会话经 AsyncLocalStorage 注入 `mode/orgId` |
