@@ -219,7 +219,7 @@ test('tenant provisioner rejects invalid DB endpoint and incomplete adapters bef
     audit: async () => {}
   };
   await assert.rejects(provisionTenant({
-    ...base, databaseAdmin: { ...base.databaseAdmin, host: 'db.internal\\nattacker' }
+    ...base, databaseAdmin: { ...base.databaseAdmin, host: 'db.internal' + String.fromCharCode(10) + 'attacker' }
   }), /TENANT_DATABASE_ENDPOINT_INVALID/);
   await assert.rejects(provisionTenant({
     ...base, databaseAdmin: { ...base.databaseAdmin, port: 70000 }
@@ -235,6 +235,6 @@ test('tenant display labels reject control characters and oversized values', asy
     appId: 'rental', tenantId: '13131313-1313-4131-8131-131313131313',
     registry: {}, databaseAdmin: {}, secretStore: {}, migrationRunner: {}, isolationVerifier: {}, audit: async () => {}
   };
-  await assert.rejects(provisionTenant({ ...base, displayLabel: 'bad\\nlabel' }), /TENANT_PROVISIONING_INPUT_INVALID/);
+  await assert.rejects(provisionTenant({ ...base, displayLabel: 'bad' + String.fromCharCode(10) + 'label' }), /TENANT_PROVISIONING_INPUT_INVALID/);
   await assert.rejects(provisionTenant({ ...base, displayLabel: 'x'.repeat(121) }), /TENANT_PROVISIONING_INPUT_INVALID/);
 });
