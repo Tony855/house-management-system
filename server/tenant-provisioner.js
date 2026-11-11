@@ -15,8 +15,9 @@ function tenantDatabaseUser(tenantId) {
   return 't_' + tenantId.replace(/-/g, '').slice(0, 24);
 }
 
-async function safeAudit(audit, event) {
-  try { await audit(event); } catch (_) { /* preserve the provisioning result; audit adapter must alert independently */ }
+async function writeAudit(audit, event) {
+  if (typeof audit !== 'function') throw new TypeError('TENANT_AUDIT_ADAPTER_REQUIRED');
+  await audit(event);
 }
 
 /**
@@ -25,7 +26,7 @@ async function safeAudit(audit, event) {
  */
 async function provisionTenant({
   appId, displayLabel, registry, databaseAdmin, secretStore, migrationRunner,
-  isolationVerifier, audit = async () => {}, tenantId = crypto.randomUUID()
+  isolationVerifier, audit, tenantId = crypto.randomUUID()
 }) {
   if (!APP_IDS.has(appId) || typeof displayLabel !== 'string' || !displayLabel.trim() || !UUID_RE.test(tenantId)) {
     throw new Error('TENANT_PROVISIONING_INPUT_INVALID');
@@ -45,28 +46,30 @@ async function provisionTenant({
     db_secret_ref: secretRef, schema_version: null
   };
   let registryCreated = false;
-  let databaseCreated = false;
-  let principalCreated = false;
-  let secretCreated = false;
+  let databaseAttempted = false;
+  let principalAttempted = false;
+  let secretAttempted = false;
 
   try {
     await registry.createProvisioningTenant(record);
     registryCreated = true;
-    await safeAudit(audit, { tenantId, event: 'provisioning_started' });
+    await writeAudit(audit, { tenantId, event: 'provisioning_started' });
 
+    databaseAttempted = true;
     await databaseAdmin.createDatabase(dbName);
-    databaseCreated = true;
+    principalAttempted = true;
     await databaseAdmin.createPrincipal(dbUser, password);
-    principalCreated = true;
     await databaseAdmin.grantDatabaseOnly(dbUser, dbName);
+    secretAttempted = true;
     await secretStore.put(secretRef, { user: dbUser, password });
-    secretCreated = true;
     await migrationRunner.apply({ appId, tenantId, dbName, secretRef });
     const verification = await isolationVerifier.verify({ appId, tenantId, dbName, dbUser });
     if (!verification || verification.passed !== true) throw new Error('TENANT_ISOLATION_VERIFICATION_FAILED');
 
+    // Persist the successful verification before the irreversible activation.
+    // If audit storage is unavailable, the tenant remains non-active.
+    await writeAudit(audit, { tenantId, event: 'provisioning_verified', schemaVersion: verification.schemaVersion || null });
     await registry.activateTenant(tenantId, { schemaVersion: verification.schemaVersion || null });
-    await safeAudit(audit, { tenantId, event: 'provisioning_succeeded' });
     return { tenantId, appId, lifecycleState: 'active', schemaVersion: verification.schemaVersion || null };
   } catch (error) {
     const cleanupFailures = [];
@@ -74,14 +77,19 @@ async function provisionTenant({
       try { await operation(); } catch (_) { cleanupFailures.push(label); }
     };
 
-    if (secretCreated && typeof secretStore.delete === 'function') {
-      await cleanup('secret', () => secretStore.delete(secretRef));
+    // Calls may succeed remotely and then time out locally. Reconcile by the
+    // deterministic tenant resource names, not by success flags set after await.
+    if (secretAttempted) {
+      if (typeof secretStore.delete === 'function') await cleanup('secret', () => secretStore.delete(secretRef));
+      else cleanupFailures.push('secret_cleanup_unavailable');
     }
-    if (principalCreated && typeof databaseAdmin.dropPrincipal === 'function') {
-      await cleanup('principal', () => databaseAdmin.dropPrincipal(dbUser));
+    if (principalAttempted) {
+      if (typeof databaseAdmin.dropPrincipal === 'function') await cleanup('principal', () => databaseAdmin.dropPrincipal(dbUser));
+      else cleanupFailures.push('principal_cleanup_unavailable');
     }
-    if (databaseCreated && typeof databaseAdmin.dropDatabase === 'function') {
-      await cleanup('database', () => databaseAdmin.dropDatabase(dbName));
+    if (databaseAttempted) {
+      if (typeof databaseAdmin.dropDatabase === 'function') await cleanup('database', () => databaseAdmin.dropDatabase(dbName));
+      else cleanupFailures.push('database_cleanup_unavailable');
     }
 
     if (registryCreated) {
@@ -91,12 +99,17 @@ async function provisionTenant({
         cleanupFailures.push('registry_state');
       }
     }
-    await safeAudit(audit, {
-      tenantId,
-      event: 'provisioning_failed',
-      code: error.code || 'PROVISIONING_FAILED',
-      cleanupFailures
-    });
+    try {
+      await writeAudit(audit, {
+        tenantId,
+        event: 'provisioning_failed',
+        code: error.code || 'PROVISIONING_FAILED',
+        cleanupFailures
+      });
+    } catch (auditError) {
+      error.auditFailure = auditError.code || auditError.message || 'AUDIT_WRITE_FAILED';
+      cleanupFailures.push('audit');
+    }
     if (cleanupFailures.length) {
       error.cleanupFailures = cleanupFailures;
       error.code = error.code || 'PROVISIONING_FAILED_CLEANUP_INCOMPLETE';
