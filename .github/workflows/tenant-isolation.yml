@@ -44,8 +44,18 @@ jobs:
       - uses: actions/checkout@v7.0.1
       - name: Install MariaDB client
         run: |
-          sudo apt-get update
-          sudo apt-get install -y mariadb-client
+          # GitHub-hosted runner DNS/package mirrors can be transiently unavailable.
+          # Retry both index refresh and package download rather than failing on one DNS blip.
+          for attempt in 1 2 3 4 5; do
+            if sudo apt-get update -o Acquire::Retries=3 &&
+               sudo apt-get install -y -o Acquire::Retries=3 mariadb-client; then
+              exit 0
+            fi
+            echo "MariaDB client install attempt ${attempt}/5 failed; retrying..."
+            sleep 10
+          done
+          echo "Unable to install mariadb-client after retries" >&2
+          exit 1
       - name: Apply platform registry and billing migrations
         env:
           DB_HOST: 127.0.0.1
@@ -78,8 +88,18 @@ jobs:
           cache: npm
       - name: Install MariaDB client
         run: |
-          sudo apt-get update
-          sudo apt-get install -y mariadb-client
+          # GitHub-hosted runner DNS/package mirrors can be transiently unavailable.
+          # Retry both index refresh and package download rather than failing on one DNS blip.
+          for attempt in 1 2 3 4 5; do
+            if sudo apt-get update -o Acquire::Retries=3 &&
+               sudo apt-get install -y -o Acquire::Retries=3 mariadb-client; then
+              exit 0
+            fi
+            echo "MariaDB client install attempt ${attempt}/5 failed; retrying..."
+            sleep 10
+          done
+          echo "Unable to install mariadb-client after retries" >&2
+          exit 1
       - name: Install dependencies
         run: npm ci
       - name: Initialize disposable legacy test databases
