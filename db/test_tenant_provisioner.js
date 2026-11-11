@@ -198,3 +198,43 @@ test('audit adapter is mandatory before any provisioning side effect', async () 
   }), /TENANT_AUDIT_ADAPTER_REQUIRED/);
   assert.equal(created, false);
 });
+
+test('tenant provisioner rejects invalid DB endpoint and incomplete adapters before side effects', async () => {
+  let created = false;
+  const registry = {
+    createProvisioningTenant: async () => { created = true; },
+    activateTenant: async () => {},
+    markProvisioningFailed: async () => {}
+  };
+  const base = {
+    appId: 'rental', displayLabel: 'Valid label', tenantId: '12121212-1212-4121-8121-121212121212',
+    registry,
+    databaseAdmin: {
+      host: 'db.internal', port: 3306,
+      createDatabase: async () => {}, createPrincipal: async () => {}, grantDatabaseOnly: async () => {}
+    },
+    secretStore: { put: async () => {} },
+    migrationRunner: { apply: async () => {} },
+    isolationVerifier: { verify: async () => ({ passed: true }) },
+    audit: async () => {}
+  };
+  await assert.rejects(provisionTenant({
+    ...base, databaseAdmin: { ...base.databaseAdmin, host: 'db.internal\\nattacker' }
+  }), /TENANT_DATABASE_ENDPOINT_INVALID/);
+  await assert.rejects(provisionTenant({
+    ...base, databaseAdmin: { ...base.databaseAdmin, port: 70000 }
+  }), /TENANT_DATABASE_ENDPOINT_INVALID/);
+  await assert.rejects(provisionTenant({
+    ...base, databaseAdmin: { host: 'db.internal' }
+  }), /TENANT_PROVISIONING_ADAPTER_INVALID/);
+  assert.equal(created, false);
+});
+
+test('tenant display labels reject control characters and oversized values', async () => {
+  const base = {
+    appId: 'rental', tenantId: '13131313-1313-4131-8131-131313131313',
+    registry: {}, databaseAdmin: {}, secretStore: {}, migrationRunner: {}, isolationVerifier: {}, audit: async () => {}
+  };
+  await assert.rejects(provisionTenant({ ...base, displayLabel: 'bad\\nlabel' }), /TENANT_PROVISIONING_INPUT_INVALID/);
+  await assert.rejects(provisionTenant({ ...base, displayLabel: 'x'.repeat(121) }), /TENANT_PROVISIONING_INPUT_INVALID/);
+});
