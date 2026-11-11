@@ -92,3 +92,34 @@ test('audit failure blocks the next migration phase', async () => {
   }), /AUDIT_UNAVAILABLE/);
   assert.equal(sourceCalled, false);
 });
+
+
+test('migration rejects orphaned product relationships before target writes', async () => {
+  const a = adapters('rental', 88);
+  const snapshot = sourceSnapshot('rental', 88);
+  snapshot.tables.rooms[0].building_id = 9999;
+  a.sourceReader.exportOrgSnapshot = async () => snapshot;
+  await assert.rejects(copyTenantOrgData({
+    appId: 'rental', tenantId, sourceOrgId: 88, mode: 'copy', ...a
+  }), /TENANT_DATA_MIGRATION_RELATIONSHIP_INVALID/);
+  assert.equal(a.calls.some(call => call[0] === 'write'), false);
+  assert.ok(!a.calls.some(call => call[0] === 'audit' && call[1] === 'tenant_data_migration_copy_verified'));
+});
+
+test('migration accepts internally consistent room and billing relationships', async () => {
+  const a = adapters('rental', 89);
+  const snapshot = sourceSnapshot('rental', 89);
+  snapshot.tables.rooms[0].building_id = 1;
+  snapshot.tables.contracts[0].room_id = 1;
+  snapshot.tables.contracts[0].tenant_id = 1;
+  snapshot.tables.bills[0].room_id = 1;
+  snapshot.tables.bills[0].tenant_id = 1;
+  snapshot.tables.bills[0].contract_id = 1;
+  snapshot.tables.meters[0].room_id = 1;
+  snapshot.tables.repairs[0].room_id = 1;
+  a.sourceReader.exportOrgSnapshot = async () => snapshot;
+  const result = await copyTenantOrgData({
+    appId: 'rental', tenantId, sourceOrgId: 89, mode: 'copy', ...a
+  });
+  assert.equal(result.copied, true);
+});
