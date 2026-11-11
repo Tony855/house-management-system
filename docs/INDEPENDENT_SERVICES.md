@@ -51,4 +51,12 @@ The Platform API currently exposes read endpoints for overview, products, plans,
 5. Deploy product API routes only after their repository layer is tenant-pool-only.
 6. Keep legacy APIs read-only during controlled cutover, then retire only after rollback window and backup restore drill.
 
+
+## Provisioning safety contract
+
+- `provisionTenant` requires an explicit durable audit adapter before any provisioning side effect; it does not silently substitute a no-op audit callback.
+- The `provisioning_verified` audit event is persisted after schema/isolation verification and before registry activation. If that audit write fails, activation is blocked and the deterministic resources are cleaned up.
+- Database, principal and secret creation attempts are recorded before awaiting the remote adapter. If a remote create succeeds but the client times out, cleanup still attempts deletion using the tenant UUID-derived resource names. Cleanup adapters must make delete/drop operations idempotent and treat an already-absent resource as success.
+- A failed failure-audit write is attached to the original provisioning error as `auditFailure` and included in `cleanupFailures`; it is never silently discarded. Production audit storage must be durable and alert on write failure.
+
 No production DB migration or data deletion is performed by the CI jobs.
