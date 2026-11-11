@@ -134,3 +134,33 @@ test('product API does not expose arbitrary error messages to clients', async ()
     assert.deepEqual(await response.json(), { error: 'REQUEST_FAILED' });
   });
 });
+
+test('product API injects repository bound to the resolved tenant pool', async () => {
+  const calls = [];
+  const tenantPool = {
+    async execute(sql, params) {
+      calls.push({ sql, params });
+      return [[{ id: 1, name: 'isolated-room' }]];
+    }
+  };
+  const { app } = setup({
+    routes: () => {
+      const router = express.Router();
+      router.get('/rooms', async (req, res, next) => {
+        try {
+          const rows = await req.tenantRepository.list('rooms', { columns: ['id', 'name'], filters: { status: 'vacant' } });
+          res.json(rows);
+        } catch (error) { next(error); }
+      });
+      return router;
+    },
+    poolManager: { getPool: async () => tenantPool }
+  });
+  await withServer(app, async base => {
+    const response = await fetch(base + '/api/rooms');
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), [{ id: 1, name: 'isolated-room' }]);
+    assert.match(calls[0].sql, /FROM `rooms` WHERE `status` = \? ORDER BY `id` ASC LIMIT \? OFFSET \?/);
+    assert.deepEqual(calls[0].params, ['vacant', 50, 0]);
+  });
+});
