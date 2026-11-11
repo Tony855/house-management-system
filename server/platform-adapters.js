@@ -88,7 +88,7 @@ function createTenantDatabaseSecretProvider(secretManager) {
 function createPlatformLoginRateLimiter(pool, {
   hmacKey, maxAttempts = 10, windowSeconds = 900, blockSeconds = 900
 } = {}) {
-  if (!pool || typeof pool.getConnection !== 'function') throw new TypeError('PLATFORM_DB_CONNECTION_POOL_REQUIRED');
+  if (!pool || typeof pool.query !== 'function') throw new TypeError('PLATFORM_DB_QUERY_POOL_REQUIRED');
   if (!(typeof hmacKey === 'string' || Buffer.isBuffer(hmacKey)) || Buffer.byteLength(hmacKey) < 32) {
     throw new TypeError('LOGIN_RATE_LIMIT_HMAC_KEY_REQUIRED');
   }
@@ -107,21 +107,6 @@ function createPlatformLoginRateLimiter(pool, {
       .update([appId, host.toLowerCase(), username.toLowerCase()].join(String.fromCharCode(0))).digest('hex');
   }
 
-  async function withTransaction(fn) {
-    const connection = await pool.getConnection();
-    try {
-      await connection.beginTransaction();
-      const result = await fn(connection);
-      await connection.commit();
-      return result;
-    } catch (error) {
-      try { await connection.rollback(); } catch (_) {}
-      throw error;
-    } finally {
-      connection.release();
-    }
-  }
-
   return Object.freeze({
     async assertAllowed(identity) {
       const hash = identityHash(identity);
@@ -136,24 +121,15 @@ function createPlatformLoginRateLimiter(pool, {
     },
     async recordFailure(identity) {
       const hash = identityHash(identity);
-      await withTransaction(async connection => {
-        await connection.query(
-          'INSERT IGNORE INTO platform_login_attempts (app_id, identity_hash, window_started_at, failures, blocked_until) VALUES (?, ?, UTC_TIMESTAMP(), 0, NULL)',
-          [identity.appId, hash]
-        );
-        const [rows] = await connection.query(
-          'SELECT window_started_at, failures, (window_started_at <= DATE_SUB(UTC_TIMESTAMP(), INTERVAL ? SECOND)) AS expired FROM platform_login_attempts WHERE app_id = ? AND identity_hash = ? FOR UPDATE',
-          [windowSeconds, identity.appId, hash]
-        );
-        const row = rows[0];
-        const expired = !row || Number(row.expired) === 1;
-        const failures = expired ? 1 : Number(row.failures) + 1;
-        const blocked = failures >= maxAttempts;
-        await connection.query(
-          'UPDATE platform_login_attempts SET window_started_at = IF(?, UTC_TIMESTAMP(), window_started_at), failures = ?, blocked_until = IF(?, DATE_ADD(UTC_TIMESTAMP(), INTERVAL ? SECOND), NULL), updated_at = UTC_TIMESTAMP() WHERE app_id = ? AND identity_hash = ?',
-          [expired, failures, blocked, blockSeconds, identity.appId, hash]
-        );
-      });
+      await pool.query(
+        'INSERT INTO platform_login_attempts (app_id, identity_hash, window_started_at, failures, blocked_until) VALUES (?, ?, UTC_TIMESTAMP(), 1, NULL) ' +
+        'ON DUPLICATE KEY UPDATE ' +
+        'blocked_until = IF(IF(window_started_at <= DATE_SUB(UTC_TIMESTAMP(), INTERVAL ? SECOND), 1, failures + 1) >= ?, DATE_ADD(UTC_TIMESTAMP(), INTERVAL ? SECOND), NULL), ' +
+        'failures = IF(window_started_at <= DATE_SUB(UTC_TIMESTAMP(), INTERVAL ? SECOND), 1, failures + 1), ' +
+        'window_started_at = IF(window_started_at <= DATE_SUB(UTC_TIMESTAMP(), INTERVAL ? SECOND), UTC_TIMESTAMP(), window_started_at), ' +
+        'updated_at = UTC_TIMESTAMP()',
+        [identity.appId, hash, windowSeconds, maxAttempts, blockSeconds, windowSeconds, windowSeconds]
+      );
       return true;
     },
     async clear(identity) {
