@@ -2,6 +2,7 @@
 
 const express = require('express');
 const { createTenantMiddleware } = require('./tenant-middleware');
+const { createTenantRepository } = require('./tenant-repository');
 
 const PRODUCT_IDS = new Set(['rental', 'hotel', 'property']);
 
@@ -32,6 +33,14 @@ function createProductApi({ appId, authenticate, registry, secretProvider, poolM
   const api = express.Router();
   api.use(asyncBoundary(async (req, res, next) => authenticate(req, res, next)));
   api.use(resolveTenant);
+  api.use((req, _res, next) => {
+    try {
+      req.tenantRepository = createTenantRepository({ pool: req.tenantDb, appId });
+      return next();
+    } catch (error) {
+      return next(error);
+    }
+  });
   api.get('/tenant-context', (req, res) => res.json({
     appId: req.tenantContext.appId,
     tenantId: req.tenantContext.tenantId,
