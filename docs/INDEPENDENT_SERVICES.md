@@ -174,3 +174,11 @@ The CI legacy MariaDB integration now creates an ephemeral tenant database, clon
 
 - Dependabot is already configured for weekly npm and GitHub Actions updates on the independent refactor branch, with a bounded pull-request queue.
 - CI validates the locked dependency graph on Node.js 24 and 26 and runs the production dependency audit. Dependency updates still require CI and security review before merge.
+
+
+### Product-specific room creation routes (guarded, not production-enabled)
+
+- Rental, Hotel and Property now expose a dedicated `POST /api/rooms` route with strict per-product DTO allowlists. Hotel accepts daily pricing and hotel room states; Property accepts owner/property-fee and utility pricing; Rental accepts monthly rent/deposit and rental fields.
+- The routes lock the parent building, reject duplicate room numbers, validate Property owner references, and insert only through the product tenant repository inside the tenant write transaction. Client-supplied tenant/org IDs and cross-product fields are rejected.
+- Mounted API tests now exercise Hotel and Property composition roots, tenant-context resolution, product-specific SQL column projections, owner-not-found rollback, and fail-closed behavior when no write service is configured.
+- These routes remain unavailable for production mutation until each deployed product injects real authorization, MFA/step-up, durable audit and MariaDB idempotency adapters, and the per-tenant schema has been provisioned and verified. The MariaDB idempotency adapter is implemented; its production use still depends on applying migration 002 to each tenant DB and wiring the real adapters into the product API deployment.
