@@ -11,7 +11,7 @@
     "test:tenant-isolation": "node --test db/test_tenant_isolation.js db/test_tenant_provisioner.js db/test_schema_manifest.js db/test_tenant_data_migration.js db/test_tenant_data_migration_mariadb_adapters.js db/test_tenant_write_service.js db/test_tenant_identity_migration.js db/test_tenant_write_idempotency.js",
     "test": "npm run test:db-mode && npm run test:tenant-isolation && npm run test:deploy && npm run test:platform-billing && npm run test:frontend && npm run test:runtime && npm run test:api-architecture",
     "test:deploy": "bash scripts/test-deploy.sh",
-    "test:platform-billing": "node --test db/test_platform_billing.js db/test_platform_mfa.js db/test_platform_mfa_store.js db/test_platform_admin_auth.js db/test_platform_admin_auth_store.js",
+    "test:platform-billing": "node --test db/test_platform_billing.js db/test_platform_mfa.js db/test_platform_mfa_store.js db/test_platform_admin_auth.js db/test_platform_admin_auth_store.js db/test_platform_admin_auth_routes.js",
     "test:frontend": "node db/check_frontend.js && node scripts/test-ui.js",
     "test:runtime": "node scripts/test-runtime.js",
     "test:api-architecture": "node --test db/test_product_login.js db/test_product_api.js db/test_product_read_routes.js db/test_tenant_repository.js db/test_product_auth.js db/test_product_dependencies.js db/test_platform_adapters.js db/test_platform_api.js db/test_portals.js db/test_service_boundaries.js db/test_payment_provider.js db/test_rental_write_routes.js db/test_hotel_property_write_routes.js db/test_product_room_write_api.js",
