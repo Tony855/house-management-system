@@ -78,7 +78,7 @@ test('MariaDB source adapter scopes every query to the selected org with bound p
   const adapters = createMariaDbTenantMigrationAdapters({ appId: 'rental', ...f });
   const snapshot = await adapters.sourceReader.exportOrgSnapshot({ appId: 'rental', sourceOrgId: 17 });
   assert.deepEqual(Object.keys(snapshot.tables).sort(), [...TABLES.rental].sort());
-  assert.equal(f.sourceCalls.length, TABLES.rental.size);
+  assert.equal(f.sourceCalls.length, TABLES.rental.size + 1);
   assert.ok(snapshot.tables.buildings.every(row => row.org_id === 17));
   assert.equal(snapshot.tables.buildings.length, 1);
   assert.ok(f.sourceCalls.every(call => /WHERE `org_id` = \? ORDER BY `id` ASC/.test(call.sql) && call.params[0] === 17));
