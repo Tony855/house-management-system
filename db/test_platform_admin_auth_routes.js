@@ -14,10 +14,16 @@ async function withServer(app, fn) {
 
 function fixture() {
   const calls = [];
+  const mfaService = {
+    getStatus: async input => { calls.push(['mfa-status', input]); return { enabled: true }; },
+    beginEnrollment: async input => { calls.push(['mfa-enroll', input]); return { secret: 'BASE32', otpauthUrl: 'otpauth://totp/test' }; },
+    confirmEnrollment: async input => { calls.push(['mfa-confirm', input]); return { enabled: true, recoveryCodes: ['A1B2-C3D4-E5F6'] }; },
+    rotateRecoveryCodes: async input => { calls.push(['mfa-rotate', input]); return { rotated: true, recoveryCodes: ['B1B2-C3D4-E5F6'] }; }
+  };
   const authService = {
     login: async input => { calls.push(['login', input]); return { mfaRequired: true, challenge: 'challenge-token' }; },
     verifyChallenge: async input => { calls.push(['verify', input]); return { tokenType: 'Bearer', accessToken: 'signed-token' }; },
-    authenticate: (req, _res, next) => { req.platformAuth = { adminId: 7, sessionId: 'session-id' }; next(); },
+    authenticate: (req, _res, next) => { req.platformAuth = { adminId: 7, sessionId: 'session-id', mfaVerified: true }; next(); },
     stepUp: async input => { calls.push(['step-up', input]); return { stepUpVerified: true }; },
     logout: async input => { calls.push(['logout', input]); return true; }
   };
@@ -25,7 +31,7 @@ function fixture() {
     query: async () => [[], []],
     getConnection: async () => { throw new Error('not used'); }
   };
-  return { app: createPlatformApi({ pool, adminAuthService: authService }), calls };
+  return { app: createPlatformApi({ pool, adminAuthService: authService, mfaService }), calls };
 }
 
 test('Platform API mounts password login, MFA challenge, step-up and logout routes', async () => {
@@ -45,6 +51,32 @@ test('Platform API mounts password login, MFA challenge, step-up and logout rout
     assert.equal(verify.status, 200);
     assert.deepEqual(await verify.json(), { tokenType: 'Bearer', accessToken: 'signed-token' });
 
+    const status = await fetch(base + '/api/platform/auth/mfa/status', {
+      headers: { authorization: 'Bearer session-token' }
+    });
+    assert.equal(status.status, 200);
+    assert.deepEqual(await status.json(), { enabled: true });
+
+    const enrollment = await fetch(base + '/api/platform/auth/mfa/enrollment', {
+      method: 'POST', headers: { authorization: 'Bearer session-token' }
+    });
+    assert.equal(enrollment.status, 200);
+    assert.equal((await enrollment.json()).secret, 'BASE32');
+
+    const confirm = await fetch(base + '/api/platform/auth/mfa/enrollment/confirm', {
+      method: 'POST', headers: { authorization: 'Bearer session-token', 'content-type': 'application/json' },
+      body: JSON.stringify({ code: '123456' })
+    });
+    assert.equal(confirm.status, 200);
+    assert.equal((await confirm.json()).recoveryCodes.length, 1);
+
+    const rotate = await fetch(base + '/api/platform/auth/mfa/recovery-codes/rotate', {
+      method: 'POST', headers: { authorization: 'Bearer session-token', 'content-type': 'application/json' },
+      body: JSON.stringify({ code: '123456' })
+    });
+    assert.equal(rotate.status, 200);
+    assert.equal((await rotate.json()).rotated, true);
+
     const stepUp = await fetch(base + '/api/platform/auth/step-up', {
       method: 'POST', headers: { authorization: 'Bearer session-token', 'content-type': 'application/json' },
       body: JSON.stringify({ code: '123456' })
@@ -57,8 +89,10 @@ test('Platform API mounts password login, MFA challenge, step-up and logout rout
     });
     assert.equal(logout.status, 204);
   });
-  assert.deepEqual(calls.map(call => call[0]), ['login', 'verify', 'step-up', 'logout']);
-  assert.deepEqual(calls[2][1], { adminId: 7, sessionId: 'session-id', code: '123456' });
+  assert.deepEqual(calls.map(call => call[0]), ['login', 'verify', 'mfa-status', 'mfa-enroll', 'mfa-confirm', 'mfa-rotate', 'step-up', 'logout']);
+  assert.deepEqual(calls[4][1], { adminId: 7, code: '123456' });
+  assert.deepEqual(calls[5][1], { adminId: 7, code: '123456' });
+  assert.deepEqual(calls[6][1], { adminId: 7, sessionId: 'session-id', code: '123456' });
 });
 
 test('Platform API requires an authenticator before it can be created', () => {
