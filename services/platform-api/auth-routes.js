@@ -102,7 +102,6 @@ function createPlatformAuthRouter({ authService, mfaService, auditStore, adminSt
       if (disabled !== true) {
         return next(Object.assign(new Error('PLATFORM_ADMIN_DISABLE_REJECTED'), { code: 'PLATFORM_ADMIN_DISABLE_REJECTED', status: 409 }));
       }
-      await audit(req, 'admin.disable', 'success');
       return res.status(204).end();
     } catch (error) { return next(error); }
   });
