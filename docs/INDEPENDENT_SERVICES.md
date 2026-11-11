@@ -191,3 +191,6 @@ The CI legacy MariaDB integration now creates an ephemeral tenant database, clon
 - Coverage includes concurrent duplicate request delivery, idempotent replay, same-key/different-payload conflict, duplicate room rejection, missing building, Property owner validation, and rollback when the commit-audit adapter fails.
 - CI uses explicit test-only authorization and step-up verifiers. These prove transaction orchestration and persistence behavior; they are not production MFA or policy implementations. Production deployments must inject real identity-bound authorization and step-up verifiers, a durable audit adapter, tenant-specific database credentials and tenant migrations before enabling writes.
 - Disposable databases are removed in test cleanup. The test never copies or modifies production tenant data.
+
+
+- The MariaDB write integration now provisions a unique test DB principal per tenant, grants only `SELECT/INSERT/UPDATE/DELETE` on that tenant database, and verifies that access to the shared legacy product database and DDL are denied. The API is exercised using this restricted principal rather than the MariaDB root account.
