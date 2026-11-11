@@ -133,11 +133,15 @@ test('tenant write replays an identical idempotency key without repeating the mu
 });
 
 test('tenant write rejects reuse of an idempotency key with a different payload fingerprint', async () => {
+  let fingerprint;
   const f = setup({
     idempotencyStore: {
-      execute: async (_tx, input) => input.requestFingerprint === 'a'.repeat(64)
-        ? { status: 'executed', result: { updated: true } }
-        : { status: 'conflict' }
+      execute: async (_tx, input) => {
+        if (!fingerprint) { fingerprint = input.requestFingerprint; return { status: 'executed', result: { updated: true } }; }
+        return input.requestFingerprint === fingerprint
+          ? { status: 'replayed', result: { updated: true } }
+          : { status: 'conflict' };
+      }
     }
   });
   await f.service.execute({ ...request, repository: f.repository });
