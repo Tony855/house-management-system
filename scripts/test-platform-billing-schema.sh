@@ -12,7 +12,7 @@ if [[ ! "$DB_NAME" =~ ^[A-Za-z0-9_]{1,64}$ ]]; then echo "Unsafe test database n
 mysql_cmd=(mysql --protocol=tcp --host="$DB_HOST" --port="$DB_PORT" --user="$DB_USER" --batch --skip-column-names)
 export MYSQL_PWD="$DB_PASSWORD"
 
-"${mysql_cmd[@]}" -e "CREATE DATABASE IF NOT EXISTS `$DB_NAME` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
+"${mysql_cmd[@]}" -e "CREATE DATABASE IF NOT EXISTS $DB_NAME CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
 "${mysql_cmd[@]}" "$DB_NAME" < "$ROOT_DIR/db/migrations/platform/001_platform_tenant_registry.sql"
 "${mysql_cmd[@]}" "$DB_NAME" < "$ROOT_DIR/db/migrations/platform/002_platform_billing.sql"
 
