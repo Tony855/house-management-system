@@ -15,4 +15,6 @@ grep -Fq 'User=house-sys' deploy.sh
 grep -Fq 'ProtectSystem=strict' deploy.sh
 grep -Fq 'chmod 0600 "$CREDENTIAL_FILE"' deploy.sh
 grep -Fq 'HOUSE_SYS_SUPERADMIN_PASSWORD' deploy.sh
+grep -Fq 'setup_24.x' deploy.sh
+grep -Fq ' -lt 24 ' deploy.sh
 echo "Installer static safety checks passed."
