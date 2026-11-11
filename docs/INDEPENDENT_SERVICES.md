@@ -112,3 +112,10 @@ The CI legacy MariaDB integration now creates an ephemeral tenant database, clon
 
 - Migration preflight validates known in-product references (for example room-to-building, contract-to-room/tenant, bill-to-contract/order, and maintenance-to-room) against the selected tenant snapshot before any target write. Historical orphan references fail closed and require explicit data repair; this preflight does not invent or silently rewrite missing relationships.
 - MariaDB migration adapters verify `SELECT DATABASE()` on the source and tenant target connections. Source must be `house_sys_<product>`; target must exactly match the canonical tenant DB name generated from the product and tenant UUID.
+
+
+### Tenant write idempotency gate
+
+- The tenant write service now requires an explicit idempotency adapter in addition to authorization, step-up and transactional audit.
+- Every write carries a SHA-256 request fingerprint and a bounded request ID. The adapter contract must atomically reserve/replay the (app, tenant, user, requestId) key inside the same tenant transaction; a matching replay returns the original result without rerunning the domain mutation, while a different fingerprint returns a conflict.
+- The service fails closed if the adapter is absent or returns an unknown state. No production MariaDB idempotency adapter or migrated business write endpoint is claimed until its unique-key/locking behavior is implemented and integration-tested.
