@@ -6,53 +6,42 @@ This document describes the production boundary for the Platform API authenticat
 
 Create the Platform API only after a dedicated `PLATFORM_DB_*` pool and the following dependencies are available:
 
-- `mfaEncryption.encrypt/decrypt`: envelope encryption backed by the deployment KMS or HSM. The database stores only the encrypted envelope.
-- `recoveryCodePepper`: at least 32 bytes, held in the secret manager and independent from the MFA encryption key.
-- `loginRateLimitHmacKey`: at least 32 bytes, held in the secret manager and independent from JWT keys.
-- `signingKeyProvider.getSigningKey({ appId: 'platform' })`: returns a key of at least 32 bytes and a key ID matching `[A-Za-z0-9._-]{1,128}`.
-- `verificationKeyProvider.getVerificationKey({ kid, appId: 'platform' })`: resolves active and still-valid previous keys for rotation.
-- `issuer`: the canonical HTTPS issuer configured for the platform control plane.
+- `mfaEncryption.encrypt/decrypt`: envelope encryption backed by deployment KMS/HSM.
+- `recoveryCodePepper` and `loginRateLimitHmacKey`: independent secrets of at least 32 bytes from a secret manager.
+- `signingKeyProvider` / `verificationKeyProvider`: platform-only signing and rotation-aware verification keys.
+- `issuer`: canonical HTTPS control-plane issuer.
 
-The auth dependency factory validates the required interfaces and minimum key sizes. It does not create or persist secret-manager keys. The Platform API must fail startup if any dependency is absent; never substitute development keys or reuse product-app signing material.
+The runtime fails startup if security dependencies are absent. It has no development-key or legacy-database fallback.
 
-## Authentication lifecycle
+## Authentication and MFA
 
-1. Password login checks the active admin and persistent platform login limiter.
-2. A successful password check returns only a short-lived, opaque MFA challenge. It does not issue an access token or create a session.
-3. A valid TOTP or one-time recovery code consumes the challenge and creates a server-side session.
-4. Platform access tokens are HS256, platform-audience only, short-lived, bound to a persisted session, and checked against the current admin status and permissions.
-5. Sensitive mutations require an explicit `/step-up` MFA verification. Login MFA alone does not satisfy step-up.
-6. Logout revokes the exact server-side session.
+1. Password login returns only a short-lived MFA challenge.
+2. Successful TOTP/recovery verification consumes the challenge and creates a persisted server-side session.
+3. Platform JWTs are platform-audience-only, short-lived, session-bound and checked against current admin state.
+4. Sensitive mutations require fresh step-up MFA.
+5. Logout revokes the exact server-side session.
+6. Enrollment and recovery-code rotation require a recent MFA-verified session; plaintext recovery codes are returned once and never stored.
 
-The login limiter accepts usernames up to 80 characters, matching the auth endpoint contract. It persists only a keyed identity digest, never the raw username or hostname. Limiter storage failures fail closed with HTTP 503.
+## Persistent security audit
 
-## MFA enrollment and first-admin bootstrap
+Migration `011_platform_admin_audit.sql` creates the platform-only security event ledger. The API records login, MFA challenge verification, enrollment, recovery-code rotation, step-up and logout outcomes. The event schema intentionally excludes usernames, IP addresses, passwords, MFA codes, raw recovery codes, bearer tokens and encrypted secret envelopes. Event action/outcome/code fields are allowlisted and all values are SQL-bound parameters.
 
-The Platform API now exposes authenticated MFA lifecycle endpoints:
-- `GET /api/platform/auth/mfa/status`: returns only whether an MFA factor is enabled; never returns its encrypted envelope.
-- `POST /api/platform/auth/mfa/enrollment`: starts a ten-minute enrollment and returns the TOTP secret/otpauth URI once.
-- `POST /api/platform/auth/mfa/enrollment/confirm`: confirms the pending factor and returns ten recovery codes once.
-- `POST /api/platform/auth/mfa/recovery-codes/rotate`: verifies the current TOTP or a single-use recovery code, atomically replaces all recovery-code hashes, and returns the new codes once.
+Audit writes on successful security lifecycle operations happen before returning success. If persistence is unavailable, the operation fails closed rather than silently reporting an unaudited success. Failure events are best-effort so an audit outage does not replace the original authentication error.
 
-Enrollment and recovery-code rotation require an authenticated session whose MFA verification is still fresh (the configured step-up freshness window). Recovery-code hashes are replaced transactionally while locking the enabled factor row. Plaintext recovery codes are never persisted. A safe first-admin bootstrap command is still not implemented; do not seed a production admin with a shared default password.
+## First-admin bootstrap and remaining production controls
 
-Before production activation, implement and review:
-- A one-time, audited bootstrap procedure executed from a trusted administrative channel.
-- Mandatory MFA enrollment before granting the first usable platform session.
-- Authenticated enrollment confirmation, with re-enrollment requiring existing-factor verification or an out-of-band recovery approval.
-- Recovery-code rotation and revocation, with one-time display and audit events.
-- Admin disablement, session revocation and key-rotation runbooks.
+A safe one-time first-admin bootstrap command is not yet implemented. Do not seed production with a shared/default password or expose an unauthenticated bootstrap HTTP endpoint. The bootstrap must run only from a trusted host/operator channel, be one-time and concurrency-safe, require explicit credential input, force MFA enrollment, and never print secrets into logs or shell history.
+
+Still required before production activation:
+- First-admin bootstrap and forced initial MFA enrollment.
+- Admin disablement, global session revocation and audited recovery procedures.
+- Production KMS/HSM provisioning, key rotation and denied-key drills.
+- Real Secret Manager and least-privilege tenant DB provisioning adapters.
+- Rental/Hotel/Property historical data migration and isolation verification.
+- Backup/restore, rollback, load and clean-host deployment drills.
 
 ## Operational acceptance
 
-- Apply platform migrations to a disposable MariaDB 11.4 instance and verify schema versions.
-- Prove KMS encrypt/decrypt round trips and denied-key behavior in the target environment.
-- Prove signing-key rotation: new sessions use the active key; existing sessions validate only while their key remains in the approved verification set.
-- Verify rate limiting across concurrent requests and across multiple Platform API instances.
-- Verify challenge expiry, five-attempt lockout, replay rejection, recovery-code single use, session revocation, permission refresh and step-up expiry.
-- Confirm application logs never include passwords, MFA codes, raw recovery codes, access tokens, encrypted secret envelopes or database credentials.
-- Run clean-host deployment, backup/restore and rollback drills before moving the PR out of Draft.
+Run platform migrations against disposable MariaDB, verify schema versioning, KMS round trips, key rotation, concurrent rate limiting, challenge expiry/replay/lockout, recovery-code single use, session revocation, permission refresh and step-up expiry. Confirm logs contain no authentication secrets. Keep PR in Draft until all production acceptance gates and review are complete.
 
-## Current status
-
-Unit and MariaDB CI validate the domain/store contracts, login limiter, migration and API route behavior. Production KMS/HSM provisioning, first-admin bootstrap, self-service MFA lifecycle routes, deployment-specific key rotation, and clean-host operational drills remain external acceptance gates. The legacy runtime is still the production entrypoint until the migration and cutover plan is completed.
+The legacy runtime remains the production entrypoint until the migration and cutover plan is completed.
