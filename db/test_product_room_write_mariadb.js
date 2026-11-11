@@ -45,7 +45,7 @@ async function createTenantDb(adminPool, config, appId, tenantId, created, creat
   }
   const dbUser = 't_' + tenantId.replace(/-/g, '').slice(0, 24);
   const dbPassword = crypto.randomBytes(24).toString('base64url');
-  await adminPool.query('CREATE USER ' + mysql.escape(dbUser) + '@' + mysql.escape('%') + ' IDENTIFIED BY ?', [dbPassword]);
+  await adminPool.query('CREATE USER ' + mysql.escape(dbUser) + '@' + mysql.escape('%') + ' IDENTIFIED BY ' + mysql.escape(dbPassword));
   await adminPool.query('GRANT SELECT, INSERT, UPDATE, DELETE ON ' + mysql.escapeId(database) + '.* TO ' + mysql.escape(dbUser) + '@' + mysql.escape('%'));
   createdUsers.push(dbUser);
   return { pool, credentials: { user: dbUser, password: dbPassword } };
