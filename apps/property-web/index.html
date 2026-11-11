@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-CN" data-app-id="property" data-session-cookie="property_session">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="same-origin"><meta name="api-health" content="/health/live">
+<title>物业运营中心 · Property</title><link rel="stylesheet" href="/portal.css">
+<script type="module" src="/portal.js"></script>
+</head>
+<body>
+<div class="layout">
+<aside class="sidebar"><div class="brand">Property<small>物业管理 · independent app</small></div>
+<nav class="nav" aria-label="主导航"><a href="#overview">物业总览</a>
+<a href="#module-2">楼栋与房间</a>
+<a href="#module-3">业主档案</a>
+<a href="#module-4">物业账单</a>
+<a href="#module-5">水电抄表</a>
+<a href="#module-6">网络与维修</a></nav>
+<div class="side-note">物业经营数据保存在独立 Property 租户数据库，不与酒店和租房业务库共享。</div></aside>
+<main class="main"><div class="topline"><div><div class="eyebrow">property workspace</div><h1 class="title">物业运营中心</h1><p class="subtitle">业主、房间、物业费、抄表、网络与工单管理。</p></div>
+<div class="status" role="status"><span class="dot" id="api-dot"></span><span id="api-status">正在检查 API</span></div></div>
+<section class="grid" id="overview"><article class="panel half"><h2>独立应用入口</h2><p>此页面拥有独立 HTML 入口、导航、资源和应用标识，不加载其他产品的前端状态或认证凭据。</p><div class="notice">物业经营数据保存在独立 Property 租户数据库，不与酒店和租房业务库共享。</div></article>
+<article class="panel half"><h2>服务连接</h2><p id="service-message">正在检测本产品 API 健康状态。</p><div class="empty" id="service-empty">业务模块将在独立 API 和身份认证接入后启用；当前不展示伪造业务数据。</div></article>
+<article class="panel" id="module-2"><h2>楼栋与房间</h2><p>此模块使用 property 独立应用边界。业务数据、权限和 API 尚需按产品逐项迁移验收。</p></article>
+<article class="panel" id="module-3"><h2>业主档案</h2><p>此模块使用 property 独立应用边界。业务数据、权限和 API 尚需按产品逐项迁移验收。</p></article>
+<article class="panel" id="module-4"><h2>物业账单</h2><p>此模块使用 property 独立应用边界。业务数据、权限和 API 尚需按产品逐项迁移验收。</p></article>
+<article class="panel" id="module-5"><h2>水电抄表</h2><p>此模块使用 property 独立应用边界。业务数据、权限和 API 尚需按产品逐项迁移验收。</p></article>
+<article class="panel" id="module-6"><h2>网络与维修</h2><p>此模块使用 property 独立应用边界。业务数据、权限和 API 尚需按产品逐项迁移验收。</p></article>
+</section><div class="footer">House Management System · Property Portal · No cross-product browser storage</div></main></div>
+</body></html>
