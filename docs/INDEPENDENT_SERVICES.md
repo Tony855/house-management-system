@@ -128,3 +128,11 @@ The CI legacy MariaDB integration now creates an ephemeral tenant database, clon
 - The identity migration normalizer validates source org and product scope, copies only users in that org/product, includes only referenced tenant roles and referenced built-in roles, and resolves permissions using the legacy rule: tenant override wins, otherwise the global default template is copied.
 - Password hashes are preserved as opaque hashes; no plaintext credential is read or logged. User IDs and role IDs remain local to each isolated tenant DB.
 - Migration is dry-run by default and requires a transactional target writer, read-back verifier and durable audit in copy mode. It never performs cutover or deletes source rows. Production MariaDB identity adapters, legacy login replacement, cross-tenant live authentication and backup/rollback rehearsal remain acceptance gates.
+
+
+### MariaDB write idempotency
+
+- The tenant write service now computes the SHA-256 fingerprint server-side from a bounded canonical JSON payload; clients cannot choose a fingerprint to disguise changed input.
+- Transaction-scoped repository handles expose parameterized SQL execution only inside the transaction callback, allowing the idempotency adapter to participate in the same InnoDB transaction as the domain write and audit.
+- Migration 002 adds a tenant-local unique request key and serialized response. The MariaDB adapter uses INSERT IGNORE plus SELECT FOR UPDATE, then commits the completed response atomically with the business mutation. Concurrent retries serialize on the unique key; a changed fingerprint conflicts, and a failed mutation rolls back the reservation.
+- This adapter is available for wiring but is not enabled by default. A product route must supply it to the write service and compute the canonical payload only after domain validation.
