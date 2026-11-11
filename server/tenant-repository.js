@@ -7,6 +7,44 @@ const TABLES = Object.freeze({
 });
 const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
 
+// Public product projections intentionally omit identity documents, credentials,
+// photos and other sensitive fields. Add a field only after an explicit API review.
+const COLUMNS = Object.freeze({
+  rental: Object.freeze({
+    buildings: ['id', 'name', 'address', 'remark', 'created_at'],
+    rooms: ['id', 'building_id', 'room_no', 'floor', 'area', 'rent', 'deposit', 'status', 'room_type', 'is_dorm', 'capacity', 'water_price', 'elec_price', 'remark', 'created_at'],
+    tenants: ['id', 'name', 'gender', 'phone', 'remark', 'created_at'],
+    contracts: ['id', 'contract_no', 'room_id', 'tenant_id', 'start_date', 'end_date', 'rent', 'deposit', 'pay_cycle', 'sign_date', 'status', 'remark', 'created_at'],
+    meters: ['id', 'room_id', 'month', 'water_prev', 'water_curr', 'water_usage', 'water_fee', 'elec_prev', 'elec_curr', 'elec_usage', 'elec_fee', 'remark', 'created_at'],
+    room_net_lines: ['id', 'room_id', 'line_name', 'bandwidth', 'start_date', 'status', 'stop_date', 'remark', 'created_at'],
+    net_changes: ['id', 'room_id', 'line_id', 'change_date', 'change_type', 'old_bandwidth', 'new_bandwidth', 'remark', 'created_at'],
+    net_requests: ['id', 'company_id', 'room_id', 'type', 'bandwidth', 'delta', 'line_id', 'reason', 'status', 'created_by', 'created_at', 'handled_by', 'handle_note', 'handled_at'],
+    bills: ['id', 'source', 'room_id', 'tenant_id', 'contract_id', 'order_id', 'period_start', 'period_end', 'due_date', 'amount', 'paid_amount', 'status', 'pay_method', 'pay_date', 'remark', 'created_at'],
+    repairs: ['id', 'room_id', 'title', 'content', 'status', 'handler', 'handle_note', 'created_at']
+  }),
+  hotel: Object.freeze({
+    buildings: ['id', 'name', 'address', 'remark', 'created_at'],
+    rooms: ['id', 'building_id', 'room_no', 'floor', 'area', 'day_price', 'deposit', 'status', 'room_type', 'is_dorm', 'capacity', 'remark', 'created_at'],
+    tenants: ['id', 'name', 'gender', 'phone', 'remark', 'created_at'],
+    orders: ['id', 'order_no', 'room_id', 'guest_id', 'check_in_date', 'check_out_date', 'days', 'day_price', 'total', 'deposit', 'status', 'checkin_time', 'checkout_time', 'remark', 'created_at'],
+    bills: ['id', 'source', 'room_id', 'tenant_id', 'order_id', 'period_start', 'period_end', 'due_date', 'amount', 'paid_amount', 'status', 'pay_method', 'pay_date', 'remark', 'created_at'],
+    repairs: ['id', 'room_id', 'title', 'content', 'status', 'handler', 'handle_note', 'created_at']
+  }),
+  property: Object.freeze({
+    buildings: ['id', 'name', 'address', 'remark', 'created_at'],
+    rooms: ['id', 'building_id', 'room_no', 'floor', 'area', 'status', 'room_type', 'owner_id', 'property_fee', 'is_dorm', 'capacity', 'water_price', 'elec_price', 'remark', 'created_at'],
+    tenants: ['id', 'name', 'contact', 'phone', 'remark', 'created_at'],
+    org_employees: ['id', 'company', 'owner_id', 'room_id', 'name', 'phone', 'department', 'position', 'remark', 'created_at'],
+    meters: ['id', 'room_id', 'month', 'water_prev', 'water_curr', 'water_usage', 'water_fee', 'elec_prev', 'elec_curr', 'elec_usage', 'elec_fee', 'remark', 'created_at'],
+    room_net_lines: ['id', 'room_id', 'line_name', 'bandwidth', 'start_date', 'status', 'stop_date', 'remark', 'created_at'],
+    net_changes: ['id', 'room_id', 'line_id', 'change_date', 'change_type', 'old_bandwidth', 'new_bandwidth', 'remark', 'created_at'],
+    net_requests: ['id', 'company_id', 'room_id', 'type', 'bandwidth', 'delta', 'line_id', 'reason', 'status', 'created_by', 'created_at', 'handled_by', 'handle_note', 'handled_at'],
+    bills: ['id', 'source', 'room_id', 'tenant_id', 'order_id', 'period_start', 'period_end', 'due_date', 'amount', 'paid_amount', 'status', 'pay_method', 'pay_date', 'remark', 'created_at'],
+    repairs: ['id', 'room_id', 'title', 'content', 'status', 'handler', 'handle_note', 'created_at'],
+    complaints: ['id', 'room_id', 'title', 'content', 'status', 'handler', 'handle_note', 'created_at']
+  })
+});
+
 function identifier(value) {
   if (typeof value !== 'string' || !IDENTIFIER.test(value)) throw new TypeError('TENANT_SQL_IDENTIFIER_INVALID');
   return '`' + value + '`';
@@ -43,9 +81,9 @@ function createTenantRepository({ pool, appId, queryable = pool, allowTransactio
     const where = normalizeFilters(filters);
     if (direction !== 'ASC' && direction !== 'DESC') throw new TypeError('TENANT_ORDER_INVALID');
     const whereSql = where.length ? ' WHERE ' + where.map(([key]) => identifier(key) + ' = ?').join(' AND ') : '';
-    const orderSql = orderBy === null ? '' : ' ORDER BY ' + identifier(orderBy) + ' ' + direction;
+    const orderSql = orderBy === null ? '' : ' ORDER BY ' + assertColumn(appId, table, orderBy) + ' ' + direction;
     const [rows] = await queryable.execute(
-      'SELECT ' + columns.map(column => column === '*' ? '*' : identifier(column)).join(', ') +
+      'SELECT ' + columns.map(column => identifier(column)).join(', ') +
       ' FROM ' + tableSql + whereSql + orderSql + ' LIMIT ? OFFSET ?',
       [...where.map(([, value]) => value), limit, offset]
     );
@@ -119,4 +157,4 @@ function createTenantRepository({ pool, appId, queryable = pool, allowTransactio
   return Object.freeze({ appId, list, findById, count, insert, updateById, deleteById, withTransaction });
 }
 
-module.exports = { TABLES, createTenantRepository };
+module.exports = { TABLES, COLUMNS, createTenantRepository };
