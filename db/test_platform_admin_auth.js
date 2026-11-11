@@ -55,6 +55,7 @@ function fixture(overrides = {}) {
     signingKeyProvider: { getSigningKey: async () => ({ kid: 'platform-key-1', key: 'platform-signing-key-material-at-least-32-bytes' }) },
     verificationKeyProvider: { getVerificationKey: async () => 'platform-signing-key-material-at-least-32-bytes' },
     issuer: 'https://platform.example.test',
+    verifyPassword: (password, hash) => password === 'correct' && hash === 'hash',
     loginRateLimiter: {
       assertAllowed: async identity => calls.push(['allowed', identity]),
       recordFailure: async identity => calls.push(['failure', identity]),
