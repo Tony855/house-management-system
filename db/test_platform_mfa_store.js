@@ -80,3 +80,28 @@ test('MFA store fails closed on invalid envelopes and malformed inputs', async (
   assert.equal(await store.consumeTotpCounter({ adminId: 1, counter: -1 }), false);
   assert.equal(await store.consumeRecoveryCode({ adminId: 1, codeHash: 'bad' }), false);
 });
+
+test('MFA activation fails closed if another request already consumed or replaced enrollment', async () => {
+  let calls = [];
+  const pool = {
+    query: async () => [[], []],
+    getConnection: async () => ({
+      beginTransaction: async () => calls.push('begin'),
+      query: async sql => { calls.push(sql); return [[], []]; },
+      commit: async () => calls.push('commit'),
+      rollback: async () => calls.push('rollback'),
+      release: () => calls.push('release')
+    })
+  };
+  const store = createPlatformAdminMfaStore(pool);
+  await assert.rejects(store.activateFactor({
+    adminId: 4, encryptedSecret: { ciphertext: 'old-enrollment' },
+    lastTotpCounter: 60000000, recoveryCodeHashes: Array.from({ length: 10 }, () => 'a'.repeat(64))
+  }), error => error.code === 'PLATFORM_MFA_ENROLLMENT_CONFLICT' && error.status === 409);
+  assert.deepEqual(calls, [
+    'begin',
+    'SELECT encrypted_secret FROM platform_admin_mfa_enrollments WHERE admin_id = ? AND expires_at > UTC_TIMESTAMP() FOR UPDATE',
+    'rollback',
+    'release'
+  ]);
+});
