@@ -77,3 +77,52 @@ test('pool manager rejects unsafe database names and missing context', async () 
     db: { host: 'db', port: 3306, database: 'rental-a; DROP DATABASE x', user: 'u', password: 'p' }
   }), /TENANT_DATABASE_IDENTIFIER_INVALID/);
 });
+
+test('concurrent requests share one pending pool creation', async () => {
+  let createCount = 0;
+  let releaseEviction;
+  const evictionGate = new Promise(resolve => { releaseEviction = resolve; });
+  const manager = new TenantPoolManager({
+    maxPools: 1, idleTtlMs: 100000,
+    createPool: config => {
+      createCount++;
+      return { config, end: async () => {} };
+    }
+  });
+  const context = id => ({
+    tenantId: id, appId: 'rental',
+    db: { host: 'db.internal', port: 3306, database: id === tenantA ? 'rental_a' : 'rental_b', user: id, password: 'secret' }
+  });
+  await manager.getPool(context(tenantA));
+  // Both callers must join the same asynchronous eviction/create operation.
+  const originalClose = manager._close.bind(manager);
+  manager._close = async entry => { await evictionGate; return originalClose(entry); };
+  const first = manager.getPool(context(tenantB));
+  const second = manager.getPool(context(tenantB));
+  releaseEviction();
+  const [one, two] = await Promise.all([first, second]);
+  assert.equal(one, two);
+  assert.equal(createCount, 2);
+  await manager.closeAll();
+  assert.equal(manager.size, 0);
+});
+
+test('closeAll invalidates in-flight tenant pool creation', async () => {
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const manager = new TenantPoolManager({
+    createPool: async config => {
+      await gate;
+      return { config, ended: false, end: async function () { this.ended = true; } };
+    }
+  });
+  const pending = manager.getPool({
+    tenantId: tenantA, appId: 'rental',
+    db: { host: 'db.internal', port: 3306, database: 'rental_a', user: 'tenant_a', password: 'secret' }
+  });
+  const closing = manager.closeAll();
+  release();
+  await closing;
+  await assert.rejects(pending, /TENANT_POOL_INVALIDATED/);
+  assert.equal(manager.size, 0);
+});
