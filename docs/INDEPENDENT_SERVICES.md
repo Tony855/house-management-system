@@ -100,3 +100,11 @@ The CI legacy MariaDB integration now creates an ephemeral tenant database, clon
 - The test mutates the second tenant's copy and confirms the first tenant's copy is unchanged. It also checks copy manifests and target read-back. Temporary fixture rows and target databases are cleaned in `finally`.
 - Adapter contract tests cover lock contention and destroy a pooled connection when advisory lock release cannot be confirmed, avoiding returning a connection with a potentially-held lock to the pool.
 - These checks validate the tested migration path and database namespace boundary; they do not yet prove the entire application authorization layer or all production relationships are tenant-safe.
+
+
+### Tenant write boundary
+
+- Product APIs may receive an optional `writeService`; when configured, authenticated requests get a `req.tenantWrite` capability bound to the verified `req.auth`, resolved tenant context and tenant repository.
+- The write service requires product/tenant context agreement, explicit domain authorization, step-up verification, a reason, a request identifier and a transaction-aware audit adapter.
+- Both start and committed audit records are appended using the same tenant transaction handle as the domain mutation. Audit failure or domain failure rolls the transaction back.
+- This is a guarded write boundary, not a blanket activation of generic CRUD endpoints. Product-specific write routes must still implement domain validation and call this capability explicitly; current read routes remain read-only.
