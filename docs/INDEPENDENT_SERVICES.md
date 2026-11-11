@@ -136,3 +136,13 @@ The CI legacy MariaDB integration now creates an ephemeral tenant database, clon
 - Transaction-scoped repository handles expose parameterized SQL execution only inside the transaction callback, allowing the idempotency adapter to participate in the same InnoDB transaction as the domain write and audit.
 - Migration 002 adds a tenant-local unique request key and serialized response. The MariaDB adapter uses INSERT IGNORE plus SELECT FOR UPDATE, then commits the completed response atomically with the business mutation. Concurrent retries serialize on the unique key; a changed fingerprint conflicts, and a failed mutation rolls back the reservation.
 - This adapter is available for wiring but is not enabled by default. A product route must supply it to the write service and compute the canonical payload only after domain validation.
+
+
+## Tenant-local product login (new foundation)
+
+- Product login resolves the exact request hostname through the platform-owned `platform_tenant_login_hosts` mapping; request body, query parameters and headers cannot supply a tenant UUID.
+- Password verification reads only the selected tenant database's `users` row. A same-named user in another tenant is never searched.
+- Successful login issues a short-lived HS256 token with fixed product audience, tenant UUID, user subject and random session ID; the platform session row is written before the token is returned.
+- Logout revokes the exact session/user/tenant/product tuple. The existing authenticator checks the same tuple and expiry on every authenticated request.
+- Migration `004_tenant_login_hosts.sql` adds exact host mappings; host mapping management remains a platform-admin deployment task and must not be exposed to tenant users.
+- This is the password/session foundation, not complete production authentication: MFA enrollment/challenge, durable distributed login throttling, refresh-token rotation, account lockout policy and real signing-key manager integration remain required before production cutover. No login domain or signing secret is provisioned by this code.
