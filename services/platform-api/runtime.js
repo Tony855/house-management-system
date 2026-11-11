@@ -18,7 +18,7 @@ function createPlatformApiRuntime({
     });
     const app = createPlatformApi({
       pool: platformPool, adminAuthService: auth.authService,
-      mfaService: auth.mfaService, auditStore: auth.auditStore
+      mfaService: auth.mfaService, auditStore: auth.auditStore, adminStore: auth.authStore
     });
     let closed = false;
     return Object.freeze({
