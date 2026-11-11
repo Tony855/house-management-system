@@ -3,7 +3,20 @@
   "platformTables": [
     "platform_admins",
     "platform_tenants",
-    "platform_provisioning_events"
+    "platform_provisioning_events",
+    "platform_billing_accounts",
+    "platform_products",
+    "platform_plans",
+    "platform_subscriptions",
+    "platform_invoices",
+    "platform_invoice_lines",
+    "platform_payment_transactions",
+    "platform_payment_webhook_events",
+    "platform_refunds",
+    "platform_ledger_entries",
+    "platform_billing_audit",
+    "platform_product_sessions",
+    "platform_tenant_login_hosts"
   ],
   "legacySharedDatabase": {
     "house_sys": {
