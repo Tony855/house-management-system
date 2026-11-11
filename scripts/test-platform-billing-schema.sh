@@ -46,7 +46,7 @@ login_host_table="$("${mysql_cmd[@]}" -e "SELECT COUNT(*) FROM information_schem
 if [[ "$login_host_table" != "1" ]]; then echo "Tenant login host migration was not installed" >&2; exit 1; fi
 
 test_session_id='ci-product-session-revocation-0001'
-${tenantInsert}
+"${mysql_cmd[@]}" "$DB_NAME" -e "INSERT INTO platform_tenants (tenant_uuid, app_id, display_label, lifecycle_state, db_host, db_port, db_name, db_secret_ref) VALUES ('$test_tenant_uuid', 'rental', 'CI tenant', 'active', '127.0.0.1', 3306, 'ci_tenant_db', 'ci/tenant/db')"
 "${mysql_cmd[@]}" "$DB_NAME" -e "INSERT INTO platform_tenant_login_hosts (hostname, app_id, tenant_uuid, status) VALUES ('ci-login.example.test', 'rental', '$test_tenant_uuid', 'active')"
 mapped_login_host="$("${mysql_cmd[@]}" "$DB_NAME" -e "SELECT COUNT(*) FROM platform_tenant_login_hosts WHERE hostname = 'ci-login.example.test' AND app_id = 'rental' AND tenant_uuid = '$test_tenant_uuid' AND status = 'active'")"
 wrong_login_audience="$("${mysql_cmd[@]}" "$DB_NAME" -e "SELECT COUNT(*) FROM platform_tenant_login_hosts WHERE hostname = 'ci-login.example.test' AND app_id = 'hotel' AND status = 'active'")"
