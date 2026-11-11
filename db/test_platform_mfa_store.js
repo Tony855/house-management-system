@@ -105,3 +105,39 @@ test('MFA activation fails closed if another request already consumed or replace
     'release'
   ]);
 });
+
+test('recovery-code rotation locks an enabled factor and replaces hashes atomically', async () => {
+  let connection;
+  const hashes = Array.from({ length: 10 }, (_, index) => (index + 1).toString(16).padStart(64, '0'));
+  const store = createPlatformAdminMfaStore({
+    query: async () => [{ affectedRows: 1 }, []],
+    getConnection: async () => (connection = {
+      calls: [],
+      beginTransaction: async () => connection.calls.push('begin'),
+      query: async (sql, params) => {
+        connection.calls.push([sql, params]);
+        if (sql.startsWith('SELECT admin_id')) return [[{ admin_id: 4 }], []];
+        return [{ affectedRows: 1 }, []];
+      },
+      commit: async () => connection.calls.push('commit'),
+      rollback: async () => connection.calls.push('rollback'),
+      release: () => connection.calls.push('release')
+    })
+  });
+  assert.equal(await store.replaceRecoveryCodes({ adminId: 4, recoveryCodeHashes: hashes }), true);
+  assert.equal(connection.calls[0], 'begin');
+  assert.match(connection.calls[1][0], /enabled = 1 FOR UPDATE/);
+  assert.match(connection.calls[2][0], /^DELETE FROM platform_admin_mfa_recovery_codes/);
+  assert.equal(connection.calls.filter(value => Array.isArray(value) && value[0].startsWith('INSERT INTO platform_admin_mfa_recovery_codes')).length, 10);
+  assert.equal(connection.calls.at(-2), 'commit');
+  assert.equal(connection.calls.at(-1), 'release');
+});
+
+test('recovery-code rotation refuses malformed or duplicate hashes', async () => {
+  const store = createPlatformAdminMfaStore({
+    query: async () => [{ affectedRows: 0 }, []],
+    getConnection: async () => { throw new Error('must not open transaction'); }
+  });
+  assert.equal(await store.replaceRecoveryCodes({ adminId: 0, recoveryCodeHashes: [] }), false);
+  assert.equal(await store.replaceRecoveryCodes({ adminId: 4, recoveryCodeHashes: Array(10).fill('a'.repeat(64)) }), false);
+});
