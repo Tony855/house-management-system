@@ -89,35 +89,19 @@ test('secret provider rejects malformed secret payloads', async () => {
     error.code === 'TENANT_DATABASE_CREDENTIALS_UNAVAILABLE' && error.status === 503);
 });
 
-test('platform login limiter stores only keyed identity hashes and blocks after threshold', async () => {
-  const state = { row: null, sql: [], commits: 0, rollbacks: 0 };
+test('platform login limiter atomically stores keyed identity hashes and blocks after threshold', async () => {
+  const state = { row: null, sql: [] };
   const pool = {
     async query(sql, params) {
       state.sql.push([sql, params]);
       if (sql.startsWith('SELECT (blocked_until')) return [[state.row ? { blocked: state.row.blocked_until ? 1 : 0 } : undefined].filter(Boolean), []];
       if (sql.startsWith('DELETE FROM platform_login_attempts')) { state.row = null; return [{ affectedRows: 1 }, []]; }
-      return [[], []];
-    },
-    async getConnection() {
-      return {
-        beginTransaction: async () => {},
-        commit: async () => { state.commits++; },
-        rollback: async () => { state.rollbacks++; },
-        release: () => {},
-        async query(sql, params) {
-          state.sql.push([sql, params]);
-          if (sql.startsWith('INSERT IGNORE')) {
-            if (!state.row) state.row = { window_started_at: new Date(), failures: 0, blocked_until: null };
-            return [{ affectedRows: 1 }, []];
-          }
-          if (sql.startsWith('SELECT window_started_at')) return [[{ ...state.row, expired: 0 }], []];
-          if (sql.startsWith('UPDATE platform_login_attempts')) {
-            state.row = { window_started_at: params[0] ? new Date() : state.row.window_started_at, failures: params[1], blocked_until: params[2] ? new Date(Date.now() + params[3] * 1000) : null };
-            return [{ affectedRows: 1 }, []];
-          }
-          throw new Error('unexpected SQL: ' + sql);
-        }
-      };
+      if (sql.startsWith('INSERT INTO platform_login_attempts')) {
+        const failures = state.row ? state.row.failures + 1 : 1;
+        state.row = { failures, blocked_until: failures >= params[3] ? new Date(Date.now() + params[4] * 1000) : null };
+        return [{ affectedRows: 1 }, []];
+      }
+      throw new Error('unexpected SQL: ' + sql);
     }
   };
   const limiter = createPlatformLoginRateLimiter(pool, {
@@ -134,31 +118,21 @@ test('platform login limiter stores only keyed identity hashes and blocks after 
   await assert.rejects(limiter.assertAllowed(identity), error => error.code === 'LOGIN_RATE_LIMITED' && error.status === 429);
   await limiter.clear(identity);
   assert.equal(state.row, null);
-  assert.equal(state.commits, 3);
   assert.equal(state.sql.some(([sql]) => /username|hostname/i.test(sql)), false);
-  const hashParams = state.sql.find(([sql]) => sql.startsWith('INSERT IGNORE'))[1];
+  const hashParams = state.sql.find(([sql]) => sql.startsWith('INSERT INTO platform_login_attempts'))[1];
   assert.match(hashParams[1], /^[a-f0-9]{64}$/);
   assert.notEqual(hashParams[1], identity.username);
+  assert.match(state.sql.find(([sql]) => sql.startsWith('INSERT INTO platform_login_attempts'))[0], /ON DUPLICATE KEY UPDATE/);
 });
 
-test('platform login limiter requires a durable pool and strong HMAC key', () => {
-  assert.throws(() => createPlatformLoginRateLimiter({ query: async () => [[], []] }, { hmacKey: 'short' }),
-    /PLATFORM_DB_CONNECTION_POOL_REQUIRED/);
-  assert.throws(() => createPlatformLoginRateLimiter({ getConnection: async () => ({}) }, { hmacKey: 'short' }),
-    /LOGIN_RATE_LIMIT_HMAC_KEY_REQUIRED/);
+test('platform login limiter requires a query pool and strong HMAC key', () => {
+  assert.throws(() => createPlatformLoginRateLimiter({}, { hmacKey: 'short' }), /PLATFORM_DB_QUERY_POOL_REQUIRED/);
+  assert.throws(() => createPlatformLoginRateLimiter({ query: async () => [[], []] }, { hmacKey: 'short' }), /LOGIN_RATE_LIMIT_HMAC_KEY_REQUIRED/);
 });
 
-test('platform login limiter rolls back and releases a failed transaction', async () => {
-  let rollback = 0, release = 0;
-  const pool = { getConnection: async () => ({
-    beginTransaction: async () => {},
-    query: async () => { throw new Error('database unavailable'); },
-    commit: async () => {},
-    rollback: async () => { rollback++; },
-    release: () => { release++; }
-  }) };
+test('platform login limiter propagates database failures without treating them as allowed', async () => {
+  const pool = { query: async () => { throw new Error('database unavailable'); } };
   const limiter = createPlatformLoginRateLimiter(pool, { hmacKey: '0123456789abcdef0123456789abcdef' });
   await assert.rejects(limiter.recordFailure({ appId: 'rental', host: 'a.example.test', username: 'user' }), /database unavailable/);
-  assert.equal(rollback, 1);
-  assert.equal(release, 1);
+  await assert.rejects(limiter.assertAllowed({ appId: 'rental', host: 'a.example.test', username: 'user' }), /database unavailable/);
 });
