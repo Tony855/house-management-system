@@ -1,6 +1,7 @@
 'use strict';
 
 const { createProductAuthenticator } = require('./product-auth');
+const { createProductLoginService } = require('./product-login');
 const {
   createPlatformTenantRegistry,
   createPlatformProductSessionStore,
@@ -15,6 +16,7 @@ function createProductControlPlaneDependencies({
   platformPool,
   secretManager,
   keyProvider,
+  signingKeyProvider,
   poolManager,
   createPool = mysql.createPool,
   authOptions = {}
@@ -34,12 +36,23 @@ function createProductControlPlaneDependencies({
   if (authOptions.clockSkewSeconds !== undefined) authConfig.clockSkewSeconds = authOptions.clockSkewSeconds;
   if (authOptions.maxLifetimeSeconds !== undefined) authConfig.maxLifetimeSeconds = authOptions.maxLifetimeSeconds;
 
-  return Object.freeze({
+  const registry = createPlatformTenantRegistry(platformPool);
+  const secretProvider = createTenantDatabaseSecretProvider(secretManager);
+  const dependencies = {
     authenticate: createProductAuthenticator(authConfig),
-    registry: createPlatformTenantRegistry(platformPool),
-    secretProvider: createTenantDatabaseSecretProvider(secretManager),
+    registry,
+    secretProvider,
     poolManager: resolvedPoolManager
-  });
+  };
+  // Login is exposed only when a separate signing-key issuer is explicitly configured.
+  // Verification-only key providers must never be repurposed to mint access tokens.
+  if (signingKeyProvider !== undefined) {
+    dependencies.loginService = createProductLoginService({
+      appId, issuer, registry, secretProvider, poolManager: resolvedPoolManager,
+      sessionStore: createPlatformProductSessionStore(platformPool), signingKeyProvider
+    });
+  }
+  return Object.freeze(dependencies);
 }
 
 module.exports = { createProductControlPlaneDependencies };
