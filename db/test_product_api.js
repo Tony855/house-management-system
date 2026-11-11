@@ -3,6 +3,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const http = require('node:http');
+const express = require('express');
 const { createProductApi } = require('../server/product-api');
 
 const tenantId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
@@ -89,5 +90,21 @@ test('product API rejects tenant identifiers supplied only by request input', as
   await withServer(app, async base => {
     const response = await fetch(base + '/api/tenant-context?tenantId=' + tenantId);
     assert.equal(response.status, 403);
+  });
+});
+
+test('product route receives only the pool resolved from verified tenant identity', async () => {
+  const { app } = setup({
+    routes: () => {
+      const router = express.Router();
+      router.get('/tenant-data', (req, res) => res.json({ database: req.tenantDb.config?.database || req.tenantDb.database }));
+      return router;
+    },
+    poolManager: { getPool: async context => ({ database: context.db.database }) }
+  });
+  await withServer(app, async base => {
+    const response = await fetch(base + '/api/tenant-data', { headers: { 'x-tenant-id': 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' } });
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { database: 'rental_a' });
   });
 });
