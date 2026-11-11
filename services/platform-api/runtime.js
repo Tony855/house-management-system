@@ -35,7 +35,7 @@ function createPlatformApiRuntime({
       issuer,
       authOptions
     });
-    const app = createPlatformApi({ pool: platformPool, adminAuthService: auth.authService });
+    const app = createPlatformApi({ pool: platformPool, adminAuthService: auth.authService, mfaService: auth.mfaService });
     let closed = false;
     return Object.freeze({
       app,
