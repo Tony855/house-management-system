@@ -18,6 +18,7 @@ test('product dependencies wire signed auth, platform registry, session revocati
   assert.equal(typeof dependencies.registry.findTenantById, 'function');
   assert.equal(typeof dependencies.secretProvider.getDatabaseCredentials, 'function');
   assert.equal(typeof dependencies.poolManager.getPool, 'function');
+  assert.equal(dependencies.loginService, undefined);
   assert.equal(Object.isFrozen(dependencies), true);
 });
 
@@ -32,4 +33,19 @@ test('product dependency composition refuses incomplete control-plane integratio
     secretManager: null,
     keyProvider: { getVerificationKey: async () => '0123456789abcdef0123456789abcdef' }
   }), /TENANT_SECRET_MANAGER_REQUIRED/);
+});
+
+test('product dependencies wire login only with a dedicated signing key issuer', () => {
+  const pool = { query: async () => [[], []] };
+  const dependencies = createProductControlPlaneDependencies({
+    appId: 'hotel',
+    issuer: 'https://auth.example.test',
+    platformPool: pool,
+    secretManager: { getSecret: async () => ({ user: 'tenant', password: 'secret' }) },
+    keyProvider: { getVerificationKey: async () => '0123456789abcdef0123456789abcdef' },
+    signingKeyProvider: { getSigningKey: async () => ({ kid: 'v1', key: '0123456789abcdef0123456789abcdef' }) },
+    poolManager: { getPool: async () => ({ execute: async () => [[], []] }) }
+  });
+  assert.equal(typeof dependencies.loginService.login, 'function');
+  assert.equal(typeof dependencies.loginService.logout, 'function');
 });
