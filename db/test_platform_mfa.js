@@ -58,6 +58,11 @@ function fixture() {
       if (!state.recovery.has(codeHash)) return false;
       state.recovery.delete(codeHash);
       return true;
+    },
+    replaceRecoveryCodes: async ({ recoveryCodeHashes }) => {
+      if (!state.factor) return false;
+      state.recovery = new Set(recoveryCodeHashes);
+      return true;
     }
   };
   const encryption = {
@@ -102,6 +107,26 @@ test('TOTP verification rejects replayed counters and recovery codes are single-
   assert.equal(state.recovery.size, 9);
 });
 
+test('MFA status is non-secret and recovery rotation verifies a current factor and invalidates old codes', async () => {
+  const { service, state, setTime } = fixture();
+  const enrollment = await service.beginEnrollment({ adminId: 9, account: 'admin@example.test' });
+  const secret = decodeBase32(enrollment.secret);
+  const counter = Math.floor(1800000000 / 30);
+  const enrolled = await service.confirmEnrollment({ adminId: 9, code: hotp(secret, counter) });
+  assert.deepEqual(await service.getStatus({ adminId: 9 }), { enabled: true });
+  setTime((counter + 1) * 30);
+  const rotated = await service.rotateRecoveryCodes({
+    adminId: 9, code: hotp(secret, counter + 1)
+  });
+  assert.equal(rotated.rotated, true);
+  assert.equal(rotated.method, 'totp');
+  assert.equal(rotated.recoveryCodes.length, 10);
+  assert.equal(state.recovery.size, 10);
+  await assert.rejects(service.verify({ adminId: 9, code: enrolled.recoveryCodes[0] }),
+    error => error.code === 'PLATFORM_MFA_CODE_INVALID');
+  assert.equal((await service.verify({ adminId: 9, code: rotated.recoveryCodes[0] })).method, 'recovery');
+});
+
 test('expired or invalid enrollment cannot activate a factor', async () => {
   const { service, state, setTime } = fixture();
   const enrollment = await service.beginEnrollment({ adminId: 9, account: 'admin@example.test' });
@@ -118,7 +143,7 @@ test('MFA service requires encrypted storage, durable store and a strong recover
   assert.throws(() => createPlatformMfaService({}), /PLATFORM_MFA_STORE_REQUIRED/);
   const store = {
     getPendingEnrollment() {}, savePendingEnrollment() {}, getFactor() {},
-    activateFactor() {}, consumeTotpCounter() {}, consumeRecoveryCode() {}
+    activateFactor() {}, consumeTotpCounter() {}, consumeRecoveryCode() {}, replaceRecoveryCodes() {}
   };
   assert.throws(() => createPlatformMfaService({ store, encryption: {}, recoveryCodePepper: pepper }), /PLATFORM_MFA_ENCRYPTION_REQUIRED/);
   assert.throws(() => createPlatformMfaService({ store, encryption: { encrypt() {}, decrypt() {} }, recoveryCodePepper: 'short' }), /PLATFORM_MFA_RECOVERY_PEPPER_REQUIRED/);
