@@ -46,6 +46,12 @@ jobs:
           --health-retries=10
     steps:
       - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: 24.22.2
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
       - name: Install MariaDB client
         run: |
           for client in mysql mariadb; do
