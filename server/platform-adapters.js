@@ -99,7 +99,8 @@ function createPlatformLoginRateLimiter(pool, {
   }
 
   function identityHash({ appId, host, username }) {
-    if (!APP_IDS.has(appId) || typeof host !== 'string' || !host || host.length > 253 ||
+    const validAppId = APP_IDS.has(appId) || appId === 'platform';
+    if (!validAppId || typeof host !== 'string' || !host || host.length > 253 ||
         typeof username !== 'string' || !username || username.length > 50) {
       throw new TypeError('LOGIN_RATE_LIMIT_IDENTITY_INVALID');
     }
