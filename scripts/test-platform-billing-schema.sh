@@ -22,6 +22,7 @@ export MYSQL_PWD="$DB_PASSWORD"
 "${mysql_cmd[@]}" "$DB_NAME" < "$ROOT_DIR/db/migrations/platform/008_platform_admin_auth.sql"
 "${mysql_cmd[@]}" "$DB_NAME" < "$ROOT_DIR/db/migrations/platform/009_platform_admin_login_rate_limit.sql"
 "${mysql_cmd[@]}" "$DB_NAME" < "$ROOT_DIR/db/migrations/platform/010_platform_admin_step_up_mfa.sql"
+"${mysql_cmd[@]}" "$DB_NAME" < "$ROOT_DIR/db/migrations/platform/011_platform_admin_audit.sql"
 
 expected_tables=11
 actual_tables="$("${mysql_cmd[@]}" -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '$DB_NAME' AND table_type = 'BASE TABLE' AND table_name IN ('platform_billing_accounts','platform_products','platform_plans','platform_subscriptions','platform_invoices','platform_invoice_lines','platform_payment_transactions','platform_payment_webhook_events','platform_refunds','platform_ledger_entries','platform_billing_audit')")"
@@ -112,3 +113,10 @@ if [[ "$step_up_column" != "1" ]]; then
   exit 1
 fi
 echo "Platform administrator step-up MFA schema verified."
+
+audit_table="$("${mysql_cmd[@]}" -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '$DB_NAME' AND table_name = 'platform_admin_audit_events' AND table_type = 'BASE TABLE'")"
+if [[ "$audit_table" != "1" ]]; then echo "Platform admin audit migration was not installed" >&2; exit 1; fi
+"${mysql_cmd[@]}" "$DB_NAME" -e "INSERT INTO platform_admin_audit_events (admin_id, action, outcome, detail_code) VALUES (NULL, 'admin.login', 'success', 'CI_SCHEMA_CHECK')"
+audit_row="$("${mysql_cmd[@]}" "$DB_NAME" -e "SELECT COUNT(*) FROM platform_admin_audit_events WHERE action = 'admin.login' AND detail_code = 'CI_SCHEMA_CHECK'")"
+if [[ "$audit_row" != "1" ]]; then echo "Platform admin audit insert/readback failed" >&2; exit 1; fi
+echo "Platform administrator audit schema and write/readback verified."
