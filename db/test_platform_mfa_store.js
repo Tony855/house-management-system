@@ -51,7 +51,7 @@ test('factor activation writes factor, replaces recovery codes and clears pendin
     getConnection: async () => (connection = {
       calls: [],
       beginTransaction: async () => connection.calls.push('begin'),
-      query: async sql => { connection.calls.push(sql); return [{ affectedRows: 1 }, []]; },
+      query: async sql => { connection.calls.push(sql); if (sql.startsWith('SELECT encrypted_secret FROM platform_admin_mfa_enrollments')) return [[{ encrypted_secret: { ciphertext: 'encrypted' } }], []]; return [{ affectedRows: 1 }, []]; },
       commit: async () => connection.calls.push('commit'),
       rollback: async () => connection.calls.push('rollback'),
       release: () => connection.calls.push('release')
@@ -63,8 +63,9 @@ test('factor activation writes factor, replaces recovery codes and clears pendin
     lastTotpCounter: 60000000, recoveryCodeHashes: Array.from({ length: 10 }, (_, i) => String(i).padStart(64, 'a'))
   });
   assert.equal(connection.calls[0], 'begin');
-  assert.match(connection.calls[1], /^INSERT INTO platform_admin_mfa_factors/);
-  assert.match(connection.calls[2], /^DELETE FROM platform_admin_mfa_recovery_codes/);
+  assert.match(connection.calls[1], /^SELECT encrypted_secret FROM platform_admin_mfa_enrollments/);
+  assert.match(connection.calls[2], /^INSERT INTO platform_admin_mfa_factors/);
+  assert.match(connection.calls[3], /^DELETE FROM platform_admin_mfa_recovery_codes/);
   assert.equal(connection.calls.filter(value => typeof value === 'string' && /^(INSERT|DELETE)/.test(value)).length, 13);
   assert.equal(connection.calls.at(-2), 'commit');
   assert.equal(connection.calls.at(-1), 'release');
