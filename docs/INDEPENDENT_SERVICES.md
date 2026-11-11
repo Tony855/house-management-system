@@ -119,3 +119,12 @@ The CI legacy MariaDB integration now creates an ephemeral tenant database, clon
 - The tenant write service now requires an explicit idempotency adapter in addition to authorization, step-up and transactional audit.
 - Every write carries a SHA-256 request fingerprint and a bounded request ID. The adapter contract must atomically reserve/replay the (app, tenant, user, requestId) key inside the same tenant transaction; a matching replay returns the original result without rerunning the domain mutation, while a different fingerprint returns a conflict.
 - The service fails closed if the adapter is absent or returns an unknown state. No production MariaDB idempotency adapter or migrated business write endpoint is claimed until its unique-key/locking behavior is implemented and integration-tested.
+
+
+### Tenant-local identity migration (expand/copy/verify only)
+
+- The tenant migration SQL defines users, roles, settings, user permissions and effective role permissions inside each tenant DB. Usernames are unique only within that tenant DB, so equal usernames across tenants remain valid.
+- Legacy sessions are deliberately excluded. Existing tokens must be revoked and users must authenticate again through platform-side platform_product_sessions.
+- The identity migration normalizer validates source org and product scope, copies only users in that org/product, includes only referenced tenant roles and referenced built-in roles, and resolves permissions using the legacy rule: tenant override wins, otherwise the global default template is copied.
+- Password hashes are preserved as opaque hashes; no plaintext credential is read or logged. User IDs and role IDs remain local to each isolated tenant DB.
+- Migration is dry-run by default and requires a transactional target writer, read-back verifier and durable audit in copy mode. It never performs cutover or deletes source rows. Production MariaDB identity adapters, legacy login replacement, cross-tenant live authentication and backup/rollback rehearsal remain acceptance gates.
