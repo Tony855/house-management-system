@@ -127,3 +127,24 @@ test('closeAll invalidates in-flight tenant pool creation', async () => {
   await assert.rejects(pending, /TENANT_POOL_INVALIDATED/);
   assert.equal(manager.size, 0);
 });
+
+test('concurrent different tenants cannot exceed the global pool cap', async () => {
+  const created = [];
+  const manager = new TenantPoolManager({
+    maxPools: 1,
+    createPool: config => {
+      const pool = { config, ended: false, end: async function () { this.ended = true; } };
+      created.push(pool);
+      return pool;
+    }
+  });
+  const context = id => ({
+    tenantId: id, appId: 'rental',
+    db: { host: 'db.internal', port: 3306, database: id === tenantA ? 'rental_a' : 'rental_b', user: id, password: 'secret' }
+  });
+  const [a, b] = await Promise.all([manager.getPool(context(tenantA)), manager.getPool(context(tenantB))]);
+  assert.notEqual(a, b);
+  assert.equal(manager.size, 1);
+  assert.equal(created.filter(pool => !pool.ended).length, 1);
+  await manager.closeAll();
+});
