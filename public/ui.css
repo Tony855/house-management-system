@@ -180,7 +180,10 @@ main.flex-grow-1 {
     border-bottom: 1px solid rgba(255,255,255,.1);
   }
   .sidebar h5 { padding: 3px 6px 8px; margin: 0 !important; font-size: 15px; }
-  .sidebar .mode-lock, .sidebar .cur-row, .sidebar .mt-auto { display: none !important; }
+  .sidebar .mode-lock, .sidebar .cur-row { display: none !important; }
+  .sidebar .mt-auto { display: block !important; position: absolute; top: 8px; right: 12px; padding: 0; border: 0; }
+  .sidebar .mt-auto > div { display: none; }
+  .sidebar .mt-auto .btn { width: auto !important; min-height: 32px; padding: 5px 10px; }
   .sidebar .nav {
     display: flex;
     flex-direction: row !important;
