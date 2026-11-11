@@ -91,3 +91,12 @@ No production DB migration or data deletion is performed by the CI jobs.
 
 
 The CI legacy MariaDB integration now creates an ephemeral tenant database, clones the Rental product schema without `org_id`, inserts a uniquely scoped fixture into the disposable legacy schema, executes the real mysql2 adapters, and verifies target read-back plus SHA-256 reconciliation. The fixture row and ephemeral database are removed in a `finally` cleanup. This validates the concrete Rental path against MariaDB; it is not a production tenant cutover or a full data migration for Hotel/Property.
+
+
+### Expanded tenant migration acceptance checks
+
+- The MariaDB integration job now exercises Rental, Hotel and Property product table sets, rather than Rental alone.
+- For each product it creates two isolated tenant databases, clones the product schema without legacy `org_id`, copies one org-scoped fixture while excluding a second org's decoy row, and verifies that the same primary key can exist independently in both tenant DB namespaces.
+- The test mutates the second tenant's copy and confirms the first tenant's copy is unchanged. It also checks copy manifests and target read-back. Temporary fixture rows and target databases are cleaned in `finally`.
+- Adapter contract tests cover lock contention and destroy a pooled connection when advisory lock release cannot be confirmed, avoiding returning a connection with a potentially-held lock to the pool.
+- These checks validate the tested migration path and database namespace boundary; they do not yet prove the entire application authorization layer or all production relationships are tenant-safe.
