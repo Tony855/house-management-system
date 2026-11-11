@@ -16,6 +16,7 @@
     "test:runtime": "node scripts/test-runtime.js",
     "test:api-architecture": "node --test db/test_product_login.js db/test_product_api.js db/test_product_read_routes.js db/test_tenant_repository.js db/test_product_auth.js db/test_product_dependencies.js db/test_platform_adapters.js db/test_platform_api.js db/test_portals.js db/test_service_boundaries.js db/test_payment_provider.js db/test_rental_write_routes.js db/test_hotel_property_write_routes.js db/test_product_room_write_api.js",
     "test:product-read-mariadb": "node db/test_product_read_routes_mariadb.js",
+    "test:product-room-write-mariadb": "node db/test_product_room_write_mariadb.js",
     "test:tenant-data-migration-mariadb": "node db/test_tenant_data_migration_mariadb.js",
     "test:tenant-identity-mariadb": "node db/test_tenant_identity_migration_mariadb.js"
   },
