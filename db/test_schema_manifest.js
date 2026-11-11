@@ -35,3 +35,11 @@ test('platform manifest does not include tenant business tables or identities', 
   assert.ok(!manifest.platformTables.includes('tenants'));
   assert.equal(manifest.migrationRules.sessions, 'revoke all legacy sessions; require fresh login');
 });
+
+
+test('tenant identity schema is separate and does not create a legacy sessions table', () => {
+  const identitySql = fs.readFileSync(path.join(__dirname, 'migrations/tenant/001_tenant_identity.sql'), 'utf8');
+  for (const table of manifest.tenantIdentityTables) assert.match(identitySql, new RegExp('CREATE TABLE IF NOT EXISTS ' + table + '\\b'));
+  assert.doesNotMatch(identitySql, /CREATE TABLE IF NOT EXISTS sessions\\b/i);
+  assert.equal(manifest.migrationRules.sessions, 'never copy legacy sessions; revoke all and require fresh login through platform_product_sessions');
+});
