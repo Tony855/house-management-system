@@ -2,11 +2,15 @@
 
 const crypto = require('crypto');
 const IDENTIFIER_RE = /^[A-Za-z0-9_]{1,64}$/;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const APP_IDS = new Set(['rental', 'hotel', 'property']);
 
 class TenantPoolManager {
   constructor({ createPool, maxPools = 100, idleTtlMs = 5 * 60 * 1000, now = Date.now }) {
     if (typeof createPool !== 'function') throw new TypeError('createPool is required');
-    if (!Number.isInteger(maxPools) || maxPools < 1) throw new TypeError('maxPools must be positive');
+    if (!Number.isInteger(maxPools) || maxPools < 1 || maxPools > 500) throw new TypeError('TENANT_POOL_MAX_INVALID');
+    if (!Number.isSafeInteger(idleTtlMs) || idleTtlMs < 1000 || idleTtlMs > 86400000) throw new TypeError('TENANT_POOL_IDLE_TTL_INVALID');
+    if (typeof now !== 'function') throw new TypeError('TENANT_POOL_CLOCK_INVALID');
     this.createPool = createPool;
     this.maxPools = maxPools;
     this.idleTtlMs = idleTtlMs;
@@ -19,12 +23,17 @@ class TenantPoolManager {
 
   _key(context) {
     if (!context || !context.tenantId || !context.appId || !context.db) throw new Error('TENANT_CONTEXT_REQUIRED');
-    if (!IDENTIFIER_RE.test(context.db.database)) throw new Error('TENANT_DATABASE_IDENTIFIER_INVALID');
-    if (!context.db.host || !context.db.user || typeof context.db.password !== 'string' || !context.db.password) {
+    if (!APP_IDS.has(context.appId) || typeof context.tenantId !== 'string' || !UUID_RE.test(context.tenantId)) throw new Error('TENANT_CONTEXT_INVALID');
+    if (typeof context.db.database !== 'string' || !IDENTIFIER_RE.test(context.db.database)) throw new Error('TENANT_DATABASE_IDENTIFIER_INVALID');
+    if (typeof context.db.host !== 'string' || !context.db.host || context.db.host.length > 253 || /[\\s\\u0000-\\u001f]/.test(context.db.host) ||
+        !Number.isInteger(context.db.port) || context.db.port < 1 || context.db.port > 65535 ||
+        typeof context.db.user !== 'string' || !context.db.user || context.db.user.length > 128 ||
+        typeof context.db.password !== 'string' || !context.db.password || context.db.password.length > 1024 ||
+        (context.db.credentialVersion !== undefined && (typeof context.db.credentialVersion !== 'string' || context.db.credentialVersion.length > 128))) {
       throw new Error('TENANT_DATABASE_CREDENTIALS_INVALID');
     }
     const credentialFingerprint = crypto.createHash('sha256').update(context.db.password).digest('hex');
-    return [context.appId, context.tenantId, context.db.host, context.db.port, context.db.database, context.db.user, context.db.credentialVersion || '', credentialFingerprint].join(':');
+    return JSON.stringify([context.appId, context.tenantId, context.db.host.toLowerCase(), context.db.port, context.db.database, context.db.user, context.db.credentialVersion || '', credentialFingerprint]);
   }
 
   async _close(entry) {
@@ -98,6 +107,7 @@ class TenantPoolManager {
         connectionLimit: 5,
         queueLimit: 50
       });
+      if (!pool || typeof pool.end !== 'function') throw new TypeError('TENANT_POOL_ADAPTER_INVALID');
       if ((this.tenantEpoch.get(context.tenantId) || 0) !== epoch) {
         await this._close({ pool });
         throw new Error('TENANT_POOL_INVALIDATED');
