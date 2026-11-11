@@ -24,14 +24,18 @@ function createProductControlPlaneDependencies({
   const resolvedPoolManager = poolManager || new TenantPoolManager({ createPool });
   if (typeof resolvedPoolManager.getPool !== 'function') throw new TypeError('PRODUCT_POOL_MANAGER_REQUIRED');
 
+  const authConfig = {
+    appId,
+    issuer,
+    keyProvider,
+    sessionStore: createPlatformProductSessionStore(platformPool)
+  };
+  if (authOptions.now !== undefined) authConfig.now = authOptions.now;
+  if (authOptions.clockSkewSeconds !== undefined) authConfig.clockSkewSeconds = authOptions.clockSkewSeconds;
+  if (authOptions.maxLifetimeSeconds !== undefined) authConfig.maxLifetimeSeconds = authOptions.maxLifetimeSeconds;
+
   return Object.freeze({
-    authenticate: createProductAuthenticator({
-      appId,
-      issuer,
-      keyProvider,
-      sessionStore: createPlatformProductSessionStore(platformPool),
-      ...authOptions
-    }),
+    authenticate: createProductAuthenticator(authConfig),
     registry: createPlatformTenantRegistry(platformPool),
     secretProvider: createTenantDatabaseSecretProvider(secretManager),
     poolManager: resolvedPoolManager
