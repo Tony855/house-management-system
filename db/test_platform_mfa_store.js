@@ -65,7 +65,7 @@ test('factor activation writes factor, replaces recovery codes and clears pendin
   assert.equal(connection.calls[0], 'begin');
   assert.match(connection.calls[1], /^INSERT INTO platform_admin_mfa_factors/);
   assert.match(connection.calls[2], /^DELETE FROM platform_admin_mfa_recovery_codes/);
-  assert.equal(connection.calls.filter(value => Array.isArray(value)).length, 13);
+  assert.equal(connection.calls.filter(value => typeof value === 'string' && /^(INSERT|DELETE)/.test(value)).length, 13);
   assert.equal(connection.calls.at(-2), 'commit');
   assert.equal(connection.calls.at(-1), 'release');
 });
