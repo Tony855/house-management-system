@@ -124,6 +124,43 @@ function createPlatformAdminAuthStore(pool) {
       );
       return Number(result.affectedRows) === 1;
     }
+    ,
+    async disableAdmin({ actorAdminId, targetAdminId }) {
+      if (!Number.isSafeInteger(actorAdminId) || actorAdminId < 1 ||
+          !Number.isSafeInteger(targetAdminId) || targetAdminId < 1 || actorAdminId === targetAdminId) return false;
+      if (typeof pool.getConnection !== 'function') throw new TypeError('PLATFORM_ADMIN_TRANSACTION_REQUIRED');
+      const connection = await pool.getConnection();
+      try {
+        await connection.beginTransaction();
+        const [activeRows] = await connection.query(
+          "SELECT id FROM platform_admins WHERE status = 'active' FOR UPDATE"
+        );
+        if (!activeRows.some(row => Number(row.id) === actorAdminId) ||
+            !activeRows.some(row => Number(row.id) === targetAdminId) || activeRows.length <= 1) {
+          await connection.rollback();
+          return false;
+        }
+        const [updated] = await connection.query(
+          "UPDATE platform_admins SET status = 'disabled' WHERE id = ? AND status = 'active'",
+          [targetAdminId]
+        );
+        if (Number(updated.affectedRows) !== 1) {
+          await connection.rollback();
+          return false;
+        }
+        await connection.query(
+          'UPDATE platform_admin_sessions SET revoked_at = UTC_TIMESTAMP() WHERE admin_id = ? AND revoked_at IS NULL',
+          [targetAdminId]
+        );
+        await connection.commit();
+        return true;
+      } catch (error) {
+        try { await connection.rollback(); } catch (rollbackError) { error.rollbackError = rollbackError; }
+        throw error;
+      } finally {
+        connection.release();
+      }
+    }
   });
 }
 
