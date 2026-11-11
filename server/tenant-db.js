@@ -9,7 +9,7 @@ class TenantPoolManager {
   constructor({ createPool, maxPools = 100, idleTtlMs = 5 * 60 * 1000, now = Date.now }) {
     if (typeof createPool !== 'function') throw new TypeError('createPool is required');
     if (!Number.isInteger(maxPools) || maxPools < 1 || maxPools > 500) throw new TypeError('TENANT_POOL_MAX_INVALID');
-    if (!Number.isSafeInteger(idleTtlMs) || idleTtlMs < 1000 || idleTtlMs > 86400000) throw new TypeError('TENANT_POOL_IDLE_TTL_INVALID');
+    if (!Number.isSafeInteger(idleTtlMs) || idleTtlMs < 1 || idleTtlMs > 86400000) throw new TypeError('TENANT_POOL_IDLE_TTL_INVALID');
     if (typeof now !== 'function') throw new TypeError('TENANT_POOL_CLOCK_INVALID');
     this.createPool = createPool;
     this.maxPools = maxPools;
