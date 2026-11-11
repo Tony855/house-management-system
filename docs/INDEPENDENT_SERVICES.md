@@ -146,3 +146,18 @@ The CI legacy MariaDB integration now creates an ephemeral tenant database, clon
 - Logout revokes the exact session/user/tenant/product tuple. The existing authenticator checks the same tuple and expiry on every authenticated request.
 - Migration `004_tenant_login_hosts.sql` adds exact host mappings; host mapping management remains a platform-admin deployment task and must not be exposed to tenant users.
 - This is the password/session foundation, not complete production authentication: MFA enrollment/challenge, durable distributed login throttling, refresh-token rotation, account lockout policy and real signing-key manager integration remain required before production cutover. No login domain or signing secret is provisioned by this code.
+
+
+### First tenant-scoped business write: Rental room creation
+
+- Rental now mounts `POST /api/rooms` as a product-specific route; it is not generic CRUD and does not accept client-controlled `id`, `org_id`, timestamps or arbitrary columns.
+- The DTO validates building ID, room number, monetary values, room status, room type, dorm capacity and bounded remarks. The route checks the building and duplicate room number inside the same transaction used for the write.
+- It locks the parent building before the duplicate check, serializing concurrent room creation within one building while the legacy schema's duplicate-room constraint is still being assessed.
+- The route requires the injected `req.tenantWrite` capability and forwards the operation reason, step-up token and idempotency key to the authorization/audit/idempotency boundary. If the production write service is not configured, it returns `503 TENANT_WRITE_UNAVAILABLE`.
+- This is the first mounted business write route, not a production-enabled workflow: production authorization, MFA/step-up issuer, audit sink, idempotency store and MariaDB write integration must be wired and tested before enabling it for customers. Hotel and Property write workflows remain read-only.
+
+### Runtime and dependency compatibility
+
+- The current npm registry latest tags remain Express 5.3.0 and mysql2 3.24.6; the lockfile already resolves those releases, so no speculative package bump was made.
+- CI now runs the complete Node test suite and production dependency audit on both supported LTS lines (Node 24.22.2 and Node 26.13.0). The MariaDB API integration remains pinned to Node 24.22.2 until the Node 26 matrix proves compatibility.
+- Runtime support remains constrained to Node >=24 and <27. Major-version upgrades beyond that range require a separate compatibility and deployment rehearsal.
