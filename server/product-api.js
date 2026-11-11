@@ -17,12 +17,13 @@ function asyncBoundary(fn) {
  * that validates signature, issuer, expiry, audience and appId before setting
  * req.auth. No tenant identifier from request input is trusted.
  */
-function createProductApi({ appId, authenticate, registry, secretProvider, poolManager, routes }) {
+function createProductApi({ appId, authenticate, registry, secretProvider, poolManager, routes, writeService }) {
   if (!PRODUCT_IDS.has(appId)) throw new TypeError('PRODUCT_API_ID_INVALID');
   if (typeof authenticate !== 'function') throw new TypeError('PRODUCT_AUTHENTICATOR_REQUIRED');
   if (!registry || typeof registry.findTenantById !== 'function') throw new TypeError('PRODUCT_TENANT_REGISTRY_REQUIRED');
   if (!secretProvider || typeof secretProvider.getDatabaseCredentials !== 'function') throw new TypeError('PRODUCT_SECRET_PROVIDER_REQUIRED');
   if (!poolManager || typeof poolManager.getPool !== 'function') throw new TypeError('PRODUCT_POOL_MANAGER_REQUIRED');
+  if (writeService !== undefined && (!writeService || typeof writeService.execute !== 'function')) throw new TypeError('PRODUCT_TENANT_WRITE_SERVICE_INVALID');
 
   const app = express();
   app.disable('x-powered-by');
@@ -36,6 +37,11 @@ function createProductApi({ appId, authenticate, registry, secretProvider, poolM
   api.use((req, _res, next) => {
     try {
       req.tenantRepository = createTenantRepository({ pool: req.tenantDb, appId });
+      if (writeService) {
+        req.tenantWrite = input => writeService.execute({
+          ...input, auth: req.auth, tenantContext: req.tenantContext, repository: req.tenantRepository
+        });
+      }
       return next();
     } catch (error) {
       return next(error);
