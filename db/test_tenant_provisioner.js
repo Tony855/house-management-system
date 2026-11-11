@@ -55,3 +55,67 @@ test('failed isolation verification never activates tenant', async () => {
   assert.equal(activated, false);
   assert.equal(failed, true);
 });
+
+
+test('partial provisioning failure removes secret, principal and database in reverse order', async () => {
+  const calls = [];
+  let state = '';
+  await assert.rejects(provisionTenant({
+    appId: 'rental', displayLabel: 'Rental C', tenantId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+    registry: {
+      createProvisioningTenant: async () => calls.push('registry:create'),
+      activateTenant: async () => calls.push('registry:activate'),
+      markProvisioningFailed: async () => { state = 'provisioning_failed'; calls.push('registry:failed'); }
+    },
+    databaseAdmin: {
+      host: 'db.internal',
+      createDatabase: async () => calls.push('db:create'),
+      createPrincipal: async () => calls.push('user:create'),
+      grantDatabaseOnly: async () => { calls.push('grant'); throw new Error('GRANT_FAILED'); },
+      dropPrincipal: async () => calls.push('user:drop'),
+      dropDatabase: async () => calls.push('db:drop')
+    },
+    secretStore: {
+      put: async () => calls.push('secret:put'),
+      delete: async () => calls.push('secret:delete')
+    },
+    migrationRunner: { apply: async () => calls.push('migrate') },
+    isolationVerifier: { verify: async () => ({ passed: true }) }
+  }), /GRANT_FAILED/);
+  assert.equal(state, 'provisioning_failed');
+  assert.deepEqual(calls, [
+    'registry:create', 'db:create', 'user:create', 'grant',
+    'user:drop', 'db:drop', 'registry:failed'
+  ]);
+});
+
+test('failed cleanup is surfaced without activating tenant or masking original error', async () => {
+  let failedState = false;
+  let auditFailure = null;
+  await assert.rejects(provisionTenant({
+    appId: 'hotel', displayLabel: 'Hotel C', tenantId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+    registry: {
+      createProvisioningTenant: async () => {},
+      activateTenant: async () => { throw new Error('SHOULD_NOT_ACTIVATE'); },
+      markProvisioningFailed: async () => { failedState = true; }
+    },
+    databaseAdmin: {
+      host: 'db.internal',
+      createDatabase: async () => {},
+      createPrincipal: async () => {},
+      grantDatabaseOnly: async () => {},
+      dropPrincipal: async () => { throw new Error('cleanup error'); },
+      dropDatabase: async () => {}
+    },
+    secretStore: { put: async () => {}, delete: async () => {} },
+    migrationRunner: { apply: async () => {} },
+    isolationVerifier: { verify: async () => ({ passed: false }) },
+    audit: async event => { if (event.event === 'provisioning_failed') auditFailure = event; }
+  }), error => {
+    assert.equal(error.message, 'TENANT_ISOLATION_VERIFICATION_FAILED');
+    assert.deepEqual(error.cleanupFailures, ['principal']);
+    return true;
+  });
+  assert.equal(failedState, true);
+  assert.deepEqual(auditFailure.cleanupFailures, ['principal']);
+});
