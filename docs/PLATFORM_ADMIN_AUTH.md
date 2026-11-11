@@ -30,7 +30,7 @@ Audit writes on successful security lifecycle operations happen before returning
 
 ## First-admin bootstrap and remaining production controls
 
-A safe one-time first-admin bootstrap command is not yet implemented. Do not seed production with a shared/default password or expose an unauthenticated bootstrap HTTP endpoint. The bootstrap must run only from a trusted host/operator channel, be one-time and concurrency-safe, require explicit credential input, force MFA enrollment, and never print secrets into logs or shell history.
+The one-time first-admin bootstrap is provided by `npm run bootstrap:platform-admin`. It requires an interactive TTY, an absolute `PLATFORM_SECURITY_PROVIDER_MODULE` path exporting `createBootstrapDependencies({env})`, and a dedicated `PLATFORM_DB_*` connection. The provider must return KMS-backed `mfaEncryption` and a 32-byte-or-longer `recoveryCodePepper`. The CLI reads the password without echo, requires 16+ characters, obtains a database advisory lock, refuses to run if any platform admin exists, and atomically inserts the first admin, an already-enabled KMS-encrypted TOTP factor, ten single-use recovery-code hashes, and the bootstrap audit event. The TOTP secret and recovery codes are shown once after commit; store them in an approved password manager. There is no HTTP bootstrap endpoint, default credential, or password command-line argument. Never run this command with shell tracing or terminal/session recording enabled.
 
 Still required before production activation:
 - First-admin bootstrap and forced initial MFA enrollment.
