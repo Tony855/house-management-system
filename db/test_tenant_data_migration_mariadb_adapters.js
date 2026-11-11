@@ -7,7 +7,7 @@ const { createMariaDbTenantMigrationAdapters } = require('../server/tenant-data-
 
 const tenantId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 
-function createPools(appId, sourceOrgId, { lockAcquired = true } = {}) {
+function createPools(appId, sourceOrgId, { lockAcquired = true, releaseLockSucceeds = true } = {}) {
   const sourceCalls = [];
   const targetCalls = [];
   const sourceTables = Object.fromEntries([...TABLES[appId]].map(table => [table, [
@@ -17,6 +17,7 @@ function createPools(appId, sourceOrgId, { lockAcquired = true } = {}) {
   const targetTables = Object.fromEntries([...TABLES[appId]].map(table => [table, []]));
   let committed = false;
   let rolledBack = false;
+  let destroyed = false;
   const sourcePool = {
     async execute(sql, params) {
       sourceCalls.push({ sql, params });
@@ -37,7 +38,7 @@ function createPools(appId, sourceOrgId, { lockAcquired = true } = {}) {
         async execute(sql, params = []) {
           targetCalls.push(sql);
           if (sql.startsWith('SELECT GET_LOCK')) return [[{ acquired: lockAcquired ? 1 : 0 }]];
-          if (sql.startsWith('SELECT RELEASE_LOCK')) return [[{ released: 1 }]];
+          if (sql.startsWith('SELECT RELEASE_LOCK')) return [[{ released: releaseLockSucceeds ? 1 : 0 }]];
           const countTable = sql.match(/SELECT COUNT\(\*\) AS total FROM `([a-z_]+)`/i)?.[1];
           if (countTable) return [[{ total: targetTables[countTable].length }]];
           const insertMatch = sql.match(/INSERT INTO `([a-z_]+)` \(([^)]+)\) VALUES/i);
@@ -58,11 +59,12 @@ function createPools(appId, sourceOrgId, { lockAcquired = true } = {}) {
           for (const table of Object.keys(snapshot)) targetTables[table] = snapshot[table];
           targetCalls.push('ROLLBACK');
         },
-        release() { targetCalls.push('RELEASE'); }
+        release() { targetCalls.push('RELEASE'); },
+        destroy() { destroyed = true; targetCalls.push('DESTROY'); }
       };
     }
   };
-  return { sourcePool, targetPool, sourceCalls, targetCalls, sourceTables, targetTables, get committed() { return committed; }, get rolledBack() { return rolledBack; } };
+  return { sourcePool, targetPool, sourceCalls, targetCalls, sourceTables, targetTables, get committed() { return committed; }, get rolledBack() { return rolledBack; }, get destroyed() { return destroyed; } };
 }
 
 test('MariaDB source adapter scopes every query to the selected org with bound parameters', async () => {
@@ -132,4 +134,16 @@ test('MariaDB target adapter fails closed when the tenant advisory lock is unava
   assert.equal(f.committed, false);
   assert.ok(!f.targetCalls.includes('BEGIN'));
   assert.ok(f.targetCalls.at(-1) === 'RELEASE');
+});
+
+
+test('MariaDB target adapter destroys a pooled connection if advisory lock release is not confirmed', async () => {
+  const f = createPools('hotel', 61, { releaseLockSucceeds: false });
+  const adapters = createMariaDbTenantMigrationAdapters({ appId: 'hotel', ...f });
+  const tables = Object.fromEntries([...TABLES.hotel].map(table => [table, []]));
+  await adapters.targetWriter.importTenantSnapshot({ appId: 'hotel', tenantId, tables });
+  assert.equal(f.committed, true);
+  assert.equal(f.destroyed, true);
+  assert.equal(f.targetCalls.at(-1), 'DESTROY');
+  assert.ok(!f.targetCalls.includes('RELEASE'));
 });
