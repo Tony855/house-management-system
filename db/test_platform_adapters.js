@@ -38,7 +38,7 @@ test('product session store binds session to subject, tenant, app and expiry', a
   }), true);
   assert.deepEqual(captured[1], ['session-identifier-1234', 'user-1', tenantId, 'rental']);
   assert.match(captured[0], /revoked_at IS NULL/);
-  assert.match(captured[0], /expires_at > \?/);
+  assert.match(captured[0], /expires_at > UTC_TIMESTAMP\\(\\)/);
 });
 
 test('product session store rejects cross-product and incomplete session contexts', async () => {
