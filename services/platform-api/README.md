@@ -11,7 +11,7 @@
 ## Billing module
 - Migration: db/migrations/platform/002_platform_billing.sql (after 001 registry migration).
 - Pure domain rules: billing-domain.js.
-- Amounts use ISO currency minor units; KHR has zero decimal places, USD two, KWD three.
+- Amounts use ISO currency minor units; KHR has two decimal places, USD two, KWD three.
 - Invoice/payment transitions, webhook idempotency and refund-balance rules are explicit.
 - Tenant operational invoices and customer payment records remain in each tenant database.
 
