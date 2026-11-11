@@ -194,3 +194,7 @@ The CI legacy MariaDB integration now creates an ephemeral tenant database, clon
 
 
 - The MariaDB write integration now provisions a unique test DB principal per tenant, grants only `SELECT/INSERT/UPDATE/DELETE` on that tenant database, and verifies that access to the shared legacy product database and DDL are denied. The API is exercised using this restricted principal rather than the MariaDB root account.
+
+
+- The integration suite also asserts the exact least-privilege DML grant (without `ALL PRIVILEGES` or `GRANT OPTION`), absence of legacy `org_id` columns in the tenant schema, successful/denied authorization and step-up cases, and the precise started/committed/replayed audit event counts for concurrent retries.
+- Audit failure assertions verify that both the room mutation and its idempotency row roll back. A CI fixture validation defect discovered in the first run (the synthetic room number exceeded the production 20-character limit) was corrected; the fixture now uses a valid short room number.
