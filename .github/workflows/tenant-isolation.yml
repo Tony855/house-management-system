@@ -44,18 +44,17 @@ jobs:
       - uses: actions/checkout@v7.0.1
       - name: Install MariaDB client
         run: |
-          # GitHub-hosted runner DNS/package mirrors can be transiently unavailable.
-          # Retry both index refresh and package download rather than failing on one DNS blip.
-          for attempt in 1 2 3 4 5; do
-            if sudo apt-get update -o Acquire::Retries=3 &&
-               sudo apt-get install -y -o Acquire::Retries=3 mariadb-client; then
-              exit 0
-            fi
-            echo "MariaDB client install attempt ${attempt}/5 failed; retrying..."
-            sleep 10
+          # The MariaDB service image is already pulled for this job. Use its client
+          # through Docker instead of apt mirrors, avoiding runner DNS/package outages.
+          for client in mysql mariadb; do
+            sudo tee "/usr/local/bin/${client}" >/dev/null <<'WRAPPER'
+          #!/usr/bin/env bash
+          set -Eeuo pipefail
+          exec docker run --rm --network host -i -e MYSQL_PWD="${MYSQL_PWD:-}" mariadb:11.4 mariadb "$@"
+          WRAPPER
+            sudo chmod 0755 "/usr/local/bin/${client}"
           done
-          echo "Unable to install mariadb-client after retries" >&2
-          exit 1
+          docker image inspect mariadb:11.4 >/dev/null
       - name: Apply platform registry and billing migrations
         env:
           DB_HOST: 127.0.0.1
@@ -88,18 +87,17 @@ jobs:
           cache: npm
       - name: Install MariaDB client
         run: |
-          # GitHub-hosted runner DNS/package mirrors can be transiently unavailable.
-          # Retry both index refresh and package download rather than failing on one DNS blip.
-          for attempt in 1 2 3 4 5; do
-            if sudo apt-get update -o Acquire::Retries=3 &&
-               sudo apt-get install -y -o Acquire::Retries=3 mariadb-client; then
-              exit 0
-            fi
-            echo "MariaDB client install attempt ${attempt}/5 failed; retrying..."
-            sleep 10
+          # The MariaDB service image is already pulled for this job. Use its client
+          # through Docker instead of apt mirrors, avoiding runner DNS/package outages.
+          for client in mysql mariadb; do
+            sudo tee "/usr/local/bin/${client}" >/dev/null <<'WRAPPER'
+          #!/usr/bin/env bash
+          set -Eeuo pipefail
+          exec docker run --rm --network host -i -e MYSQL_PWD="${MYSQL_PWD:-}" mariadb:11.4 mariadb "$@"
+          WRAPPER
+            sudo chmod 0755 "/usr/local/bin/${client}"
           done
-          echo "Unable to install mariadb-client after retries" >&2
-          exit 1
+          docker image inspect mariadb:11.4 >/dev/null
       - name: Install dependencies
         run: npm ci
       - name: Initialize disposable legacy test databases
