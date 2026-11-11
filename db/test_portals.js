@@ -25,7 +25,7 @@ test('four independent portal entrypoints have distinct app and session boundari
   assert.equal(seen.size, 4);
 });
 test('platform portal is separate from tenant product entrypoints', () => {
-  const html = fs.readFileSync('apps/platform-web/index.html', 'utf8');
+  const html = fs.readFileSync('apps/super-admin-web/index.html', 'utf8');
   assert.match(html, /Super Admin/);
   assert.match(html, /平台总管理/);
   assert.match(html, /平台账单/);
