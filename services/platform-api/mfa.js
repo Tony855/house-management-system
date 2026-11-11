@@ -93,7 +93,8 @@ function createPlatformMfaService({
     getFactor: 'getFactor',
     activateFactor: 'activateFactor',
     consumeTotpCounter: 'consumeTotpCounter',
-    consumeRecoveryCode: 'consumeRecoveryCode'
+    consumeRecoveryCode: 'consumeRecoveryCode',
+    replaceRecoveryCodes: 'replaceRecoveryCodes'
   };
   if (!store || Object.values(required).some(method => typeof store[method] !== 'function')) {
     throw new TypeError('PLATFORM_MFA_STORE_REQUIRED');
@@ -181,7 +182,26 @@ function createPlatformMfaService({
     }
   }
 
-  return Object.freeze({ beginEnrollment, confirmEnrollment, verify });
+
+  async function getStatus({ adminId }) {
+    if (!Number.isSafeInteger(adminId) || adminId < 1) fail('PLATFORM_MFA_ADMIN_INVALID', 403);
+    const factor = await store.getFactor(adminId);
+    return Object.freeze({ enabled: !!factor && factor.enabled === true });
+  }
+
+  async function rotateRecoveryCodes({ adminId, code }) {
+    const verified = await verify({ adminId, code });
+    const recoveryCodes = Array.from({ length: RECOVERY_CODE_COUNT }, () => {
+      const raw = randomBytes(6).toString('hex').toUpperCase();
+      return raw.slice(0, 4) + '-' + raw.slice(4, 8) + '-' + raw.slice(8, 12);
+    });
+    const recoveryCodeHashes = recoveryCodes.map(value => hashRecoveryCode(value, recoveryCodePepper));
+    const replaced = await store.replaceRecoveryCodes({ adminId, recoveryCodeHashes });
+    if (replaced !== true) fail('PLATFORM_MFA_RECOVERY_ROTATION_FAILED', 503);
+    return Object.freeze({ rotated: true, method: verified.method, recoveryCodes: Object.freeze(recoveryCodes) });
+  }
+
+  return Object.freeze({ beginEnrollment, confirmEnrollment, verify, getStatus, rotateRecoveryCodes });
 }
 
 module.exports = {
