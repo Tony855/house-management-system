@@ -233,3 +233,13 @@ The CI legacy MariaDB integration now creates an ephemeral tenant database, clon
 
 - `services/platform-api/auth-routes.js` exposes `/api/platform/auth/login`, `/mfa/verify`, `/step-up` and `/logout`; `createPlatformApi` mounts these routes when an `adminAuthService` is injected. The protected billing router uses the supplied authenticator (or the injected admin service authenticator). Current admin permissions are reloaded from `platform_admins` for each authenticated request, so permission changes take effect without waiting for the access token to expire.
 - The route/service wiring is covered by HTTP integration tests. This remains dependency-injected: deployment composition must supply the platform DB auth store, KMS-backed MFA service, platform admin rate limiter and separate signing/verification key providers. The first-admin bootstrap and MFA enrollment endpoints are intentionally not exposed by these login routes.
+
+
+### Platform login throttle and authentication composition follow-up
+- Super Admin login now passes an explicit `appId: 'platform'` and fixed platform namespace into the same HMAC identity throttler; the platform username and host are never persisted in clear text.
+- The platform throttle uses a dedicated HMAC key and fails closed with HTTP 503 when the control-plane DB is unavailable. Only an actual rate-limit block returns HTTP 429.
+- Migration 009 widens the existing login-attempt namespace for platform administrators; the MariaDB CI script applies both the original create migration and the forward ALTER migration.
+- MFA infrastructure outages no longer consume a user's five-attempt challenge budget; only explicit MFA authentication failures count against the challenge.
+- `services/platform-api/admin-auth-dependencies.js` now composes the platform DB auth/MFA stores, KMS encryption adapter, recovery pepper, login limiter and separate signing/verification key providers. Its output can be passed directly to `createPlatformApi({ pool, adminAuthService })`.
+- Tests cover platform-only limiter identity, limiter DB outage fail-closed behavior, MFA infrastructure outage handling, dependency composition and route mounting.
+- Still not production-ready until actual KMS/HSM and key rotation, first-admin bootstrap, MFA enrollment/recovery administration, cookie/CSRF policy, deployed rate-limit secret, live MariaDB auth concurrency tests and independent security review are complete.
