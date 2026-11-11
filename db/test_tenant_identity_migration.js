@@ -73,7 +73,7 @@ test('never copies legacy session tokens and preserves duplicate usernames in se
 });
 
 test('copy mode verifies target readback and requires audit and full adapters', async () => {
-  const source = snapshot(21);
+  const source = snapshot(21, 'hotel');
   let written;
   const events = [];
   const deps = {
