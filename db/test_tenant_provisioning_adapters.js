@@ -1,0 +1,79 @@
+'use strict';
+
+const assert = require('node:assert/strict');
+const test = require('node:test');
+const {
+  createMariaDbTenantDatabaseAdmin,
+  createTenantProvisioningSecretStore,
+  createTenantProvisioningMigrationRunner,
+  createTenantProvisioningIsolationVerifier,
+  createPlatformTenantProvisioningAdapters
+} = require('../server/tenant-provisioning-adapters');
+
+test('MariaDB tenant database admin scopes grants to one generated database and safely cleans up', async () => {
+  const calls = [];
+  const admin = createMariaDbTenantDatabaseAdmin({
+    host: 'db.internal', user: 'provisioner', password: 'admin-secret',
+    createConnection: async config => ({
+      query: async (sql, values) => { calls.push({ config, sql, values }); return [{ affectedRows: 1 }, []]; },
+      end: async () => calls.push({ end: true })
+    })
+  });
+  await admin.createDatabase('rental_123456781234123412341234');
+  await admin.createPrincipal('t_123456781234123412341234', 'x'.repeat(43));
+  await admin.grantDatabaseOnly('t_123456781234123412341234', 'rental_123456781234123412341234');
+  await admin.dropPrincipal('t_123456781234123412341234');
+  await admin.dropDatabase('rental_123456781234123412341234');
+  assert.match(calls.find(x => x.sql?.startsWith('GRANT')).sql, /ON `rental_123456781234123412341234`\.\*/);
+  assert.equal(calls.filter(x => x.end).length, 5);
+  await assert.rejects(admin.createDatabase('db`; DROP DATABASE mysql;--'), /TENANT_DATABASE_NAME_INVALID/);
+});
+
+test('secret, migration and isolation adapters validate contract and preserve version', async () => {
+  const secrets = [];
+  const store = createTenantProvisioningSecretStore({
+    putSecret: async (...args) => secrets.push(args),
+    deleteSecret: async ref => secrets.push(['delete', ref])
+  });
+  await store.put('tenant-db/12345678-1234-4123-8123-123456789abc', { user: 't_user', password: 'secret' });
+  await store.delete('tenant-db/12345678-1234-4123-8123-123456789abc');
+  assert.equal(secrets.length, 2);
+  const runner = createTenantProvisioningMigrationRunner(async () => ({ schemaVersion: 'tenant-v3' }));
+  assert.deepEqual(await runner.apply({
+    appId: 'rental', tenantId: '12345678-1234-4123-8123-123456789abc',
+    dbName: 'rental_123', secretRef: 'tenant-db/ref'
+  }), { schemaVersion: 'tenant-v3' });
+  const verifier = createTenantProvisioningIsolationVerifier(async () => ({ passed: true, schemaVersion: 'tenant-v3' }));
+  assert.deepEqual(await verifier.verify({}), { passed: true, schemaVersion: 'tenant-v3' });
+  const failing = createTenantProvisioningIsolationVerifier(async () => ({ passed: true }));
+  assert.deepEqual(await failing.verify({}), { passed: false });
+});
+
+test('platform tenant registry provisioning adapter persists state transitions and audit events', async () => {
+  const calls = [];
+  const platformPool = { query: async (sql, values) => {
+    calls.push({ sql, values });
+    return [{ affectedRows: 1 }, []];
+  } };
+  const adapters = createPlatformTenantProvisioningAdapters({
+    platformPool,
+    databaseAdmin: {
+      host: 'db.internal', port: 3306,
+      createDatabase: async () => {}, createPrincipal: async () => {},
+      grantDatabaseOnly: async () => {}, dropPrincipal: async () => {}, dropDatabase: async () => {}
+    },
+    secretManager: { putSecret: async () => {}, deleteSecret: async () => {} },
+    runMigrations: async () => ({ schemaVersion: 'tenant-v1' }),
+    verifyIsolation: async () => ({ passed: true, schemaVersion: 'tenant-v1' })
+  });
+  await adapters.registry.createProvisioningTenant({
+    tenant_uuid: '12345678-1234-4123-8123-123456789abc', app_id: 'rental',
+    display_label: 'Tenant', lifecycle_state: 'provisioning', db_host: 'db.internal',
+    db_port: 3306, db_name: 'rental_123', db_secret_ref: 'tenant-db/ref', schema_version: null
+  });
+  await adapters.registry.activateTenant('12345678-1234-4123-8123-123456789abc', { schemaVersion: 'tenant-v1' });
+  await adapters.registry.markProvisioningFailed('12345678-1234-4123-8123-123456789abc', 'PROVISIONING_FAILED');
+  assert.equal(calls.length, 5);
+  assert.ok(calls.some(x => x.sql.includes("lifecycle_state = 'active'")));
+  assert.ok(calls.some(x => x.sql.includes("lifecycle_state = 'provisioning_failed'")));
+});
