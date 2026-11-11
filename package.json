@@ -9,11 +9,12 @@
     "seed": "node server/seed.js",
     "test:db-mode": "node db/test_db_mode.js",
     "test:tenant-isolation": "node --test db/test_tenant_isolation.js db/test_tenant_provisioner.js db/test_schema_manifest.js",
-    "test": "npm run test:db-mode && npm run test:tenant-isolation && npm run test:deploy && npm run test:platform-billing && npm run test:frontend && npm run test:runtime",
+    "test": "npm run test:db-mode && npm run test:tenant-isolation && npm run test:deploy && npm run test:platform-billing && npm run test:frontend && npm run test:runtime && npm run test:api-architecture",
     "test:deploy": "bash scripts/test-deploy.sh",
     "test:platform-billing": "node --test db/test_platform_billing.js",
     "test:frontend": "node db/check_frontend.js && node scripts/test-ui.js",
-    "test:runtime": "node scripts/test-runtime.js"
+    "test:runtime": "node scripts/test-runtime.js",
+    "test:api-architecture": "node --test db/test_product_api.js db/test_platform_api.js db/test_portals.js"
   },
   "dependencies": {
     "express": "^5.3.0",
