@@ -31,21 +31,21 @@ function createProductApi({ appId, authenticate, registry, secretProvider, poolM
   app.use(express.json({ limit: '256kb', strict: true }));
   app.get('/health/live', (_req, res) => res.json({ ok: true, service: appId + '-api' }));
 
-  if (loginService) {
-    app.post('/api/auth/login', asyncBoundary(async (req, res) => {
-      const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {};
-      const result = await loginService.login({
-        host: req.hostname,
-        username: body.username,
-        password: body.password
-      });
-      return res.json(result);
-    }));
-    app.post('/api/auth/logout', asyncBoundary(async (req, res, next) => {
-      await new Promise((resolve, reject) => authenticate(req, res, error => error ? reject(error) : resolve()));
-      return res.json(await loginService.logout(req.auth));
-    }));
-  }
+  app.post('/api/auth/login', asyncBoundary(async (req, res) => {
+    if (!loginService) return res.status(503).json({ error: 'LOGIN_UNAVAILABLE' });
+    const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {};
+    const result = await loginService.login({
+      host: req.hostname,
+      username: body.username,
+      password: body.password
+    });
+    return res.json(result);
+  }));
+  app.post('/api/auth/logout', asyncBoundary(async (req, res) => {
+    if (!loginService) return res.status(503).json({ error: 'LOGOUT_UNAVAILABLE' });
+    await new Promise((resolve, reject) => authenticate(req, res, error => error ? reject(error) : resolve()));
+    return res.json(await loginService.logout(req.auth));
+  }));
 
   const resolveTenant = createTenantMiddleware({ appId, registry, secretProvider, poolManager });
   const api = express.Router();
