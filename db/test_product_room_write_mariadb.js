@@ -104,9 +104,11 @@ async function main() {
       const poolManager = new TenantPoolManager({ createPool: options => mysql.createPool(options), maxPools: 2 });
       managers.push(poolManager);
       let failCommitAudit = false;
+      let denyAuthorization = false;
+      let denyStepUp = false;
       const writeService = createTenantWriteService({
-        authorize: async ({ auth, tenantContext }) => auth.tenantId === tenantContext.tenantId && auth.appId === appId,
-        verifyStepUp: async ({ token }) => token === 'ci-step-up-token-123456789',
+        authorize: async ({ auth, tenantContext }) => !denyAuthorization && auth.tenantId === tenantContext.tenantId && auth.appId === appId,
+        verifyStepUp: async ({ token }) => !denyStepUp && token === 'ci-step-up-token-123456789',
         auditWriter: {
           async append(tx, event) {
             if (failCommitAudit && event.event === 'tenant_write_committed') throw new Error('CI_AUDIT_FAILURE');
@@ -154,6 +156,18 @@ async function main() {
       assert.equal(firstBody.id, replayBody.id, appId + ' replay ID');
       const [[countRows]] = await pool.query('SELECT COUNT(*) AS total FROM rooms WHERE room_no = ?', [room.room_no]);
       assert.equal(Number(countRows.total), 1, appId + ' concurrent duplicate mutation');
+      const [auditEvents] = await pool.query('SELECT event, COUNT(*) AS total FROM tenant_write_audit WHERE request_id = ? GROUP BY event', [requestId]);
+      const eventCounts = Object.fromEntries(auditEvents.map(row => [row.event, Number(row.total)]));
+      assert.deepEqual(eventCounts, { tenant_write_started: 2, tenant_write_committed: 1, tenant_write_replayed: 1 }, appId + ' transactional audit events');
+
+      denyAuthorization = true;
+      const forbidden = await post(base, { ...room, room_no: 'CI-DENY-' + appId }, 'ci-write-denied-' + appId);
+      assert.equal(forbidden.status, 403, appId + ' authorization denied');
+      denyAuthorization = false;
+      denyStepUp = true;
+      const stepUpDenied = await post(base, { ...room, room_no: 'CI-STEP-' + appId }, 'ci-stepup-denied-' + appId);
+      assert.equal(stepUpDenied.status, 403, appId + ' step-up denied');
+      denyStepUp = false;
 
       const changed = { ...room, room_no: room.room_no + '-changed' };
       const conflict = await post(base, changed, requestId);
