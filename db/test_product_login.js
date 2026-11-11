@@ -132,7 +132,7 @@ test('login throttling blocks requests before tenant lookup and propagates limit
     recordFailure: async () => {}, clear: async () => {}
   } });
   await assert.rejects(unavailable.service.login({ host: 'tenant.example.test', username: 'same-user', password: 'wrong' }),
-    /platform DB offline/);
+    error => error.code === 'LOGIN_RATE_LIMITER_UNAVAILABLE' && error.status === 503);
   assert.equal(unavailable.calls.some(x => x[0] === 'host'), false);
 });
 
