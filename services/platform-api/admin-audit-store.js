@@ -10,7 +10,12 @@ const OUTCOMES = new Set(['success', 'failure']);
 function createPlatformAdminAuditStore(pool) {
   if (!pool || typeof pool.query !== 'function') throw new TypeError('PLATFORM_AUDIT_POOL_REQUIRED');
   return Object.freeze({
-    async append({ adminId = null, sessionId = null, action, outcome, code = null }) {
+    async append(event) {
+      if (!event || typeof event !== 'object' || Array.isArray(event) ||
+          Object.keys(event).some(key => !['adminId', 'sessionId', 'action', 'outcome', 'code'].includes(key))) {
+        throw new TypeError('PLATFORM_AUDIT_EVENT_INVALID');
+      }
+      const { adminId = null, sessionId = null, action, outcome, code = null } = event;
       if (adminId !== null && (!Number.isSafeInteger(adminId) || adminId < 1)) throw new TypeError('PLATFORM_AUDIT_ADMIN_INVALID');
       if (sessionId !== null && (typeof sessionId !== 'string' || !/^[A-Za-z0-9._~-]{16,128}$/.test(sessionId))) throw new TypeError('PLATFORM_AUDIT_SESSION_INVALID');
       if (!ACTIONS.has(action) || !OUTCOMES.has(outcome)) throw new TypeError('PLATFORM_AUDIT_EVENT_INVALID');
