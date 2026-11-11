@@ -172,6 +172,8 @@ test('resource creation timeout still triggers deterministic cleanup attempt', a
     databaseAdmin: {
       host: 'db.internal',
       createDatabase: async () => { throw new Error('REMOTE_CREATED_BUT_CLIENT_TIMED_OUT'); },
+      createPrincipal: async () => {},
+      grantDatabaseOnly: async () => {},
       dropDatabase: async () => { dropAttempted = true; }
     },
     secretStore: { put: async () => {} },
