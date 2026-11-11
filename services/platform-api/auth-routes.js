@@ -46,6 +46,8 @@ function createPlatformAuthRouter({ authService, mfaService }) {
   });
   router.post('/mfa/enrollment', authService.authenticate, requireRecentMfa, async (req, res, next) => {
     try {
+      res.set('Cache-Control', 'no-store');
+      res.set('Pragma', 'no-cache');
       const result = await mfaService.beginEnrollment({
         adminId: req.platformAuth.adminId,
         account: req.platformAuth.username || String(req.platformAuth.adminId)
@@ -55,6 +57,8 @@ function createPlatformAuthRouter({ authService, mfaService }) {
   });
   router.post('/mfa/enrollment/confirm', authService.authenticate, requireRecentMfa, async (req, res, next) => {
     try {
+      res.set('Cache-Control', 'no-store');
+      res.set('Pragma', 'no-cache');
       const result = await mfaService.confirmEnrollment({
         adminId: req.platformAuth.adminId,
         code: req.body?.code
@@ -64,6 +68,8 @@ function createPlatformAuthRouter({ authService, mfaService }) {
   });
   router.post('/mfa/recovery-codes/rotate', authService.authenticate, requireRecentMfa, async (req, res, next) => {
     try {
+      res.set('Cache-Control', 'no-store');
+      res.set('Pragma', 'no-cache');
       const result = await mfaService.rotateRecoveryCodes({
         adminId: req.platformAuth.adminId,
         code: req.body?.code
