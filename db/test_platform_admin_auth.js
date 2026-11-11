@@ -33,13 +33,18 @@ function fixture(overrides = {}) {
       getActiveSession: async ({ sessionId, adminId }) => {
         const row = sessions.get(sessionId);
         return row && row.adminId === adminId && !row.revoked ? {
-          status: 'active', adminStatus: 'active', mfaVerifiedAt: row.mfaVerifiedAt, permissions: row.permissions
+          status: 'active', adminStatus: 'active', mfaVerifiedAt: row.mfaVerifiedAt, stepUpVerifiedAt: row.stepUpVerifiedAt ?? null, permissions: row.permissions
         } : null;
       },
       touchMfaVerified: async ({ adminId, sessionId, verifiedAt }) => {
         const row = sessions.get(sessionId);
         if (!row || row.adminId !== adminId || row.revoked) return false;
         row.mfaVerifiedAt = verifiedAt; return true;
+      },
+      touchStepUpVerified: async ({ adminId, sessionId, verifiedAt }) => {
+        const row = sessions.get(sessionId);
+        if (!row || row.adminId !== adminId || row.revoked) return false;
+        row.stepUpVerifiedAt = verifiedAt; return true;
       },
       revokeSession: async ({ adminId, sessionId }) => {
         const row = sessions.get(sessionId);
@@ -130,6 +135,7 @@ test('platform authenticator validates signed token and loads current session pe
   assert.equal(req.platformAuth.audience, 'platform');
   assert.deepEqual(req.platformAuth.permissions, ['platform:read', 'plans:write']);
   assert.equal(req.platformAuth.mfaVerified, true);
+  assert.equal(req.platformAuth.stepUpVerified, false, 'login MFA must not satisfy sensitive-operation step-up');
   await service.logout({ adminId: 7, sessionId: req.platformAuth.sessionId });
   const revokedReq = { headers: { authorization: 'Bearer ' + issued.accessToken } };
   await service.authenticate(revokedReq, {}, error => { nextError = error; });
@@ -144,6 +150,10 @@ test('step-up verifies MFA again and updates the existing active session', async
   const result = await service.stepUp({ adminId: 7, sessionId: payload.jti, code: '123456' });
   assert.equal(result.stepUpVerified, true);
   assert.equal(sessions.get(payload.jti).mfaVerifiedAt, 1800000000);
+  assert.equal(sessions.get(payload.jti).stepUpVerifiedAt, 1800000000);
+  const req = { headers: { authorization: 'Bearer ' + issued.accessToken } };
+  await service.authenticate(req, {}, error => { assert.equal(error, undefined); });
+  assert.equal(req.platformAuth.stepUpVerified, true);
 });
 
 
