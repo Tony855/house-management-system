@@ -1,4 +1,4 @@
-name: Tenant isolation tests
+name: Tenant isolation and installer tests
 
 on:
   push:
@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   node-tests:
@@ -19,15 +19,5 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
-      - run: npm audit fix
+      - run: npm audit --omit=dev
       - run: npm test
-      - name: Commit compatible dependency security updates
-        if: github.event_name == 'push'
-        run: |
-          if ! git diff --quiet -- package-lock.json package.json; then
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add package-lock.json package.json
-            git commit -m "fix: remediate audited production dependencies"
-            git push
-          fi
