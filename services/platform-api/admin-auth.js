@@ -9,6 +9,21 @@ function authError(code, status = 401) {
 
 function b64(value) { return Buffer.from(JSON.stringify(value)).toString('base64url'); }
 function digest(value) { return crypto.createHash('sha256').update(value).digest('hex'); }
+function decodeBase64Url(segment) {
+  if (typeof segment !== 'string' || !/^[A-Za-z0-9_-]+$/.test(segment) || segment.length % 4 === 1) {
+    authError('TOKEN_INVALID');
+  }
+  const decoded = Buffer.from(segment, 'base64url');
+  if (decoded.toString('base64url') !== segment) authError('TOKEN_INVALID');
+  return decoded;
+}
+function decodeJsonSegment(segment) {
+  try { return JSON.parse(decodeBase64Url(segment).toString('utf8')); }
+  catch (error) {
+    if (error && error.code === 'TOKEN_INVALID') throw error;
+    authError('TOKEN_INVALID');
+  }
+}
 
 function createPlatformAdminAuthService({
   adminStore, challengeStore, sessionStore, mfaService, signingKeyProvider,
@@ -23,7 +38,11 @@ function createPlatformAdminAuthService({
   if (!mfaService || typeof mfaService.verify !== 'function') throw new TypeError('PLATFORM_ADMIN_MFA_SERVICE_REQUIRED');
   if (!signingKeyProvider || typeof signingKeyProvider.getSigningKey !== 'function' ||
       !verificationKeyProvider || typeof verificationKeyProvider.getVerificationKey !== 'function') throw new TypeError('PLATFORM_ADMIN_KEY_PROVIDER_REQUIRED');
-  if (typeof issuer !== 'string' || !issuer || typeof verifyPassword !== 'function' || typeof now !== 'function') throw new TypeError('PLATFORM_ADMIN_AUTH_CONFIG_INVALID');
+  if (typeof issuer !== 'string' || !issuer || typeof verifyPassword !== 'function' || typeof now !== 'function' ||
+      !Number.isSafeInteger(sessionLifetimeSeconds) || sessionLifetimeSeconds < 60 || sessionLifetimeSeconds > 86400 ||
+      !Number.isSafeInteger(challengeLifetimeSeconds) || challengeLifetimeSeconds < 30 || challengeLifetimeSeconds > 600 ||
+      !Number.isSafeInteger(stepUpFreshSeconds) || stepUpFreshSeconds < 30 || stepUpFreshSeconds > 1800 ||
+      typeof randomBytes !== 'function') throw new TypeError('PLATFORM_ADMIN_AUTH_CONFIG_INVALID');
   if (!loginRateLimiter || !['assertAllowed', 'recordFailure', 'clear'].every(k => typeof loginRateLimiter[k] === 'function')) throw new TypeError('PLATFORM_ADMIN_RATE_LIMITER_REQUIRED');
 
   async function login({ username, password }) {
@@ -65,7 +84,7 @@ function createPlatformAdminAuthService({
     const expiresAt = issuedAt + sessionLifetimeSeconds;
     const sessionId = randomBytes(32).toString('base64url');
     const key = await signingKeyProvider.getSigningKey({ appId: 'platform' });
-    if (!key || typeof key.kid !== 'string' || !(typeof key.key === 'string' || Buffer.isBuffer(key.key)) || Buffer.byteLength(key.key) < 32) {
+    if (!key || typeof key.kid !== 'string' || !/^[A-Za-z0-9._-]{1,128}$/.test(key.kid) || !(typeof key.key === 'string' || Buffer.isBuffer(key.key)) || Buffer.byteLength(key.key) < 32) {
       authError('AUTH_SIGNING_KEY_UNAVAILABLE', 503);
     }
     await sessionStore.createSession({
@@ -108,11 +127,13 @@ function createPlatformAdminAuthService({
       if (typeof header !== 'string' || !/^Bearer [A-Za-z0-9._~-]+$/.test(header)) authError('AUTH_REQUIRED');
       const parts = header.slice(7).split('.');
       if (parts.length !== 3) authError('TOKEN_INVALID');
-      let protectedHeader, claims;
-      try {
-        protectedHeader = JSON.parse(Buffer.from(parts[0], 'base64url').toString('utf8'));
-        claims = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'));
-      } catch (_) { authError('TOKEN_INVALID'); }
+      const protectedHeader = decodeJsonSegment(parts[0]);
+      const claims = decodeJsonSegment(parts[1]);
+      if (!protectedHeader || typeof protectedHeader !== 'object' || Array.isArray(protectedHeader) ||
+          !claims || typeof claims !== 'object' || Array.isArray(claims) ||
+          Object.keys(claims).some(k => !['iss', 'aud', 'appId', 'sub', 'jti', 'iat', 'exp'].includes(k))) {
+        authError('TOKEN_INVALID');
+      }
       if (!protectedHeader || protectedHeader.alg !== 'HS256' || protectedHeader.typ !== 'JWT' ||
           Object.keys(protectedHeader).some(k => !['alg', 'typ', 'kid'].includes(k)) ||
           typeof protectedHeader.kid !== 'string' || !/^[A-Za-z0-9._-]{1,128}$/.test(protectedHeader.kid)) authError('TOKEN_INVALID');
@@ -120,7 +141,7 @@ function createPlatformAdminAuthService({
       if (!(typeof key === 'string' || Buffer.isBuffer(key)) || Buffer.byteLength(key) < 32) authError('AUTH_KEY_UNAVAILABLE', 503);
       const expected = crypto.createHmac('sha256', key).update(parts[0] + '.' + parts[1]).digest();
       let supplied;
-      try { supplied = Buffer.from(parts[2], 'base64url'); } catch (_) { authError('TOKEN_INVALID'); }
+      try { supplied = decodeBase64Url(parts[2]); } catch (_) { authError('TOKEN_INVALID'); }
       if (supplied.length !== expected.length || !crypto.timingSafeEqual(supplied, expected)) authError('TOKEN_INVALID');
       const current = now();
       if (claims.iss !== issuer || claims.aud !== 'platform' || claims.appId !== 'platform' ||
