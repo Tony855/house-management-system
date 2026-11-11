@@ -3,8 +3,9 @@
 const { resolveTenantContext } = require('./tenant-registry');
 
 function publicErrorCode(error) {
-  return typeof error?.code === 'string' && /^[A-Z][A-Z0-9_]{1,63}$/.test(error.code)
-    ? error.code : 'TENANT_CONTEXT_UNAVAILABLE';
+  const code = typeof error?.code === 'string' ? error.code : error?.message;
+  return typeof code === 'string' && /^[A-Z][A-Z0-9_]{1,63}$/.test(code)
+    ? code : 'TENANT_CONTEXT_UNAVAILABLE';
 }
 
 /**
