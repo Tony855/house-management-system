@@ -115,7 +115,7 @@ test('MFA enrollment requires a recently MFA-verified authenticated session', as
     confirmEnrollment: async () => ({}),
     rotateRecoveryCodes: async () => ({})
   };
-  const app = createPlatformApi({ pool: { query: async () => [[], []] }, adminAuthService: authService, mfaService });
+  const app = createPlatformApi({ pool: { query: async () => [[], []], getConnection: async () => ({}) }, adminAuthService: authService, mfaService });
   await withServer(app, async base => {
     const response = await fetch(base + '/api/platform/auth/mfa/enrollment', {
       method: 'POST', headers: { authorization: 'Bearer session-token' }
