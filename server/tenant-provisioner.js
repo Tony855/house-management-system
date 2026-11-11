@@ -28,13 +28,31 @@ async function provisionTenant({
   appId, displayLabel, registry, databaseAdmin, secretStore, migrationRunner,
   isolationVerifier, audit, tenantId = crypto.randomUUID()
 }) {
-  if (!APP_IDS.has(appId) || typeof displayLabel !== 'string' || !displayLabel.trim() || !UUID_RE.test(tenantId)) {
+  if (!APP_IDS.has(appId) || typeof displayLabel !== 'string' || !displayLabel.trim() ||
+      displayLabel.length > 120 || /[\\u0000-\\u001f\\u007f]/.test(displayLabel) || !UUID_RE.test(tenantId)) {
     throw new Error('TENANT_PROVISIONING_INPUT_INVALID');
   }
-  for (const [name, adapter] of Object.entries({ registry, databaseAdmin, secretStore, migrationRunner, isolationVerifier })) {
-    if (!adapter) throw new TypeError(name + ' adapter is required');
-  }
   if (typeof audit !== 'function') throw new TypeError('TENANT_AUDIT_ADAPTER_REQUIRED');
+  const requiredMethods = {
+    registry: ['createProvisioningTenant', 'activateTenant', 'markProvisioningFailed'],
+    databaseAdmin: ['createDatabase', 'createPrincipal', 'grantDatabaseOnly'],
+    secretStore: ['put'],
+    migrationRunner: ['apply'],
+    isolationVerifier: ['verify']
+  };
+  for (const [name, methods] of Object.entries(requiredMethods)) {
+    const adapter = ({ registry, databaseAdmin, secretStore, migrationRunner, isolationVerifier })[name];
+    if (!adapter || methods.some(method => typeof adapter[method] !== 'function')) {
+      throw new TypeError('TENANT_PROVISIONING_ADAPTER_INVALID');
+    }
+  }
+  const dbHost = databaseAdmin.host;
+  const dbPort = databaseAdmin.port === undefined ? 3306 : databaseAdmin.port;
+  if (typeof dbHost !== 'string' || !dbHost || dbHost.length > 253 ||
+      /[\\s\\u0000-\\u001f\\u007f]/.test(dbHost) ||
+      !Number.isInteger(dbPort) || dbPort < 1 || dbPort > 65535) {
+    throw new Error('TENANT_DATABASE_ENDPOINT_INVALID');
+  }
   const dbName = tenantDatabaseName(appId, tenantId);
   const dbUser = tenantDatabaseUser(tenantId);
   const secretRef = 'tenant-db/' + tenantId;
@@ -43,7 +61,7 @@ async function provisionTenant({
   const record = {
     tenant_uuid: tenantId, app_id: appId, display_label: displayLabel.trim(),
     lifecycle_state: 'provisioning', db_host: databaseAdmin.host,
-    db_port: Number(databaseAdmin.port || 3306), db_name: dbName,
+    db_port: dbPort, db_name: dbName,
     db_secret_ref: secretRef, schema_version: null
   };
   let registryCreated = false;
