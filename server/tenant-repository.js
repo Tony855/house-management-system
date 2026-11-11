@@ -163,7 +163,8 @@ function createTenantRepository({ pool, appId, queryable = pool, allowTransactio
     }
   }
 
-  return Object.freeze({ appId, list, findById, count, insert, updateById, deleteById, withTransaction });
+  const transactionExecute = allowTransactions ? undefined : (sql, params = []) => queryable.execute(sql, params);
+  return Object.freeze({ appId, list, findById, count, insert, updateById, deleteById, withTransaction, ...(transactionExecute ? { execute: transactionExecute } : {}) });
 }
 
 module.exports = { TABLES, COLUMNS, createTenantRepository };
