@@ -43,7 +43,8 @@ test('product dependencies wire login only with a dedicated signing key issuer',
     platformPool: pool,
     secretManager: { getSecret: async () => ({ user: 'tenant', password: 'secret' }) },
     keyProvider: { getVerificationKey: async () => '0123456789abcdef0123456789abcdef' },
-    signingKeyProvider: { getSigningKey: async () => ({ kid: 'v1', key: '0123456789abcdef0123456789abcdef' }) },\n    loginRateLimitHmacKey: '0123456789abcdef0123456789abcdef',
+    signingKeyProvider: { getSigningKey: async () => ({ kid: 'v1', key: '0123456789abcdef0123456789abcdef' }) },
+    loginRateLimitHmacKey: '0123456789abcdef0123456789abcdef',
     poolManager: { getPool: async () => ({ execute: async () => [[], []] }) }
   });
   assert.equal(typeof dependencies.loginService.login, 'function');
