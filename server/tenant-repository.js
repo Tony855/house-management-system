@@ -70,7 +70,7 @@ function createTenantRepository({ pool, appId, queryable = pool, allowTransactio
   if (!TABLES[appId]) throw new TypeError('TENANT_REPOSITORY_APP_INVALID');
   if (!queryable || typeof queryable.execute !== 'function') throw new TypeError('TENANT_REPOSITORY_POOL_REQUIRED');
 
-  async function list(table, { columns = ['*'], filters = {}, orderBy = 'id', direction = 'ASC', limit = 50, offset = 0 } = {}) {
+  async function list(table, { columns = COLUMNS[appId]?.[table], filters = {}, orderBy = 'id', direction = 'ASC', limit = 50, offset = 0 } = {}) {
     const tableSql = assertTable(appId, table);
     if (!Array.isArray(columns) || !columns.length || columns.some(column => column !== '*' && !IDENTIFIER.test(column))) {
       throw new TypeError('TENANT_COLUMNS_INVALID');
@@ -90,7 +90,7 @@ function createTenantRepository({ pool, appId, queryable = pool, allowTransactio
     return rows;
   }
 
-  async function findById(table, id, columns = ['*']) {
+  async function findById(table, id, columns = COLUMNS[appId]?.[table]) {
     const rows = await list(table, { columns, filters: { id }, limit: 1, offset: 0, orderBy: null });
     return rows[0] || null;
   }
