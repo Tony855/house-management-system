@@ -96,3 +96,9 @@ if [[ "$admin_permissions_column" != "1" ]]; then
   exit 1
 fi
 echo "Platform administrator authentication schema verified: $admin_auth_tables tables."
+
+platform_login_app_enum="$("${mysql_cmd[@]}" -e "SELECT COLUMN_TYPE FROM information_schema.columns WHERE table_schema = '$DB_NAME' AND table_name = 'platform_login_attempts' AND column_name = 'app_id'")"
+if [[ "$platform_login_app_enum" != *"platform"* ]]; then
+  echo "Platform administrator rate-limit namespace was not installed" >&2
+  exit 1
+fi
