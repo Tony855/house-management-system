@@ -159,7 +159,7 @@ test('product API injects repository bound to the resolved tenant pool', async (
   await withServer(app, async base => {
     const response = await fetch(base + '/api/rooms');
     assert.equal(response.status, 200);
-    assert.deepEqual(await response.json(), [{ id: 1, name: 'isolated-room' }]);
+    assert.deepEqual(await response.json(), [{ id: 1, room_no: '101' }]);
     assert.match(calls[0].sql, /FROM `rooms` WHERE `status` = \? ORDER BY `id` ASC LIMIT \? OFFSET \?/);
     assert.deepEqual(calls[0].params, ['vacant', 50, 0]);
   });
