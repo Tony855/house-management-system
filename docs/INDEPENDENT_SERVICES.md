@@ -207,3 +207,15 @@ The CI legacy MariaDB integration now creates an ephemeral tenant database, clon
 - Missing or unavailable limiter storage fails closed with HTTP 503; an active lockout returns HTTP 429. Default policy is 10 failures in 15 minutes followed by a 15-minute lockout. The current identity key is product + normalized host + normalized username; this is account-targeted throttling, not a substitute for edge/IP rate limiting, bot protection, MFA, or credential-stuffing detection.
 - CI runs adapter contract tests plus a real MariaDB integration test covering concurrent failure increments, lockout, and explicit counter clearing. The integration uses disposable CI identities and removes them in `finally`.
 - Production rollout still needs an edge/IP rate limit, monitoring/alerting for lockouts, a retention/cleanup job for stale hashed buckets, HMAC-key rotation procedure, and deployment wiring for `loginRateLimitHmacKey`. MFA enrollment/challenge and recovery flows remain separate unfinished controls.
+
+
+### Platform administrator MFA foundation (not yet production login wiring)
+
+- services/platform-api/mfa.js implements RFC 4226/6238-compatible six-digit TOTP, a bounded ±1 time-step window, constant-time code comparison and monotonic counter replay rejection.
+- Enrollment is pending for at most 10 minutes. A factor becomes active only after a valid TOTP confirmation; enrollment state is not treated as an authenticated MFA session.
+- TOTP secrets are encrypted/decrypted only through an injected deployment encryption/KMS adapter. The database stores an opaque encrypted envelope, never a plaintext seed. Production must use envelope encryption backed by KMS/HSM and protect the key-encryption key outside the application database.
+- Ten one-time recovery codes are generated at enrollment. Only HMAC-SHA256 digests using a dedicated recovery-code pepper are stored. Recovery codes are consumed atomically and cannot be reused; the pepper must be a dedicated random secret of at least 32 bytes.
+- services/platform-api/mfa-store.js persists pending enrollments, active factors and recovery-code digests. TOTP replay prevention is a conditional database update, and factor activation/recovery-code replacement is transactional.
+- Migration 007_platform_admin_mfa.sql adds the three platform-only MFA tables. CI applies and verifies these tables; unit tests cover RFC vectors, expiry, replay, one-time recovery and persistence transaction behavior.
+- This is a security primitive and persistence adapter, not a complete production MFA rollout. It is not yet mounted into a platform-admin login/challenge endpoint or bound to platform sessions; assertPlatformAdmin still trusts the injected authenticator's mfaVerified claim. Do not claim Super Admin MFA enforcement from these helpers alone.
+- Before production use, implement the platform admin identity/session schema and login challenge flow, enforce per-admin attempt throttling, require recent MFA timestamps for sensitive actions, add audited factor reset/recovery and alerting, wire a real KMS adapter, and run live MariaDB concurrency tests for TOTP/recovery consumption.
