@@ -83,7 +83,8 @@ async function post(base, room, requestId) {
 async function hotelOrderRequest(base, method, path, body, requestId) {
   return fetch(base + path, { method, headers: { 'content-type': 'application/json', 'x-operation-reason': 'CI hotel reservation lifecycle', 'x-step-up-token': 'ci-step-up-token-123456789', 'idempotency-key': requestId }, body: JSON.stringify(body) });
 }
-\nasync function writeBuilding(base, method, path, body, requestId) {
+
+async function writeBuilding(base, method, path, body, requestId) {
   return fetch(base + path, {
     method,
     headers: {
