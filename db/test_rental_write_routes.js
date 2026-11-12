@@ -206,3 +206,49 @@ test('contract renewal cannot shorten the current term or renew an inactive cont
     } finally { await new Promise(resolve=>server.close(resolve)); }
   }
 });
+
+
+test('POST /contracts/:id/terminate requires settled rent bills and leaves deposit settlement explicitly pending', async () => {
+  const calls=[]; const app=express(); app.use(express.json());
+  app.use((req,_res,next)=>{req.tenantWrite=async input=>{calls.push(input);return input.mutate({
+    execute:async (sql)=> {
+      if(sql.includes('FROM contracts')) return [[{id:9,room_id:3,tenant_id:8,start_date:'2026-01-01',end_date:'2026-12-31',deposit:'500.00',status:'active'}]];
+      if(sql.includes('outstanding_count')) return [[{outstanding_count:0,outstanding_amount:'0.00'}]];
+      return [[]];
+    },
+    updateById:async(table,id,fields)=>{calls.push({table,id,fields});return {affectedRows:1};}
+  });};next();});
+  app.use('/api',createRentalWriteRouter()); app.use((e,_q,res,_n)=>res.status(e.status||500).json({error:e.code||'ERROR',details:e.details}));
+  const server=http.createServer(app); await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  try {
+    const response=await fetch('http://127.0.0.1:'+server.address().port+'/api/contracts/9/terminate',{method:'POST',
+      headers:{'content-type':'application/json','x-operation-reason':'Early terminate rental','x-step-up-token':'step-up-token-123456789','idempotency-key':'rental-terminate-0001'},
+      body:JSON.stringify({termination_date:new Date().toISOString().slice(0,10)})});
+    assert.equal(response.status,200); const body=await response.json();
+    assert.equal(body.status,'terminated'); assert.equal(body.deposit_settlement.status,'pending');
+    assert.equal(body.deposit_settlement.deposit_amount,500);
+    assert.equal(calls[0].payload.__resource,'contract-terminations');
+    assert.ok(calls.some(x=>x.table==='contracts'&&x.fields.status==='terminated'));
+    assert.ok(calls.some(x=>x.table==='rooms'&&x.fields.status==='vacant'));
+  } finally { await new Promise(resolve=>server.close(resolve)); }
+});
+
+test('rental termination rejects contracts with unpaid bills and does not change contract state', async () => {
+  const app=express(); app.use(express.json());
+  app.use((req,_res,next)=>{req.tenantWrite=async input=>input.mutate({
+    execute:async sql=>sql.includes('FROM contracts')
+      ? [[{id:9,room_id:3,start_date:'2026-01-01',end_date:'2026-12-31',deposit:'500.00',status:'active'}]]
+      : [[{outstanding_count:1,outstanding_amount:'120.00'}]],
+    updateById:async()=>{throw new Error('must not update with outstanding bills');}
+  });next();});
+  app.use('/api',createRentalWriteRouter()); app.use((e,_q,res,_n)=>res.status(e.status||500).json({error:e.code||'ERROR',details:e.details}));
+  const server=http.createServer(app); await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  try {
+    const response=await fetch('http://127.0.0.1:'+server.address().port+'/api/contracts/9/terminate',{method:'POST',
+      headers:{'content-type':'application/json','x-operation-reason':'Early terminate rental','x-step-up-token':'step-up-token-123456789','idempotency-key':'rental-terminate-blocked-0001'},
+      body:JSON.stringify({termination_date:new Date().toISOString().slice(0,10)})});
+    assert.equal(response.status,409); const body=await response.json();
+    assert.equal(body.error,'CONTRACT_HAS_OUTSTANDING_BILLS');
+    assert.equal(body.details.outstanding_amount,120);
+  } finally { await new Promise(resolve=>server.close(resolve)); }
+});

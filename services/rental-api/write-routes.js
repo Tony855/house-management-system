@@ -250,11 +250,67 @@ function createRentalWriteRouter() {
     } catch (error) { return next(error); }
   });
 
+  router.post('/contracts/:id/terminate', async (req, res, next) => {
+    try {
+      if (typeof req.tenantWrite !== 'function') return res.status(503).json({ error: 'TENANT_WRITE_UNAVAILABLE' });
+      const id = Number(req.params.id);
+      const body = req.body;
+      if (!Number.isSafeInteger(id) || id < 1 || !body || typeof body !== 'object' ||
+          Array.isArray(body) || Object.keys(body).length !== 1 || !validDate(body.termination_date)) {
+        throw contractError('CONTRACT_TERMINATION_INPUT_INVALID');
+      }
+      const terminationDate = body.termination_date;
+      const today = new Date().toISOString().slice(0, 10);
+      if (terminationDate > today) throw contractError('CONTRACT_TERMINATION_DATE_IN_FUTURE');
+      const result = await req.tenantWrite({
+        operation: 'update', reason: req.get('x-operation-reason'),
+        stepUpToken: req.get('x-step-up-token'), requestId: req.get('idempotency-key'),
+        payload: { id, termination_date: terminationDate, __resource: 'contract-terminations' },
+        mutate: async tx => {
+          const [rows] = await tx.execute('SELECT id, room_id, tenant_id, start_date, end_date, deposit, status FROM contracts WHERE id = ? LIMIT 1 FOR UPDATE', [id]);
+          if (!rows.length) throw contractError('CONTRACT_NOT_FOUND', 404);
+          const contract = rows[0];
+          if (contract.status !== 'active') throw contractError('CONTRACT_STATUS_TRANSITION_INVALID', 409);
+          const startDate = String(contract.start_date).slice(0, 10);
+          if (terminationDate < startDate) throw contractError('CONTRACT_TERMINATION_BEFORE_START', 409);
+          const [balances] = await tx.execute(
+            "SELECT COUNT(*) AS outstanding_count, COALESCE(SUM(GREATEST(amount - paid_amount, 0)), 0) AS outstanding_amount FROM bills WHERE contract_id = ? AND source = 'rental' AND status <> 'paid'",
+            [id]
+          );
+          const outstandingCount = Number(balances[0].outstanding_count || 0);
+          const outstandingAmount = Number(balances[0].outstanding_amount || 0);
+          if (outstandingCount > 0 || outstandingAmount > 0) {
+            throw Object.assign(new Error('CONTRACT_HAS_OUTSTANDING_BILLS'), {
+              code: 'CONTRACT_HAS_OUTSTANDING_BILLS', status: 409,
+              details: { outstanding_count: outstandingCount, outstanding_amount: outstandingAmount }
+            });
+          }
+          await tx.updateById('contracts', id, { status: 'terminated', end_date: terminationDate });
+          const [other] = await tx.execute(
+            "SELECT id FROM contracts WHERE room_id = ? AND status = 'active' AND id <> ? LIMIT 1 FOR UPDATE",
+            [contract.room_id, id]
+          );
+          if (!other.length) await tx.updateById('rooms', contract.room_id, { status: 'vacant' });
+          return {
+            id, status: 'terminated', termination_date: terminationDate,
+            outstanding_amount: 0,
+            deposit_settlement: {
+              status: Number(contract.deposit) > 0 ? 'pending' : 'not_required',
+              deposit_amount: Number(contract.deposit) || 0,
+              note: '押金退款或抵扣须经独立财务流水确认，本接口不会虚报已退款'
+            }
+          };
+        }
+      });
+      return res.json(result);
+    } catch (error) { return next(error); }
+  });
+
   router.patch('/contracts/:id', async (req, res, next) => {
     try {
       if (typeof req.tenantWrite !== 'function') return res.status(503).json({ error: 'TENANT_WRITE_UNAVAILABLE' });
       const id = Number(req.params.id);
-      if (!Number.isSafeInteger(id) || id < 1 || !req.body || Object.keys(req.body).length !== 1 || !['expired', 'terminated'].includes(req.body.status)) throw contractError('CONTRACT_INPUT_INVALID');
+      if (!Number.isSafeInteger(id) || id < 1 || !req.body || Object.keys(req.body).length !== 1 || req.body.status !== 'expired') throw contractError('CONTRACT_INPUT_INVALID');
       const status = req.body.status;
       const result = await req.tenantWrite({ operation: 'update', reason: req.get('x-operation-reason'),
         stepUpToken: req.get('x-step-up-token'), requestId: req.get('idempotency-key'),

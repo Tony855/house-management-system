@@ -298,6 +298,27 @@ async function main() {
         assert.equal(renewed.previous_end_date, '2040-12-31', 'rental renewal previous end date');
         const [[renewedContract]] = await pool.query('SELECT end_date, rent, deposit, pay_cycle, status FROM contracts WHERE id = ?', [contract.id]);
         assert.deepEqual(renewedContract, { end_date: new Date('2041-12-31T00:00:00.000Z'), rent: '130.00', deposit: '25.00', pay_cycle: 1, status: 'active' }, 'rental renewal terms persisted');
+        const terminationRoomResponse = await post(base, { building_id: buildingBody.id, room_no: 'CI-R-TERM-101', rent: 80, deposit: 25 }, 'ci-rental-term-room-0001');
+        assert.equal(terminationRoomResponse.status, 201, 'rental termination test room');
+        const terminationRoom = await terminationRoomResponse.json();
+        const terminationContractResponse = await writeBuilding(base, 'POST', '/api/contracts', {
+          contract_no: 'CI-RENTAL-TERM-0001', room_id: terminationRoom.id, tenant_id: tenantBody.id,
+          start_date: '2020-01-01', end_date: '2040-12-31', sign_date: '2020-01-01',
+          rent: 80, deposit: 25, pay_cycle: 1
+        }, 'ci-rental-term-contract-0001');
+        assert.equal(terminationContractResponse.status, 201, 'rental termination contract create');
+        const terminationContract = await terminationContractResponse.json();
+        const terminatedResponse = await writeBuilding(base, 'POST', '/api/contracts/' + terminationContract.id + '/terminate', {
+          termination_date: new Date().toISOString().slice(0, 10)
+        }, 'ci-rental-contract-terminate-0001');
+        assert.equal(terminatedResponse.status, 200, 'rental contract termination');
+        const terminatedBody = await terminatedResponse.json();
+        assert.equal(terminatedBody.status, 'terminated', 'rental contract terminated');
+        assert.equal(terminatedBody.deposit_settlement.status, 'pending', 'deposit is not falsely marked refunded');
+        const [[terminatedState]] = await pool.query('SELECT status, end_date FROM contracts WHERE id = ?', [terminationContract.id]);
+        assert.equal(terminatedState.status, 'terminated', 'rental termination persisted');
+        const [[releasedRoom]] = await pool.query('SELECT status FROM rooms WHERE id = ?', [terminationRoom.id]);
+        assert.equal(releasedRoom.status, 'vacant', 'rental termination releases room');
         const [[allContractBills]] = await pool.query('SELECT COUNT(*) AS total FROM bills WHERE contract_id = ? AND source = ?', [contract.id, 'rental']);
         assert.equal(Number(allContractBills.total), 2, 'rental sequential generation creates next period only');
       }
