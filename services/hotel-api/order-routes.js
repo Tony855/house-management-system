@@ -152,7 +152,7 @@ function createHotelOrderRouter() {
           const expected = Number(orders[0].deposit);
           if (!Number.isFinite(expected) || expected < 0) throw hotelError('HOTEL_DEPOSIT_BALANCE_INVALID', 409);
           const balance = await readHotelDepositBalance(tx, id);
-          if (transaction.amount > Math.round((expected - balance.held_amount) * 100) / 100) {
+          if (transaction.amount > Math.round((expected - balance.received_amount) * 100) / 100) {
             throw hotelError('HOTEL_DEPOSIT_RECEIPT_EXCEEDS_EXPECTED', 409);
           }
           await tx.execute(
@@ -160,7 +160,7 @@ function createHotelOrderRouter() {
             [id, transaction.amount, transaction.pay_method, transaction.external_reference, transaction.note, requestId, transaction.transaction_date]
           );
           const nextBalance = await readHotelDepositBalance(tx, id);
-          return { order_id: id, expected_amount: expected, ...nextBalance, remaining_to_receive: Math.round((expected - nextBalance.held_amount) * 100) / 100 };
+          return { order_id: id, expected_amount: expected, ...nextBalance, remaining_to_receive: Math.round((expected - nextBalance.received_amount) * 100) / 100 };
         }
       });
       return res.status(201).json(result);
@@ -209,7 +209,7 @@ function createHotelOrderRouter() {
       );
       const expected = Number(orders[0].deposit);
       return res.json({ order_id: id, expected_amount: expected, ...balance,
-        remaining_to_receive: Math.round((expected - balance.held_amount) * 100) / 100, transactions });
+        remaining_to_receive: Math.round((expected - balance.received_amount) * 100) / 100, transactions });
     } catch (error) { return next(error); }
   });
   return router;
