@@ -79,3 +79,12 @@ test('runner uses tenant-local calendar date, catches up both products and pages
   assert.equal(scans.find(x => x.appId === 'property').periodKey, '2030-03');
   await runner.stop();
 });
+
+test('tenant adapter normalizes mysql2 DATE values returned as JavaScript Date objects', async () => {
+  const date = new Date(2030, 1, 1, 0, 0, 0);
+  const { adapter } = adapterFixture('rental', [{ id: 17, as_of_date: date, request_id: 'request-date-object' }]);
+  const result = await adapter.enqueueTenantJob({
+    tenantId, appId: 'rental', jobType: 'rental_bill', periodKey: '2030-02-01', requestId: 'request-date-object'
+  });
+  assert.deepEqual(result, { tenantId, appId: 'rental', jobId: 17 });
+});
