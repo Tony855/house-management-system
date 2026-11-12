@@ -31,7 +31,7 @@ function createTenantBillingJobProcessor({registry,secretProvider,tenantPoolMana
    [workerId,leaseToken]
   );
   if(Number(claim.affectedRows)!==1)return Object.freeze({worked:false,appId,state:'idle'});
-  const [found]=await pool.execute('SELECT id,'+dateCol+' AS period_key,state,'+cursorCol+' AS cursor_id FROM '+table+' WHERE lease_token=? AND lease_owner=? LIMIT 1',[leaseToken,workerId]);
+  const [found]=await pool.execute('SELECT id,'+dateCol+' AS period_key,state,'+cursorCol+' AS cursor_id,attempt_count FROM '+table+' WHERE lease_token=? AND lease_owner=? LIMIT 1',[leaseToken,workerId]);
   if(!found.length)return Object.freeze({worked:false,appId,state:'lease_lost'});
   const candidate=found[0],cursor=Number(candidate.cursor_id||0),requestId='system-billing-'+tenantId+'-'+candidate.id+'-'+cursor;
   const payload={job_id:Number(candidate.id),cursor_id:cursor,__resource:table+'-worker'};
