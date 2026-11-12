@@ -64,7 +64,6 @@ function createPropertyFeeRouter() {
         return res.status(503).json({ error: 'TENANT_WRITE_UNAVAILABLE' });
       }
       const { month } = validatePropertyFeeGeneration(req.body);
-      const dates = monthDates(month);
       const result = await req.tenantWrite({
         operation: 'create',
         reason: req.get('x-operation-reason'),
