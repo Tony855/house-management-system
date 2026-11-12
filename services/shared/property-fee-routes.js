@@ -26,6 +26,35 @@ function monthDates(month) {
   return { start, end, due: month + '-10' };
 }
 
+function buildPropertyFeeBill(room, month) {
+  if (!room || typeof room !== 'object' || !/^[0-9]{4}-(0[1-9]|1[0-2])$/.test(month || '')) {
+    throw propertyFeeError('PROPERTY_FEE_INPUT_INVALID');
+  }
+  const dates = monthDates(month);
+  const propertyFee = Number(room.property_fee);
+  const waterFee = Number(room.water_fee);
+  const elecFee = Number(room.elec_fee);
+  if (![propertyFee, waterFee, elecFee].every(value => Number.isFinite(value) && value >= 0)) {
+    throw propertyFeeError('PROPERTY_FEE_AMOUNT_INVALID', 409);
+  }
+  const amount = Math.round((propertyFee + waterFee + elecFee) * 100) / 100;
+  if (amount <= 0) return null;
+  if (!Number.isSafeInteger(Number(room.room_id)) || Number(room.room_id) < 1 ||
+      !Number.isSafeInteger(Number(room.owner_id)) || Number(room.owner_id) < 1) {
+    throw propertyFeeError('PROPERTY_FEE_ROOM_OWNER_INVALID', 409);
+  }
+  const detail = [
+    propertyFee > 0 ? '物业费 ' + propertyFee.toFixed(2) : '',
+    waterFee > 0 ? '水费 ' + waterFee.toFixed(2) : '',
+    elecFee > 0 ? '电费 ' + elecFee.toFixed(2) : ''
+  ].filter(Boolean).join(' + ');
+  return Object.freeze({
+    source: 'property', room_id: Number(room.room_id), tenant_id: Number(room.owner_id),
+    period_start: dates.start, period_end: dates.end, due_date: dates.due,
+    amount, paid_amount: 0, status: 'unpaid', remark: '明细：' + detail
+  });
+}
+
 const COLLECTION_ACTIONS = new Set(['phone', 'sms', 'email', 'onsite', 'formal_notice']);
 const COLLECTION_OUTCOMES = new Set(['reached', 'no_answer', 'promised', 'disputed', 'refused', 'sent']);
 function validDate(value) {
@@ -87,42 +116,13 @@ function createPropertyFeeRouter() {
           const bills = [];
           let skipped = 0;
           for (const room of rooms) {
-            const propertyFee = Number(room.property_fee);
-            const waterFee = Number(room.water_fee);
-            const elecFee = Number(room.elec_fee);
-            if (![propertyFee, waterFee, elecFee].every(value => Number.isFinite(value) && value >= 0)) {
-              throw propertyFeeError('PROPERTY_FEE_AMOUNT_INVALID', 409);
-            }
-            const amount = Math.round((propertyFee + waterFee + elecFee) * 100) / 100;
-            if (amount <= 0) {
-              skipped++;
-              continue;
-            }
+            const bill = buildPropertyFeeBill(room, month);
+            if (!bill) { skipped++; continue; }
             const [existing] = await tx.execute(
               "SELECT id FROM bills WHERE source = 'property' AND room_id = ? AND period_start = ? LIMIT 1 FOR UPDATE",
-              [room.room_id, dates.start]
+              [bill.room_id, bill.period_start]
             );
-            if (existing.length) {
-              skipped++;
-              continue;
-            }
-            const detail = [
-              propertyFee > 0 ? '物业费 ' + propertyFee.toFixed(2) : '',
-              waterFee > 0 ? '水费 ' + waterFee.toFixed(2) : '',
-              elecFee > 0 ? '电费 ' + elecFee.toFixed(2) : ''
-            ].filter(Boolean).join(' + ');
-            const bill = {
-              source: 'property',
-              room_id: Number(room.room_id),
-              tenant_id: Number(room.owner_id),
-              period_start: dates.start,
-              period_end: dates.end,
-              due_date: dates.due,
-              amount,
-              paid_amount: 0,
-              status: 'unpaid',
-              remark: '明细：' + detail
-            };
+            if (existing.length) { skipped++; continue; }
             const inserted = await tx.insert('bills', bill);
             bills.push({ id: Number(inserted.insertId), ...bill });
           }
@@ -443,4 +443,4 @@ function createPropertyFeeRouter() {
   return router;
 }
 
-module.exports = { validatePropertyFeeGeneration, validatePropertyCollectionAction, validatePropertyFeeJobId, monthDates, createPropertyFeeRouter };
+module.exports = { validatePropertyFeeGeneration, validatePropertyCollectionAction, validatePropertyFeeJobId, monthDates, buildPropertyFeeBill, createPropertyFeeRouter };

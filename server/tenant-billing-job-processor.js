@@ -6,7 +6,7 @@ const {createTenantSystemWriteService}=require('./tenant-system-write-service');
 const {createMariaDbTenantWriteAuditStore}=require('./tenant-write-audit-mariadb');
 const {createMariaDbTenantWriteIdempotencyStore}=require('./tenant-write-idempotency-mariadb');
 const {buildNextRentalBill}=require('../services/rental-api/write-routes');
-const {monthDates}=require('../services/shared/property-fee-routes');
+const {buildPropertyFeeBill}=require('../services/shared/property-fee-routes');
 const JOBS={rental:'rental_bill',property:'property_fee'},CHUNK_SIZE=50,LEASE_SECONDS=120,MAX_ATTEMPTS=8;
 const dateOnly=v=>v instanceof Date?v.toISOString().slice(0,10):String(v).slice(0,10);
 function fail(code,status=409){return Object.assign(new Error(code),{code,status});}
@@ -52,7 +52,7 @@ function createTenantBillingJobProcessor({registry,secretProvider,tenantPoolMana
     
     const [rows]=await tx.execute('SELECT r.id AS room_id,r.owner_id,r.property_fee,COALESCE(m.water_fee,0) AS water_fee,COALESCE(m.elec_fee,0) AS elec_fee FROM rooms r LEFT JOIN meters m ON m.room_id=r.id AND m.month=? WHERE r.owner_id IS NOT NULL AND r.id>? ORDER BY r.id LIMIT ? FOR UPDATE',[job.period_key,cursor,CHUNK_SIZE+1]);
     const batch=rows.slice(0,CHUNK_SIZE);
-    for(const room of batch){const pf=Number(room.property_fee),wf=Number(room.water_fee),ef=Number(room.elec_fee);if(![pf,wf,ef].every(v=>Number.isFinite(v)&&v>=0))throw fail('PROPERTY_FEE_AMOUNT_INVALID');const amount=Math.round((pf+wf+ef)*100)/100;if(amount<=0){skipped++;continue;}const [exists]=await tx.execute("SELECT id FROM bills WHERE source='property' AND room_id=? AND period_start=? LIMIT 1 FOR UPDATE",[room.room_id,dates.start]);if(exists.length){skipped++;continue;}const detail=[pf>0?'物业费 '+pf.toFixed(2):'',wf>0?'水费 '+wf.toFixed(2):'',ef>0?'电费 '+ef.toFixed(2):''].filter(Boolean).join(' + ');await tx.insert('bills',{source:'property',room_id:Number(room.room_id),tenant_id:Number(room.owner_id),period_start:dates.start,period_end:dates.end,due_date:dates.due,amount,paid_amount:0,status:'unpaid',remark:'明细：'+detail});generated++;}
+    for(const room of batch){const bill=buildPropertyFeeBill(room,job.period_key);if(!bill){skipped++;continue;}const [exists]=await tx.execute("SELECT id FROM bills WHERE source='property' AND room_id=? AND period_start=? LIMIT 1 FOR UPDATE",[bill.room_id,bill.period_start]);if(exists.length){skipped++;continue;}await tx.insert('bills',bill);generated++;}
     processed=batch.length;nextCursor=batch.length?Number(batch[batch.length-1].room_id):cursor;complete=rows.length<=CHUNK_SIZE;
    }
    const [checkpoint]=await tx.execute("UPDATE "+table+" SET state=?, "+cursorCol+"=?,generated_count=generated_count+?,skipped_count=skipped_count+?,lease_owner=NULL,lease_token=NULL,lease_expires_at=NULL,next_attempt_at=NULL,last_error=NULL,attempt_count=0,completed_at=CASE WHEN ?='completed' THEN UTC_TIMESTAMP() ELSE NULL END,updated_at=UTC_TIMESTAMP() WHERE id=? AND lease_token=? AND lease_owner=? AND lease_expires_at>UTC_TIMESTAMP()",[complete?'completed':'running',nextCursor,generated,skipped,complete?'completed':'running',candidate.id,leaseToken,workerId]);
