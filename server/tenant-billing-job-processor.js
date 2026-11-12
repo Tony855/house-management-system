@@ -51,9 +51,9 @@ function createTenantBillingJobProcessor({registry,secretProvider,tenantPoolMana
    }else{
     
     const [rows]=await tx.execute('SELECT r.id AS room_id,r.owner_id,r.property_fee,COALESCE(m.water_fee,0) AS water_fee,COALESCE(m.elec_fee,0) AS elec_fee FROM rooms r LEFT JOIN meters m ON m.room_id=r.id AND m.month=? WHERE r.owner_id IS NOT NULL AND r.id>? ORDER BY r.id LIMIT ? FOR UPDATE',[job.period_key,cursor,chunkSize+1]);
-    const batch=rows.slice(0,CHUNK_SIZE);
+    const batch=rows.slice(0,chunkSize);
     for(const room of batch){const bill=buildPropertyFeeBill(room,job.period_key);if(!bill){skipped++;continue;}const [exists]=await tx.execute("SELECT id FROM bills WHERE source='property' AND room_id=? AND period_start=? LIMIT 1 FOR UPDATE",[bill.room_id,bill.period_start]);if(exists.length){skipped++;continue;}await tx.insert('bills',bill);generated++;}
-    processed=batch.length;nextCursor=batch.length?Number(batch[batch.length-1].room_id):cursor;complete=rows.length<=CHUNK_SIZE;
+    processed=batch.length;nextCursor=batch.length?Number(batch[batch.length-1].room_id):cursor;complete=rows.length<=chunkSize;
    }
    const [checkpoint]=await tx.execute("UPDATE "+table+" SET state=?, "+cursorCol+"=?,generated_count=generated_count+?,skipped_count=skipped_count+?,lease_owner=NULL,lease_token=NULL,lease_expires_at=NULL,next_attempt_at=NULL,last_error=NULL,attempt_count=0,completed_at=CASE WHEN ?='completed' THEN UTC_TIMESTAMP() ELSE NULL END,updated_at=UTC_TIMESTAMP() WHERE id=? AND lease_token=? AND lease_owner=? AND lease_expires_at>UTC_TIMESTAMP()",[complete?'completed':'running',nextCursor,generated,skipped,complete?'completed':'running',candidate.id,leaseToken,workerId]);
    if(Number(checkpoint.affectedRows)!==1)throw fail('BILLING_GENERATION_JOB_LEASE_LOST');
