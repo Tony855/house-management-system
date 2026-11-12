@@ -429,8 +429,8 @@ async function main() {
           assert.equal(collectionAction.status, 201, 'property collection action');
           const collectionBody = await collectionAction.json();
           assert.equal(collectionBody.bill_id, generatedBody.bills[0].id, 'collection action linked to property bill');
-          const [[collectionRows]] = await pool.query('SELECT action_type, outcome, follow_up_date, note FROM property_collection_actions WHERE id = ?', [collectionBody.id]);
-          assert.deepEqual(collectionRows, { action_type: 'phone', outcome: 'promised', follow_up_date: new Date('2030-02-08T00:00:00.000Z'), note: 'CI owner promised payment' }, 'collection action persisted');
+          const [[collectionRows]] = await pool.query('SELECT action_type, outcome, DATE_FORMAT(follow_up_date, '%Y-%m-%d') AS follow_up_date, note FROM property_collection_actions WHERE id = ?', [collectionBody.id]);
+          assert.deepEqual(collectionRows, { action_type: 'phone', outcome: 'promised', follow_up_date: '2030-02-08', note: 'CI owner promised payment' }, 'collection action persisted');
 
           const arrearsPage = await fetch(base + '/api/property-fees/arrears?as_of=2030-02-01&page=1&page_size=1');
           assert.equal(arrearsPage.status, 200, 'property arrears pagination');
