@@ -170,7 +170,7 @@ async function copyTenantOrgData({
     }
 
     await audit({ event: 'tenant_data_migration_copy_verified', appId, tenantId, sourceOrgId, manifest: normalized.manifest });
-    return { mode, appId, tenantId, sourceOrgId, manifest: normalized.manifest, copied: true, cutover: false };
+    return { mode, appId, tenantId, sourceOrgId, manifest: normalized.manifest, copied: true, alreadyImported, cutover: false };
   } catch (error) {
     try {
       await audit({
