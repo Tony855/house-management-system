@@ -254,6 +254,17 @@ async function main() {
 
 
 
+
+      const room = { ...definition.room };
+      const requestId = 'ci-room-create-' + appId + '-000001';
+
+      const [first, replay] = await Promise.all([
+        post(base, room, requestId),
+        post(base, room, requestId)
+      ]);
+      assert.equal(first.status, 201, appId + ' first create');
+      assert.equal(replay.status, 201, appId + ' idempotent replay');
+      const firstBody = await first.json();
       const [[billSeed]] = await pool.execute("INSERT INTO bills (source, room_id, period_start, period_end, due_date, amount, paid_amount, status) VALUES (?, ?, '2030-01-01', '2030-01-31', '2030-01-31', 100, 0, 'unpaid')", [appId === 'hotel' ? 'hotel' : appId === 'property' ? 'property' : 'rental', firstBody.id]);
       const partialPayment = await hotelOrderRequest(base, 'POST', '/api/bills/' + billSeed.insertId + '/pay', { amount: 35, pay_method: 'bank', pay_date: '2030-01-31' }, 'ci-bill-partial-' + appId);
       assert.equal(partialPayment.status, 200, appId + ' partial bill payment');
@@ -268,16 +279,6 @@ async function main() {
       const overpayment = await hotelOrderRequest(base, 'POST', '/api/bills/' + billSeed.insertId + '/pay', { amount: 1 }, 'ci-bill-overpay-' + appId);
       assert.equal(overpayment.status, 409, appId + ' overpayment rejected');
 
-      const room = { ...definition.room };
-      const requestId = 'ci-room-create-' + appId + '-000001';
-
-      const [first, replay] = await Promise.all([
-        post(base, room, requestId),
-        post(base, room, requestId)
-      ]);
-      assert.equal(first.status, 201, appId + ' first create');
-      assert.equal(replay.status, 201, appId + ' idempotent replay');
-      const firstBody = await first.json();
       if (appId === 'rental' || appId === 'property') {
         const meterPayload = { room_id: firstBody.id, month: '2030-01', water_prev: 10, water_curr: 12.5, elec_prev: 20, elec_curr: 23 };
         const meterCreated = await hotelOrderRequest(base, 'POST', '/api/meters', meterPayload, 'ci-meter-create-' + appId + '-0001');
