@@ -90,3 +90,46 @@ test('copy mode verifies target readback and requires audit and full adapters', 
   await assert.rejects(copyTenantIdentity({ ...deps, targetWriter: undefined, mode: 'copy' }), /TENANT_IDENTITY_MIGRATION_TARGET_REQUIRED/);
   await assert.rejects(copyTenantIdentity({ ...deps, audit: undefined, mode: 'dry-run' }), /TENANT_IDENTITY_MIGRATION_AUDIT_REQUIRED/);
 });
+
+
+test('retries after a committed import and lost final audit acknowledgement without writing twice', async () => {
+  const source = snapshot(35, 'rental');
+  let written;
+  let writes = 0;
+  let failVerifiedAudit = true;
+  const deps = {
+    appId: 'rental', tenantId, sourceOrgId: 35,
+    sourceReader: { exportTenantIdentity: async () => source },
+    targetWriter: { importTenantIdentity: async ({ tables }) => { writes++; written = tables; } },
+    targetReader: { readTenantIdentity: async () => ({ tables: written || {
+      users: [], roles: [], settings: [], user_permissions: [], role_permissions: []
+    } }) },
+    audit: async event => {
+      if (event.event === 'tenant_identity_migration_copy_verified' && failVerifiedAudit) {
+        failVerifiedAudit = false;
+        throw Object.assign(new Error('AUDIT_TEMPORARILY_UNAVAILABLE'), { code: 'AUDIT_TEMPORARILY_UNAVAILABLE' });
+      }
+    }
+  };
+  await assert.rejects(copyTenantIdentity({ ...deps, mode: 'copy' }), /AUDIT_TEMPORARILY_UNAVAILABLE/);
+  const retry = await copyTenantIdentity({ ...deps, mode: 'copy' });
+  assert.equal(retry.copied, true);
+  assert.equal(retry.alreadyImported, true);
+  assert.equal(writes, 1);
+});
+
+test('does not overwrite a partially populated or mismatched identity target', async () => {
+  const source = snapshot(36, 'rental');
+  let writes = 0;
+  const deps = {
+    appId: 'rental', tenantId, sourceOrgId: 36,
+    sourceReader: { exportTenantIdentity: async () => source },
+    targetWriter: { importTenantIdentity: async () => { writes++; } },
+    targetReader: { readTenantIdentity: async () => ({ tables: {
+      users: [{ id: 999, username: 'unrelated' }], roles: [], settings: [], user_permissions: [], role_permissions: []
+    } }) },
+    audit: async () => {}
+  };
+  await assert.rejects(copyTenantIdentity({ ...deps, mode: 'copy' }), /TENANT_IDENTITY_MIGRATION_TARGET_NOT_EMPTY/);
+  assert.equal(writes, 0);
+});
