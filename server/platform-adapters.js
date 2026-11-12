@@ -19,10 +19,22 @@ function createPlatformTenantRegistry(pool) {
         [hostname, appId]
       );
       return rows[0] || null;
+    },
+    async listActiveTenants({ appId, afterTenantId = '', limit = 100 } = {}) {
+      if (!APP_IDS.has(appId) || typeof afterTenantId !== 'string' ||
+          (afterTenantId && !/^[0-9a-f-]{36}$/i.test(afterTenantId)) ||
+          !Number.isInteger(limit) || limit < 1 || limit > 500) throw new TypeError('PLATFORM_TENANT_SCAN_INVALID');
+      const [rows] = await pool.query(
+        'SELECT tenant_uuid FROM platform_tenants WHERE lifecycle_state = ? AND app_id = ? AND tenant_uuid > ? ORDER BY tenant_uuid ASC LIMIT ?',
+        ['active', appId, afterTenantId, limit]
+      );
+      return Object.freeze({
+        tenantIds: rows.map(row => row.tenant_uuid),
+        nextCursor: rows.length === limit ? rows[rows.length - 1].tenant_uuid : null
+      });
     }
   };
 }
-
 function createPlatformProductSessionStore(pool) {
   if (!pool || typeof pool.query !== 'function') throw new TypeError('PLATFORM_DB_POOL_REQUIRED');
   return {

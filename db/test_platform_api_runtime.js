@@ -127,3 +127,27 @@ test('platform runtime rejects a billing worker without tenant secret manager', 
     billingJobWorker: { start() {}, stop: async () => {} }
   })), /PLATFORM_BILLING_JOB_WORKER_DEPENDENCIES_REQUIRED/);
 });
+
+test('platform runtime composes an automatic billing processor only with explicit machine authorization', async () => {
+  const config = options({
+    tenantSecretManager: { getSecret: async () => ({ user: 'tenant-user', password: 'tenant-password', version: 'v1' }) },
+    billingSystemWriteAuthorizer: async () => true,
+    billingWorkerId: 'billing-runtime-worker',
+    billingJobWorkerConcurrency: 2
+  });
+  const runtime = createPlatformApiRuntime(config);
+  assert.equal(runtime.app.locals.tenantBillingJobWorker.isRunning(), true);
+  assert.equal(typeof runtime.app.locals.tenantBillingJobProcessor.processNextBatch, 'function');
+  await runtime.close();
+  assert.equal(runtime.app.locals.tenantBillingJobWorker.isRunning(), false);
+  assert.equal(config.pool.ended, 1);
+});
+
+test('platform runtime leaves automatic tenant bill processing disabled without explicit system authorization', async () => {
+  const config = options({
+    tenantSecretManager: { getSecret: async () => ({ user: 'tenant-user', password: 'tenant-password', version: 'v1' }) }
+  });
+  const runtime = createPlatformApiRuntime(config);
+  assert.equal(runtime.app.locals.tenantBillingJobWorker, undefined);
+  await runtime.close();
+});

@@ -11,16 +11,19 @@ const { createRecurringBillingDispatchStore } = require('../../server/recurring-
 const { createRecurringBillingDispatcher } = require('../../server/recurring-billing-dispatcher');
 const { createRecurringBillingTenantAdapter } = require('../../server/recurring-billing-tenant-adapter');
 const { createRecurringBillingRunner } = require('../../server/recurring-billing-runner');
+const { createTenantBillingJobWorker } = require('../../server/tenant-billing-job-worker');
+const { createTenantBillingJobProcessor } = require('../../server/tenant-billing-job-processor');
 
 /** Production composition boundary; KMS/HSM and key providers are injected by deployment. */
 function createPlatformApiRuntime({
   env = process.env, createPool, mfaEncryption, recoveryCodePepper, loginRateLimitHmacKey,
   signingKeyProvider, verificationKeyProvider, issuer, authOptions,
   migrationConnectionResolver, migrationWorkerId, migrationConcurrency,
-  tenantSecretManager, tenantPoolCreatePool = mysql.createPool, billingWorkerId, billingPollIntervalMs, billingJobWorker
+  tenantSecretManager, tenantPoolCreatePool = mysql.createPool, billingWorkerId, billingPollIntervalMs, billingJobWorker, billingSystemWriteAuthorizer, billingJobWorkerConcurrency = 4
 } = {}) {
   if (!mfaEncryption || !signingKeyProvider || !verificationKeyProvider) throw new TypeError('PLATFORM_SECURITY_DEPENDENCIES_REQUIRED');
   if (billingJobWorker && (tenantSecretManager === undefined || typeof billingJobWorker.start !== 'function' || typeof billingJobWorker.stop !== 'function')) throw new TypeError('PLATFORM_BILLING_JOB_WORKER_DEPENDENCIES_REQUIRED');
+  if (billingSystemWriteAuthorizer !== undefined && (tenantSecretManager === undefined || typeof billingSystemWriteAuthorizer !== 'function')) throw new TypeError('PLATFORM_BILLING_SYSTEM_AUTHORIZER_REQUIRED');
   const platformPool = createPlatformPool({ env, ...(createPool ? { createPool } : {}) });
   try {
     const auth = createPlatformAdminAuthDependencies({
@@ -37,11 +40,15 @@ function createPlatformApiRuntime({
       ...(migrationConcurrency ? { migrationConcurrency } : {})
     });
     let tenantPoolManager = null;
+    let tenantRegistry = null;
+    let tenantSecretProvider = null;
     let recurringBillingRunner = null;
     let tenantBillingJobWorker = null;
     if (tenantSecretManager !== undefined) {
       const registry = createPlatformTenantRegistry(platformPool);
       const secretProvider = createTenantDatabaseSecretProvider(tenantSecretManager);
+      tenantRegistry = registry;
+      tenantSecretProvider = secretProvider;
       tenantPoolManager = new TenantPoolManager({ createPool: tenantPoolCreatePool, maxPools: 100, idleTtlMs: 300000 });
       const tenantAdapter = createRecurringBillingTenantAdapter({ registry, secretProvider, tenantPoolManager });
       const dispatchStore = createRecurringBillingDispatchStore(platformPool);
@@ -68,6 +75,22 @@ function createPlatformApiRuntime({
       tenantBillingJobWorker = billingJobWorker;
       tenantBillingJobWorker.start();
       app.locals.tenantBillingJobWorker = tenantBillingJobWorker;
+      app.locals.stopTenantBillingJobWorker = () => tenantBillingJobWorker.stop();
+    } else if (tenantRegistry && tenantSecretProvider && billingSystemWriteAuthorizer) {
+      const processor = createTenantBillingJobProcessor({
+        registry: tenantRegistry, secretProvider: tenantSecretProvider,
+        tenantPoolManager, authorizeSystem: billingSystemWriteAuthorizer
+      });
+      tenantBillingJobWorker = createTenantBillingJobWorker({
+        workerId: billingWorkerId || env.BILLING_WORKER_ID || 'platform-billing-worker',
+        pollIntervalMs: billingPollIntervalMs || Number(env.BILLING_POLL_INTERVAL_MS || 5000),
+        concurrency: billingJobWorkerConcurrency,
+        processNextBatch: input => processor.processNextBatch(input),
+        onError: event => { if (typeof env.BILLING_RUNNER_ON_ERROR === 'function') env.BILLING_RUNNER_ON_ERROR(event); }
+      });
+      tenantBillingJobWorker.start();
+      app.locals.tenantBillingJobWorker = tenantBillingJobWorker;
+      app.locals.tenantBillingJobProcessor = processor;
       app.locals.stopTenantBillingJobWorker = () => tenantBillingJobWorker.stop();
     } else {
       app.locals.stopTenantBillingJobWorker = async () => {};
