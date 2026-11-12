@@ -136,7 +136,7 @@ function createTenantRepository({ pool, appId, queryable = pool, allowTransactio
   async function updateById(table, id, fields) {
     const tableSql = assertTable(appId, table);
     const entries = normalizeFields(fields);
-    entries.forEach(([key]) => assertColumn(appId, table, key));
+    entries.forEach(([key]) => assertWriteColumn(appId, table, key));
     if (entries.some(([key]) => key === 'id')) throw new TypeError('TENANT_PRIMARY_KEY_IMMUTABLE');
     const [result] = await queryable.execute(
       'UPDATE ' + tableSql + ' SET ' + entries.map(([key]) => identifier(key) + ' = ?').join(', ') + ' WHERE `id` = ?',
