@@ -312,7 +312,7 @@ function createPropertyFeeRouter() {
       }
       const offset = (page - 1) * pageSize;
       const [summaryRows] = await req.tenantDb.execute(
-        \`SELECT COUNT(DISTINCT b.tenant_id) AS owners_count,
+        `SELECT COUNT(DISTINCT b.tenant_id) AS owners_count,
                 COUNT(DISTINCT b.id) AS bills_count,
                 COALESCE(SUM(b.amount), 0) AS billed_amount,
                 COALESCE(SUM(b.paid_amount), 0) AS current_paid_amount,
@@ -326,11 +326,11 @@ function createPropertyFeeRouter() {
                SUM(CASE WHEN transaction_type = 'refund' THEN amount ELSE 0 END) AS refunds
              FROM bill_transactions WHERE transaction_date BETWEEN ? AND ? GROUP BY bill_id
            ) tx ON tx.bill_id = b.id
-          WHERE b.source = 'property' AND b.period_start BETWEEN ? AND ?\`,
+          WHERE b.source = 'property' AND b.period_start BETWEEN ? AND ?`,
         [fromDate, toDate, fromDate, toDate]
       );
       const [rows] = await req.tenantDb.execute(
-        \`SELECT b.tenant_id AS owner_id, COALESCE(t.name, '') AS owner_name,
+        `SELECT b.tenant_id AS owner_id, COALESCE(t.name, '') AS owner_name,
                 COUNT(DISTINCT b.id) AS bills_count, COUNT(DISTINCT b.room_id) AS rooms_count,
                 ROUND(SUM(b.amount), 2) AS billed_amount,
                 ROUND(SUM(b.paid_amount), 2) AS current_paid_amount,
@@ -346,7 +346,7 @@ function createPropertyFeeRouter() {
              FROM bill_transactions WHERE transaction_date BETWEEN ? AND ? GROUP BY bill_id
            ) tx ON tx.bill_id = b.id
           WHERE b.source = 'property' AND b.period_start BETWEEN ? AND ?
-          GROUP BY b.tenant_id, t.name ORDER BY t.name ASC, b.tenant_id ASC LIMIT ? OFFSET ?\`,
+          GROUP BY b.tenant_id, t.name ORDER BY t.name ASC, b.tenant_id ASC LIMIT ? OFFSET ?`,
         [fromDate, toDate, fromDate, toDate, pageSize, offset]
       );
       const items = rows.map(row => ({
