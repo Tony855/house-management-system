@@ -128,7 +128,6 @@ async function main() {
         /denied|access/i,
         appId + ' peer tenant principal cannot open this tenant database'
       );
-      pools.push(pool);
       const runtimeCredentials = tenantDb.credentials;
       const runtimeProbe = await mysql.createConnection({ ...config, ...runtimeCredentials, database: tenantDatabaseName(appId, tenantId) });
       try {
