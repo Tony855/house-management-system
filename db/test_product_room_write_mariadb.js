@@ -250,7 +250,8 @@ async function main() {
         const invalidReentry = await hotelOrderRequest(base, 'PATCH', '/api/orders/' + order.id + '/status', { status: 'checked_in' }, 'ci-hotel-order-reentry-0001');
         assert.equal(invalidReentry.status, 409, 'hotel order cannot re-enter after checkout');
       }
-\n      const room = { ...definition.room };
+
+      const room = { ...definition.room };
       const requestId = 'ci-room-create-' + appId + '-000001';
 
       const [first, replay] = await Promise.all([
