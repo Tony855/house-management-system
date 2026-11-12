@@ -16,6 +16,7 @@ function createTenantBillingJobProcessor({registry,secretProvider,tenantPoolMana
  if(!tenantPoolManager||typeof tenantPoolManager.getPool!=='function')throw new TypeError('BILLING_PROCESSOR_POOL_MANAGER_REQUIRED');
  if(typeof authorizeSystem!=='function')throw new TypeError('BILLING_PROCESSOR_SYSTEM_AUTHORIZER_REQUIRED');
  if(!Number.isInteger(leaseSeconds)||leaseSeconds<30||leaseSeconds>3600||typeof createToken!=='function')throw new TypeError('BILLING_PROCESSOR_LEASE_CONFIG_INVALID');
+ if(!Array.isArray(appIds)||appIds.length<1||appIds.some(app=>!Object.hasOwn(JOBS,app))||new Set(appIds).size!==appIds.length)throw new TypeError('BILLING_PROCESSOR_APP_SCOPE_INVALID');
  const systemWrite=createTenantSystemWriteService({authorizeSystem,auditWriter:createMariaDbTenantWriteAuditStore(),idempotencyStore:createMariaDbTenantWriteIdempotencyStore()});
  async function processTenant({tenantId,appId,workerId}){
   if(!Object.hasOwn(JOBS,appId))throw fail('BILLING_PROCESSOR_APP_INVALID',400);
