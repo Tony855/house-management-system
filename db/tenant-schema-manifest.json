@@ -94,6 +94,7 @@
     "tenant_write_idempotency",
     "tenant_write_audit_events",
     "bill_transactions",
-    "property_collection_actions"
+    "property_collection_actions",
+    "hotel_order_deposit_transactions"
   ]
 }

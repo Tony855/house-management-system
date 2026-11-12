@@ -365,3 +365,39 @@ test('property owner statement validates date ranges and summarizes owner balanc
     assert.equal(invalid.status,400);assert.deepEqual(await invalid.json(),{error:'PROPERTY_OWNER_STATEMENT_RANGE_INVALID'});
   } finally {await new Promise(resolve=>server.close(resolve));}
 });
+
+test('hotel deposit transaction DTO rejects invalid and client-controlled fields', () => {
+  const { validateHotelDepositTransaction } = require('../services/hotel-api/order-routes');
+  assert.equal(validateHotelDepositTransaction({ amount: 12.5, pay_method: 'cash', transaction_date: '2030-01-31' }).amount, 12.5);
+  for (const bad of [{ amount: 0 }, { amount: -1 }, { amount: 1.001 }, { amount: 5, held_amount: 99 }, { amount: 5, transaction_date: '2030-02-30' }]) {
+    assert.throws(() => validateHotelDepositTransaction(bad), e => e.code === 'HOTEL_DEPOSIT_INPUT_INVALID');
+  }
+});
+test('hotel deposit receipt and refund enforce expected and held balances transactionally', async () => {
+  const { createHotelOrderRouter } = require('../services/hotel-api/order-routes');
+  const app=express();app.use(express.json());
+  const ledger=[];const calls=[];
+  app.use((req,_res,next)=>{req.tenantWrite=async input=>{calls.push(input);return input.mutate({
+    execute:async(sql,params)=>{
+      if(sql.includes('FROM orders')) return [[{id:8,deposit:'30.00',status:'booked'}]];
+      if(sql.includes('SUM(CASE WHEN transaction_type')) {
+        const received=ledger.filter(x=>x.type==='receipt').reduce((n,x)=>n+x.amount,0);
+        const refunded=ledger.filter(x=>x.type==='refund').reduce((n,x)=>n+x.amount,0);
+        return [[{held_amount:received-refunded,received_amount:received,refunded_amount:refunded}]];
+      }
+      if(sql.includes('INSERT INTO hotel_order_deposit_transactions')) {ledger.push({type:sql.includes("'receipt'")?'receipt':'refund',amount:params[1]});return [{affectedRows:1}];}
+      return [[]];
+    }
+  });};next();});
+  app.use('/api',createHotelOrderRouter());app.use((e,_q,res,_n)=>res.status(e.status||500).json({error:e.code||'ERROR'}));
+  const server=http.createServer(app);await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  const send=(path,body,key)=>fetch('http://127.0.0.1:'+server.address().port+path,{method:'POST',headers:{'content-type':'application/json','x-operation-reason':'Record hotel deposit','x-step-up-token':'step-up-token-123456789','idempotency-key':key},body:JSON.stringify(body)});
+  try {
+    const received=await send('/api/orders/8/deposit/receive',{amount:20},'hotel-deposit-receive-0001');
+    assert.equal(received.status,201);assert.equal((await received.json()).held_amount,20);
+    const refunded=await send('/api/orders/8/deposit/refund',{amount:5},'hotel-deposit-refund-0001');
+    assert.equal(refunded.status,201);assert.equal((await refunded.json()).held_amount,15);
+    const excess=await send('/api/orders/8/deposit/refund',{amount:16},'hotel-deposit-refund-0002');
+    assert.equal(excess.status,409);assert.equal(calls.length,3);
+  } finally {await new Promise(resolve=>server.close(resolve));}
+});

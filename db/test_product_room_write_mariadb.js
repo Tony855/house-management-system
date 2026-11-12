@@ -43,6 +43,9 @@ async function createTenantDb(adminPool, config, appId, tenantId, created, creat
   if (appId === 'property') {
     await pool.query(require('node:fs').readFileSync(require('node:path').join(__dirname, 'migrations/tenant/005_property_collection_actions.sql'), 'utf8'));
   }
+  if (appId === 'hotel') {
+    await pool.query(require('node:fs').readFileSync(require('node:path').join(__dirname, 'migrations/tenant/006_hotel_order_deposit_transactions.sql'), 'utf8'));
+  }
   await pool.execute('INSERT INTO buildings (name, address, remark) VALUES (?, ?, ?)', ['CI integration building', '', 'temporary']);
   if (appId === 'property') {
     await pool.execute('INSERT INTO tenants (name, contact, phone, license_no, remark) VALUES (?, ?, ?, ?, ?)', ['CI property owner', '', '', '', 'temporary']);
@@ -238,6 +241,36 @@ async function main() {
         assert.equal(order.days, 3, 'hotel order day count');
         assert.equal(Number(order.total), 240, 'hotel order uses database room price');
         assert.equal(Number(order.deposit), 30, 'hotel order uses database room deposit');
+        const depositReceive = await hotelOrderRequest(base, 'POST', '/api/orders/' + order.id + '/deposit/receive', {
+          amount: 20, pay_method: 'cash', transaction_date: '2030-01-02', external_reference: 'CI-HOTEL-DEPOSIT-1'
+        }, 'ci-hotel-deposit-receive-0001');
+        assert.equal(depositReceive.status, 201, 'hotel deposit receipt');
+        const depositReceived = await depositReceive.json();
+        assert.equal(depositReceived.expected_amount, 30, 'hotel deposit expected amount');
+        assert.equal(depositReceived.held_amount, 20, 'hotel deposit actual received amount');
+        assert.equal(depositReceived.remaining_to_receive, 10, 'hotel deposit remaining receivable');
+        const depositRefund = await hotelOrderRequest(base, 'POST', '/api/orders/' + order.id + '/deposit/refund', {
+          amount: 5, pay_method: 'cash', transaction_date: '2030-01-05', note: 'partial deposit refund'
+        }, 'ci-hotel-deposit-refund-0001');
+        assert.equal(depositRefund.status, 201, 'hotel deposit partial refund');
+        const depositAfterRefund = await depositRefund.json();
+        assert.equal(depositAfterRefund.received_amount, 20, 'hotel deposit gross receipts');
+        assert.equal(depositAfterRefund.refunded_amount, 5, 'hotel deposit refunds');
+        assert.equal(depositAfterRefund.held_amount, 15, 'hotel deposit net held balance');
+        const depositRead = await fetch(base + '/api/orders/' + order.id + '/deposit');
+        assert.equal(depositRead.status, 200, 'hotel deposit ledger read');
+        const depositLedger = await depositRead.json();
+        assert.equal(depositLedger.transactions.length, 2, 'hotel deposit ledger history');
+        const excessiveDepositRefund = await hotelOrderRequest(base, 'POST', '/api/orders/' + order.id + '/deposit/refund', {
+          amount: 16, pay_method: 'cash', transaction_date: '2030-01-06'
+        }, 'ci-hotel-deposit-refund-excess-0001');
+        assert.equal(excessiveDepositRefund.status, 409, 'hotel deposit refund cannot exceed held balance');
+        const excessiveDepositReceipt = await hotelOrderRequest(base, 'POST', '/api/orders/' + order.id + '/deposit/receive', {
+          amount: 11, pay_method: 'cash', transaction_date: '2030-01-06'
+        }, 'ci-hotel-deposit-receipt-excess-0001');
+        assert.equal(excessiveDepositReceipt.status, 409, 'hotel deposit receipt cannot exceed expected amount');
+        const [[depositRows]] = await pool.query("SELECT COUNT(*) AS total FROM hotel_order_deposit_transactions WHERE order_id = ?", [order.id]);
+        assert.equal(Number(depositRows.total), 2, 'hotel deposit ledger persists only accepted transactions');
         const [[bookedRoom]] = await pool.query('SELECT status FROM rooms WHERE id = ?', [availableRoom.id]);
         assert.equal(bookedRoom.status, 'booked', 'hotel order reserves room');
         const orderCheckin = await hotelOrderRequest(base, 'PATCH', '/api/orders/' + order.id + '/status', { status: 'checked_in' }, 'ci-hotel-order-checkin-0001');

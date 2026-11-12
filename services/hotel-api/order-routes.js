@@ -18,6 +18,32 @@ function validateHotelOrder(input) {
   if (days < 1 || days > 366) throw hotelError('HOTEL_ORDER_INPUT_INVALID');
   return Object.freeze({ order_no: input.order_no.trim(), room_id, guest_id, check_in_date: input.check_in_date, check_out_date: input.check_out_date, days, remark: input.remark || '' });
 }
+function validateHotelDepositTransaction(input) {
+  const allowed = new Set(['amount', 'pay_method', 'transaction_date', 'external_reference', 'note']);
+  if (!input || typeof input !== 'object' || Array.isArray(input) ||
+      Object.keys(input).some(key => !allowed.has(key))) throw hotelError('HOTEL_DEPOSIT_INPUT_INVALID');
+  const amount = Number(input.amount);
+  const pay_method = input.pay_method === undefined ? '' : input.pay_method;
+  const transaction_date = input.transaction_date === undefined ? new Date().toISOString().slice(0, 10) : input.transaction_date;
+  const external_reference = input.external_reference === undefined ? '' : input.external_reference;
+  const note = input.note === undefined ? '' : input.note;
+  if (!Number.isFinite(amount) || amount <= 0 || amount > 10000000 || Math.round(amount * 100) !== amount * 100 ||
+      typeof pay_method !== 'string' || pay_method.length > 30 || !hotelDate(transaction_date) ||
+      typeof external_reference !== 'string' || external_reference.length > 100 ||
+      typeof note !== 'string' || note.length > 500) throw hotelError('HOTEL_DEPOSIT_INPUT_INVALID');
+  return Object.freeze({ amount, pay_method, transaction_date, external_reference, note });
+}
+async function readHotelDepositBalance(tx, orderId) {
+  const [rows] = await tx.execute(
+    "SELECT COALESCE(SUM(CASE WHEN transaction_type = 'receipt' THEN amount ELSE -amount END), 0) AS held_amount, COALESCE(SUM(CASE WHEN transaction_type = 'receipt' THEN amount ELSE 0 END), 0) AS received_amount, COALESCE(SUM(CASE WHEN transaction_type = 'refund' THEN amount ELSE 0 END), 0) AS refunded_amount FROM hotel_order_deposit_transactions WHERE order_id = ?",
+    [orderId]
+  );
+  return {
+    held_amount: Math.round(Number(rows[0].held_amount || 0) * 100) / 100,
+    received_amount: Math.round(Number(rows[0].received_amount || 0) * 100) / 100,
+    refunded_amount: Math.round(Number(rows[0].refunded_amount || 0) * 100) / 100
+  };
+}
 function createHotelOrderRouter() {
   const router = express.Router();
   router.post('/orders', async (req, res, next) => {
@@ -109,6 +135,81 @@ function createHotelOrderRouter() {
         }
       });
       return res.json(result);
+    } catch (error) { return next(error); }
+  });
+  router.post('/orders/:id/deposit/receive', async (req, res, next) => {
+    try {
+      if (typeof req.tenantWrite !== 'function') return res.status(503).json({ error: 'TENANT_WRITE_UNAVAILABLE' });
+      const id = Number(req.params.id), transaction = validateHotelDepositTransaction(req.body);
+      const requestId = req.get('idempotency-key');
+      if (!Number.isSafeInteger(id) || id < 1) throw hotelError('HOTEL_ORDER_ID_INVALID');
+      const result = await req.tenantWrite({
+        operation: 'update', reason: req.get('x-operation-reason'), stepUpToken: req.get('x-step-up-token'),
+        requestId, payload: { id, ...transaction, __resource: 'hotel-order-deposits' },
+        mutate: async tx => {
+          const [orders] = await tx.execute('SELECT id, deposit, status FROM orders WHERE id = ? LIMIT 1 FOR UPDATE', [id]);
+          if (!orders.length) throw hotelError('ORDER_NOT_FOUND', 404);
+          const expected = Number(orders[0].deposit);
+          if (!Number.isFinite(expected) || expected < 0) throw hotelError('HOTEL_DEPOSIT_BALANCE_INVALID', 409);
+          const balance = await readHotelDepositBalance(tx, id);
+          if (transaction.amount > Math.round((expected - balance.held_amount) * 100) / 100) {
+            throw hotelError('HOTEL_DEPOSIT_RECEIPT_EXCEEDS_EXPECTED', 409);
+          }
+          await tx.execute(
+            "INSERT INTO hotel_order_deposit_transactions (order_id, transaction_type, amount, pay_method, external_reference, note, request_id, transaction_date) VALUES (?, 'receipt', ?, ?, ?, ?, ?, ?)",
+            [id, transaction.amount, transaction.pay_method, transaction.external_reference, transaction.note, requestId, transaction.transaction_date]
+          );
+          const nextBalance = await readHotelDepositBalance(tx, id);
+          return { order_id: id, expected_amount: expected, ...nextBalance, remaining_to_receive: Math.round((expected - nextBalance.held_amount) * 100) / 100 };
+        }
+      });
+      return res.status(201).json(result);
+    } catch (error) { return next(error); }
+  });
+  router.post('/orders/:id/deposit/refund', async (req, res, next) => {
+    try {
+      if (typeof req.tenantWrite !== 'function') return res.status(503).json({ error: 'TENANT_WRITE_UNAVAILABLE' });
+      const id = Number(req.params.id), transaction = validateHotelDepositTransaction(req.body);
+      const requestId = req.get('idempotency-key');
+      if (!Number.isSafeInteger(id) || id < 1) throw hotelError('HOTEL_ORDER_ID_INVALID');
+      const result = await req.tenantWrite({
+        operation: 'update', reason: req.get('x-operation-reason'), stepUpToken: req.get('x-step-up-token'),
+        requestId, payload: { id, ...transaction, __resource: 'hotel-order-deposit-refunds' },
+        mutate: async tx => {
+          const [orders] = await tx.execute('SELECT id, deposit FROM orders WHERE id = ? LIMIT 1 FOR UPDATE', [id]);
+          if (!orders.length) throw hotelError('ORDER_NOT_FOUND', 404);
+          const expected = Number(orders[0].deposit);
+          if (!Number.isFinite(expected) || expected < 0) throw hotelError('HOTEL_DEPOSIT_BALANCE_INVALID', 409);
+          const balance = await readHotelDepositBalance(tx, id);
+          if (transaction.amount > balance.held_amount || balance.held_amount <= 0) {
+            throw hotelError('HOTEL_DEPOSIT_REFUND_EXCEEDS_HELD', 409);
+          }
+          await tx.execute(
+            "INSERT INTO hotel_order_deposit_transactions (order_id, transaction_type, amount, pay_method, external_reference, note, request_id, transaction_date) VALUES (?, 'refund', ?, ?, ?, ?, ?, ?)",
+            [id, transaction.amount, transaction.pay_method, transaction.external_reference, transaction.note, requestId, transaction.transaction_date]
+          );
+          const nextBalance = await readHotelDepositBalance(tx, id);
+          return { order_id: id, expected_amount: expected, ...nextBalance, remaining_to_receive: Math.round((expected - nextBalance.held_amount) * 100) / 100 };
+        }
+      });
+      return res.status(201).json(result);
+    } catch (error) { return next(error); }
+  });
+  router.get('/orders/:id/deposit', async (req, res, next) => {
+    try {
+      if (!req.tenantDb || typeof req.tenantDb.execute !== 'function') return res.status(503).json({ error: 'TENANT_DATABASE_UNAVAILABLE' });
+      const id = Number(req.params.id);
+      if (!Number.isSafeInteger(id) || id < 1) throw hotelError('HOTEL_ORDER_ID_INVALID');
+      const [orders] = await req.tenantDb.execute('SELECT id, deposit FROM orders WHERE id = ? LIMIT 1', [id]);
+      if (!orders.length) throw hotelError('ORDER_NOT_FOUND', 404);
+      const balance = await readHotelDepositBalance(req.tenantDb, id);
+      const [transactions] = await req.tenantDb.execute(
+        'SELECT id, transaction_type, amount, pay_method, external_reference, note, transaction_date, created_at FROM hotel_order_deposit_transactions WHERE order_id = ? ORDER BY id DESC LIMIT 100',
+        [id]
+      );
+      const expected = Number(orders[0].deposit);
+      return res.json({ order_id: id, expected_amount: expected, ...balance,
+        remaining_to_receive: Math.round((expected - balance.held_amount) * 100) / 100, transactions });
     } catch (error) { return next(error); }
   });
   return router;
