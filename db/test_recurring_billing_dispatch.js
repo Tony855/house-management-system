@@ -37,7 +37,9 @@ test('dispatcher uses tenant-local idempotent adapter and marks success only aft
     store: {
       async listRunnable() { return [row]; },
       async claim(input) { calls.push(['claim', input]); return row; },
+      async renewLease() { return true; },
       async markDispatched(input) { calls.push(['dispatched', input]); return true; },
+      async renewLease() { return true; },
       async markFailed(input) { calls.push(['failed', input]); return true; }
     },
     workerId: 'worker-a',
@@ -58,7 +60,9 @@ test('dispatcher retries failures without exposing raw exception messages', asyn
     store: {
       async listRunnable() { return [row]; },
       async claim() { return row; },
+      async renewLease() { return true; },
       async markDispatched() { return false; },
+      async renewLease() { return true; },
       async markFailed(input) { calls.push(input); return true; }
     },
     workerId: 'worker-a',
@@ -76,10 +80,59 @@ test('dispatcher reports lease loss rather than completing after ownership expir
     store: {
       async listRunnable() { return [row]; },
       async claim() { return row; },
+      async renewLease() { return true; },
       async markDispatched() { return false; },
       async markFailed() { return false; }
     },
     workerId: 'worker-a', enqueueTenantJob: async () => {}
   });
   assert.equal((await dispatcher.tick()).results[0].state, 'lease_lost');
+});
+
+
+test('dispatcher renews a lease during a slow tenant enqueue and only completes after heartbeat', async () => {
+  const calls = [];
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const dispatcher = createRecurringBillingDispatcher({
+    store: {
+      async listRunnable() { return [row]; },
+      async claim() { return row; },
+      async renewLease(input) { calls.push(['renew', input]); return true; },
+      async markDispatched(input) { calls.push(['dispatched', input]); return true; },
+      async markFailed(input) { calls.push(['failed', input]); return true; }
+    },
+    workerId: 'worker-a', leaseSeconds: 30, heartbeatIntervalMs: 5,
+    enqueueTenantJob: async () => { await gate; }
+  });
+  const pending = dispatcher.tick();
+  await new Promise(resolve => setTimeout(resolve, 25));
+  assert.ok(calls.some(call => call[0] === 'renew'));
+  release();
+  const result = await pending;
+  assert.equal(result.results[0].state, 'dispatched');
+  assert.equal(calls.at(-1)[0], 'dispatched');
+});
+
+test('dispatcher never marks a job dispatched after heartbeat reports lease loss', async () => {
+  const calls = [];
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const dispatcher = createRecurringBillingDispatcher({
+    store: {
+      async listRunnable() { return [row]; },
+      async claim() { return row; },
+      async renewLease() { return false; },
+      async markDispatched() { calls.push('dispatched'); return true; },
+      async markFailed() { calls.push('failed'); return false; }
+    },
+    workerId: 'worker-a', leaseSeconds: 30, heartbeatIntervalMs: 5,
+    enqueueTenantJob: async () => { await gate; }
+  });
+  const pending = dispatcher.tick();
+  await new Promise(resolve => setTimeout(resolve, 25));
+  release();
+  const result = await pending;
+  assert.equal(result.results[0].state, 'lease_lost');
+  assert.equal(calls.includes('dispatched'), false);
 });

@@ -76,6 +76,16 @@ function createRecurringBillingDispatchStore(pool) {
       const [rows] = await pool.query('SELECT ' + columns + ' FROM platform_recurring_billing_dispatch WHERE id = ? LIMIT 1', [id]);
       return rows[0] ? decode(rows[0]) : null;
     },
+    async renewLease({ id, workerId, leaseSeconds = 180 }) {
+      if (!Number.isSafeInteger(id) || id < 1) throw new TypeError('RECURRING_BILLING_JOB_ID_INVALID');
+      assertWorker(workerId);
+      if (!Number.isInteger(leaseSeconds) || leaseSeconds < 30 || leaseSeconds > 1800) throw new TypeError('RECURRING_BILLING_LEASE_INVALID');
+      const [result] = await pool.query(
+        "UPDATE platform_recurring_billing_dispatch SET lease_expires_at = DATE_ADD(UTC_TIMESTAMP(), INTERVAL ? SECOND) WHERE id = ? AND state = 'dispatching' AND lease_owner = ? AND lease_expires_at > UTC_TIMESTAMP()",
+        [leaseSeconds, id, workerId]
+      );
+      return Number(result.affectedRows) === 1;
+    },
     async markDispatched({ id, workerId }) {
       assertWorker(workerId);
       const [result] = await pool.query(

@@ -43,6 +43,10 @@ test('recurring billing dispatch claims, lease recovery, retry backoff and termi
     const claimed = await store.claim({ id: firstId, workerId: 'ci-worker-a', leaseSeconds: 30 });
     assert.equal(claimed.workerId, 'ci-worker-a');
     assert.equal(claimed.attemptCount, 1);
+    assert.equal(await store.renewLease({ id: firstId, workerId: 'ci-worker-a', leaseSeconds: 60 }), true,
+      'the current lease owner must be able to extend its active claim');
+    assert.equal(await store.renewLease({ id: firstId, workerId: 'ci-worker-b', leaseSeconds: 60 }), false,
+      'a different worker must never extend another owner lease');
     assert.equal(await store.claim({ id: firstId, workerId: 'ci-worker-b', leaseSeconds: 30 }), null,
       'a live lease must exclude a competing worker');
 
