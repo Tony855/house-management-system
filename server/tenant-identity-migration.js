@@ -7,6 +7,13 @@ const TABLES = Object.freeze(['users', 'roles', 'settings', 'user_permissions', 
 const MAX_ROWS = 100000;
 function canonical(v) { if (Array.isArray(v)) return v.map(canonical); if (v && typeof v === 'object') return Object.fromEntries(Object.keys(v).sort().map(k => [k, canonical(v[k])])); return v; }
 function digest(rows) { return crypto.createHash('sha256').update(JSON.stringify(canonical(rows))).digest('hex'); }
+function matchesIdentitySnapshot(actual, expectedManifest) {
+  return Boolean(actual && actual.tables && TABLES.every(table =>
+    Array.isArray(actual.tables[table]) &&
+    actual.tables[table].length === expectedManifest[table].rowCount &&
+    digest(actual.tables[table]) === expectedManifest[table].sha256
+  ));
+}
 function normalizeTenantIdentity({ appId, tenantId, sourceOrgId, snapshot }) {
   if (!APP_IDS.has(appId) || !UUID_RE.test(tenantId || '') || !Number.isSafeInteger(sourceOrgId) || sourceOrgId < 1) throw new TypeError('TENANT_IDENTITY_MIGRATION_IDENTITY_INVALID');
   if (!snapshot || typeof snapshot !== 'object') throw new TypeError('TENANT_IDENTITY_MIGRATION_SNAPSHOT_INVALID');
@@ -53,11 +60,34 @@ async function copyTenantIdentity({ appId, tenantId, sourceOrgId, sourceReader, 
   const normalized = normalizeTenantIdentity({ appId, tenantId, sourceOrgId, snapshot: source });
   if (mode === 'dry-run') { await audit({ event: 'tenant_identity_migration_dry_run_verified', appId, tenantId, sourceOrgId, manifest: normalized.manifest }); return { mode, appId, tenantId, sourceOrgId, manifest: normalized.manifest, copied: false, revokedLegacySessions: normalized.revokedLegacySessions }; }
   try {
-    await targetWriter.importTenantIdentity({ appId, tenantId, tables: normalized.tables });
-    const actual = await targetReader.readTenantIdentity({ appId, tenantId });
-    if (!actual || !actual.tables || !TABLES.every(t => Array.isArray(actual.tables[t]) && actual.tables[t].length === normalized.manifest[t].rowCount && digest(actual.tables[t]) === normalized.manifest[t].sha256)) throw Object.assign(new Error('TENANT_IDENTITY_MIGRATION_RECONCILIATION_FAILED'), { code: 'TENANT_IDENTITY_MIGRATION_RECONCILIATION_FAILED' });
+    // A prior import may have committed even when its final audit acknowledgement
+    // was lost. Accept only an exact table/count/hash match; never overwrite a
+    // partially populated or mismatched tenant identity database.
+    let actual = await targetReader.readTenantIdentity({ appId, tenantId });
+    let alreadyImported = matchesIdentitySnapshot(actual, normalized.manifest);
+    if (!alreadyImported) {
+      const hasRows = actual && actual.tables && TABLES.some(table =>
+        Array.isArray(actual.tables[table]) && actual.tables[table].length > 0
+      );
+      if (hasRows) throw Object.assign(new Error('TENANT_IDENTITY_MIGRATION_TARGET_NOT_EMPTY'), { code: 'TENANT_IDENTITY_MIGRATION_TARGET_NOT_EMPTY' });
+      try {
+        await targetWriter.importTenantIdentity({ appId, tenantId, tables: normalized.tables });
+      } catch (writeError) {
+        // Another worker may have committed while this worker waited for the
+        // target advisory lock. Reconcile only the exact same imported snapshot.
+        if (writeError.code !== 'TENANT_IDENTITY_MIGRATION_TARGET_NOT_EMPTY' &&
+            writeError.message !== 'TENANT_IDENTITY_MIGRATION_TARGET_NOT_EMPTY') throw writeError;
+        actual = await targetReader.readTenantIdentity({ appId, tenantId });
+        if (!matchesIdentitySnapshot(actual, normalized.manifest)) throw writeError;
+        alreadyImported = true;
+      }
+      if (!alreadyImported) actual = await targetReader.readTenantIdentity({ appId, tenantId });
+    }
+    if (!matchesIdentitySnapshot(actual, normalized.manifest)) {
+      throw Object.assign(new Error('TENANT_IDENTITY_MIGRATION_RECONCILIATION_FAILED'), { code: 'TENANT_IDENTITY_MIGRATION_RECONCILIATION_FAILED' });
+    }
     await audit({ event: 'tenant_identity_migration_copy_verified', appId, tenantId, sourceOrgId, manifest: normalized.manifest });
-    return { mode, appId, tenantId, sourceOrgId, manifest: normalized.manifest, copied: true, revokedLegacySessions: normalized.revokedLegacySessions };
+    return { mode, appId, tenantId, sourceOrgId, manifest: normalized.manifest, copied: true, alreadyImported, revokedLegacySessions: normalized.revokedLegacySessions };
   } catch (error) { try { await audit({ event: 'tenant_identity_migration_copy_failed', appId, tenantId, sourceOrgId, code: /^[A-Z][A-Z0-9_]{1,63}$/.test(error.code || '') ? error.code : 'TENANT_IDENTITY_MIGRATION_FAILED' }); } catch (auditError) { error.auditFailure = auditError.code || auditError.message || 'AUDIT_WRITE_FAILED'; } throw error; }
 }
 module.exports = { TABLES, digest, normalizeTenantIdentity, copyTenantIdentity };
