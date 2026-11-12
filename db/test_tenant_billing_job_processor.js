@@ -20,7 +20,7 @@ function setup({ appId = 'rental', job = null, authorizeSystem = async () => tru
  const pool={
   execute:async(sql,params=[])=>{
    calls.push({sql,params});
-   if(sql.startsWith('UPDATE ')&&sql.includes('lease_token')){leaseToken=params[1];return[{affectedRows:claimAllowed?1:0},[]];}
+   if(sql.startsWith('UPDATE ')&&sql.includes('lease_expires_at=DATE_ADD')){leaseToken=params[1];return[{affectedRows:claimAllowed?1:0},[]];}
    if(sql.includes('WHERE lease_token=? AND lease_owner=?'))return[job?[{id:1,period_key:job.periodKey,state:'running',cursor_id:job.cursor||0,attempt_count:job.attemptCount||1}]:[],[]];
    return[[],[]];
   },
