@@ -79,7 +79,11 @@ async function post(base, room, requestId) {
   });
 }
 
-async function writeBuilding(base, method, path, body, requestId) {
+
+async function hotelOrderRequest(base, method, path, body, requestId) {
+  return fetch(base + path, { method, headers: { 'content-type': 'application/json', 'x-operation-reason': 'CI hotel reservation lifecycle', 'x-step-up-token': 'ci-step-up-token-123456789', 'idempotency-key': requestId }, body: JSON.stringify(body) });
+}
+\nasync function writeBuilding(base, method, path, body, requestId) {
   return fetch(base + path, {
     method,
     headers: {
@@ -215,7 +219,34 @@ async function main() {
       assert.equal(tenantUpdated.status, 200, appId + ' tenant/company patch');
       const [[tenantRows]] = await pool.query('SELECT phone FROM tenants WHERE id = ?', [tenantBody.id]);
       assert.equal(tenantRows.phone, '987654', appId + ' tenant/company persisted');
-      const room = { ...definition.room };
+
+      if (appId === 'hotel') {
+        const hotelRoom = { building_id: buildingBody.id, room_no: 'CI-H-ORDER-ROOM', day_price: 80, deposit: 30, status: 'vacant' };
+        const availableRoomResponse = await post(base, hotelRoom, 'ci-hotel-order-room-0001');
+        assert.equal(availableRoomResponse.status, 201, 'hotel order room create');
+        const availableRoom = await availableRoomResponse.json();
+        const orderPayload = { order_no: 'CI-H-ORDER-0001', room_id: availableRoom.id, guest_id: tenantBody.id,
+          check_in_date: '2030-01-02', check_out_date: '2030-01-05' };
+        const orderCreated = await hotelOrderRequest(base, 'POST', '/api/orders', orderPayload, 'ci-hotel-order-create-0001');
+        assert.equal(orderCreated.status, 201, 'hotel order create');
+        const order = await orderCreated.json();
+        assert.equal(order.days, 3, 'hotel order day count');
+        assert.equal(Number(order.total), 240, 'hotel order uses database room price');
+        assert.equal(Number(order.deposit), 30, 'hotel order uses database room deposit');
+        const [[bookedRoom]] = await pool.query('SELECT status FROM rooms WHERE id = ?', [availableRoom.id]);
+        assert.equal(bookedRoom.status, 'booked', 'hotel order reserves room');
+        const orderCheckin = await hotelOrderRequest(base, 'PATCH', '/api/orders/' + order.id + '/status', { status: 'checked_in' }, 'ci-hotel-order-checkin-0001');
+        assert.equal(orderCheckin.status, 200, 'hotel order check-in');
+        const [[occupiedRoom]] = await pool.query('SELECT status FROM rooms WHERE id = ?', [availableRoom.id]);
+        assert.equal(occupiedRoom.status, 'rented', 'hotel check-in occupies room');
+        const orderCheckout = await hotelOrderRequest(base, 'PATCH', '/api/orders/' + order.id + '/status', { status: 'checked_out' }, 'ci-hotel-order-checkout-0001');
+        assert.equal(orderCheckout.status, 200, 'hotel order check-out');
+        const [[cleaningRoom]] = await pool.query('SELECT status FROM rooms WHERE id = ?', [availableRoom.id]);
+        assert.equal(cleaningRoom.status, 'cleaning', 'hotel check-out sends room to cleaning');
+        const invalidReentry = await hotelOrderRequest(base, 'PATCH', '/api/orders/' + order.id + '/status', { status: 'checked_in' }, 'ci-hotel-order-reentry-0001');
+        assert.equal(invalidReentry.status, 409, 'hotel order cannot re-enter after checkout');
+      }
+\n      const room = { ...definition.room };
       const requestId = 'ci-room-create-' + appId + '-000001';
 
       const [first, replay] = await Promise.all([
