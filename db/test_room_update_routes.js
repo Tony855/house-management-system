@@ -20,7 +20,7 @@ async function send(appId, body, options = {}) {
       calls.push(input);
       return input.mutate({
         execute: async (sql, params) => {
-          if (sql.startsWith('SELECT * FROM rooms')) return [[{ ...existing, ...(options.row || {}) }]];
+          if (sql.startsWith('SELECT * FROM rooms')) return [Object.hasOwn(options, 'row') && options.row === null ? [] : [{ ...existing, ...(options.row || {}) }]];
           if (sql.includes('FROM buildings')) return [[{ id: 1 }]];
           if (sql.includes('FROM tenants')) return [[{ id: 8 }]];
           if (sql.includes('id <>')) return [[]];
