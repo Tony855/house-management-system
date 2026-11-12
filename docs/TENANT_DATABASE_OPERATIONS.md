@@ -28,7 +28,7 @@ Product API write routes are disabled unless `createProductControlPlaneDependenc
 
 ## Data migration and cutover
 
-The current migration adapters support read-only org-scoped source snapshots, non-destructive dry runs, transactional imports into empty tenant databases, read-back verification and per-table row-count/SHA-256 manifests. They do not perform production routing cutover or delete legacy records.
+The current migration adapters support read-only org-scoped source snapshots captured inside one repeatable-read consistent snapshot, non-destructive dry runs, transactional imports into empty tenant databases, read-back verification and per-table row-count/SHA-256 manifests. Copy results distinguish a fresh import (`alreadyImported: false`) from an exact idempotent retry (`alreadyImported: true`). They do not perform production routing cutover or delete legacy records.
 
 For each tenant:
 - Take a recoverable backup and record source org ID, product, tenant UUID and source schema version.
