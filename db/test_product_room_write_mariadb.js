@@ -346,16 +346,24 @@ async function main() {
       const [[paidBill]] = await pool.query('SELECT paid_amount, status FROM bills WHERE id = ?', [billSeed.insertId]);
       assert.equal(Number(paidBill.paid_amount), 100, appId + ' fully paid amount');
       assert.equal(paidBill.status, 'paid', appId + ' fully paid status');
-      const refund = await hotelOrderRequest(base, 'POST', '/api/bills/' + billSeed.insertId + '/refund', { amount: 20, pay_method: 'bank', pay_date: '2030-02-02', external_reference: 'CI-REFUND-' + appId }, 'ci-bill-refund-' + appId);
+      const refundPayload = { amount: 20, pay_method: 'bank', pay_date: '2030-02-02', external_reference: 'CI-REFUND-' + appId };
+      const refundRequestId = 'ci-bill-refund-' + appId;
+      const [refund, refundReplay] = await Promise.all([
+        hotelOrderRequest(base, 'POST', '/api/bills/' + billSeed.insertId + '/refund', refundPayload, refundRequestId),
+        hotelOrderRequest(base, 'POST', '/api/bills/' + billSeed.insertId + '/refund', refundPayload, refundRequestId)
+      ]);
       assert.equal(refund.status, 200, appId + ' bill refund');
+      assert.equal(refundReplay.status, 200, appId + ' idempotent refund replay');
       const refundBody = await refund.json();
+      const refundReplayBody = await refundReplay.json();
+      assert.equal(Number(refundReplayBody.paid_amount), 80, appId + ' refund replay does not refund twice');
       assert.equal(Number(refundBody.paid_amount), 80, appId + ' refund reduces paid balance');
       assert.equal(refundBody.status, 'partial', appId + ' refunded bill becomes partial');
       const [[refundLedger]] = await pool.query("SELECT transaction_type, amount, external_reference FROM bill_transactions WHERE bill_id = ? AND transaction_type = 'refund'", [billSeed.insertId]);
       assert.deepEqual(refundLedger, { transaction_type: 'refund', amount: '20.00', external_reference: 'CI-REFUND-' + appId }, appId + ' refund audit ledger');
       const excessiveRefund = await hotelOrderRequest(base, 'POST', '/api/bills/' + billSeed.insertId + '/refund', { amount: 81 }, 'ci-bill-refund-excess-' + appId);
       assert.equal(excessiveRefund.status, 409, appId + ' refund cannot exceed net received amount');
-      const overpayment = await hotelOrderRequest(base, 'POST', '/api/bills/' + billSeed.insertId + '/pay', { amount: 1 }, 'ci-bill-overpay-' + appId);
+      const overpayment = await hotelOrderRequest(base, 'POST', '/api/bills/' + billSeed.insertId + '/pay', { amount: 21 }, 'ci-bill-overpay-' + appId);
       assert.equal(overpayment.status, 409, appId + ' overpayment rejected');
 
       if (appId === 'rental' || appId === 'property') {
