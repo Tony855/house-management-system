@@ -32,6 +32,7 @@ function createPools(appId, sourceOrgId, { lockAcquired = true, releaseLockSucce
         async execute(sql, params) {
           sourceCalls.push({ sql, params });
           if (sql === 'SELECT DATABASE() AS databaseName') return [[{ databaseName: 'house_sys_' + appId }]];
+          if (!sql.startsWith('SELECT *')) return [[], []];
           const table = sql.match(/FROM `([a-z_]+)`/i)?.[1];
           return [sourceTables[table].filter(row => row.org_id === params[0]).map(row => ({ ...row }))];
         },
