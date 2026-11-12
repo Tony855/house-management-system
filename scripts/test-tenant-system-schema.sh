@@ -46,6 +46,7 @@ if [[ "$deposit_rows" != "1" ]]; then echo "Rental deposit migration insert/read
 # Durable property fee generation queue smoke test.
 "${mysql_cmd[@]}" "$DB_NAME" < db/migrations/tenant/008_property_fee_generation_jobs.sql
 "${mysql_cmd[@]}" "$DB_NAME" < db/migrations/tenant/009_rental_bill_generation_jobs.sql
+"${mysql_cmd[@]}" "$DB_NAME" < db/migrations/tenant/010_tenant_billing_job_leases.sql
 fee_job_table="$("${mysql_cmd[@]}" -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '$DB_NAME' AND table_name = 'property_fee_generation_jobs' AND table_type = 'BASE TABLE'")"
 if [[ "$fee_job_table" != "1" ]]; then echo "Property fee job migration is incomplete" >&2; exit 1; fi
 "${mysql_cmd[@]}" "$DB_NAME" -e "INSERT INTO property_fee_generation_jobs (billing_month,request_id,state) VALUES ('2030-01','ci-property-fee-job-0001','queued')"
@@ -56,4 +57,11 @@ if [[ "$rental_job_table" != "1" ]]; then echo "Rental bill job migration is inc
 "${mysql_cmd[@]}" "$DB_NAME" -e "INSERT INTO rental_bill_generation_jobs (as_of_date,request_id,state) VALUES ('2030-02-01','ci-rental-bill-job-0001','queued')"
 rental_job_rows="$("${mysql_cmd[@]}" "$DB_NAME" -e "SELECT COUNT(*) FROM rental_bill_generation_jobs WHERE as_of_date = '2030-02-01' AND state = 'queued'")"
 if [[ "$rental_job_rows" != "1" ]]; then echo "Rental bill job migration insert/readback failed" >&2; exit 1; fi
-echo "Tenant system, collection, deposit, property and rental bill job migrations passed."
+
+# Verify both tenant job tables carry the lease columns and accept a live lease.
+lease_columns="$("${mysql_cmd[@]}" -e "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = '$DB_NAME' AND table_name IN ('property_fee_generation_jobs','rental_bill_generation_jobs') AND column_name IN ('lease_owner','lease_token','lease_expires_at','attempt_count')")"
+if [[ "$lease_columns" != "8" ]]; then echo "Tenant billing job lease migration is incomplete" >&2; exit 1; fi
+"${mysql_cmd[@]}" "$DB_NAME" -e "UPDATE property_fee_generation_jobs SET state='running', lease_owner='ci-worker', lease_token='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', lease_expires_at=DATE_ADD(UTC_TIMESTAMP(), INTERVAL 120 SECOND), attempt_count=attempt_count+1 WHERE billing_month='2030-01' AND state='queued'"
+lease_rows="$("${mysql_cmd[@]}" "$DB_NAME" -e "SELECT COUNT(*) FROM property_fee_generation_jobs WHERE billing_month='2030-01' AND lease_owner='ci-worker' AND lease_token='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' AND lease_expires_at>UTC_TIMESTAMP() AND attempt_count=1")"
+if [[ "$lease_rows" != "1" ]]; then echo "Tenant billing job lease write/readback failed" >&2; exit 1; fi
+echo "Tenant system, collection, deposit, property and rental bill job migrations and lease migrations passed."
