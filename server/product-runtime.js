@@ -40,7 +40,7 @@ function createProductApiRuntime({
     if (billingWorker?.enabled === true) {
       if (!['rental','property'].includes(appId) || typeof billingWorker.authorizeSystem !== 'function') throw new TypeError('PRODUCT_BILLING_WORKER_SECURITY_REQUIRED');
       const workerId = billingWorker.workerId || env.TENANT_BILLING_WORKER_ID;
-      const processor = createTenantBillingJobProcessor({ registry: dependencies.registry, secretProvider: dependencies.secretProvider, tenantPoolManager: dependencies.poolManager, authorizeSystem: billingWorker.authorizeSystem, appIds: [appId], leaseSeconds: billingWorker.leaseSeconds });
+      const processor = createTenantBillingJobProcessor({ registry: dependencies.registry, secretProvider: dependencies.secretProvider, tenantPoolManager: dependencies.poolManager, authorizeSystem: billingWorker.authorizeSystem, appIds: [appId], leaseSeconds: billingWorker.leaseSeconds, chunkSize: billingWorker.chunkSize });
       worker = createTenantBillingJobWorker({ workerId, processNextBatch: processor.processNextBatch, pollIntervalMs: billingWorker.pollIntervalMs, concurrency: billingWorker.concurrency, onError: billingWorker.onError });
       worker.start();
     }

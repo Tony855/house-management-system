@@ -19,7 +19,7 @@ function createPlatformApiRuntime({
   env = process.env, createPool, mfaEncryption, recoveryCodePepper, loginRateLimitHmacKey,
   signingKeyProvider, verificationKeyProvider, issuer, authOptions,
   migrationConnectionResolver, migrationWorkerId, migrationConcurrency,
-  tenantSecretManager, tenantPoolCreatePool = mysql.createPool, billingWorkerId, billingPollIntervalMs, billingJobWorker, billingSystemWriteAuthorizer, billingJobWorkerConcurrency = 4
+  tenantSecretManager, tenantPoolCreatePool = mysql.createPool, billingWorkerId, billingPollIntervalMs, billingJobWorker, billingSystemWriteAuthorizer, billingJobWorkerConcurrency = 4, billingJobLeaseSeconds = Number(env.BILLING_JOB_LEASE_SECONDS || 600), billingJobChunkSize = Number(env.BILLING_JOB_CHUNK_SIZE || 50)
 } = {}) {
   if (!mfaEncryption || !signingKeyProvider || !verificationKeyProvider) throw new TypeError('PLATFORM_SECURITY_DEPENDENCIES_REQUIRED');
   if (billingJobWorker && (tenantSecretManager === undefined || typeof billingJobWorker.start !== 'function' || typeof billingJobWorker.stop !== 'function')) throw new TypeError('PLATFORM_BILLING_JOB_WORKER_DEPENDENCIES_REQUIRED');
@@ -82,7 +82,8 @@ function createPlatformApiRuntime({
     } else if (tenantRegistry && tenantSecretProvider && billingSystemWriteAuthorizer) {
       const processor = createTenantBillingJobProcessor({
         registry: tenantRegistry, secretProvider: tenantSecretProvider,
-        tenantPoolManager, authorizeSystem: billingSystemWriteAuthorizer
+        tenantPoolManager, authorizeSystem: billingSystemWriteAuthorizer,
+        leaseSeconds: billingJobLeaseSeconds, chunkSize: billingJobChunkSize
       });
       tenantBillingJobWorker = createTenantBillingJobWorker({
         workerId: billingWorkerId || env.BILLING_WORKER_ID || 'platform-billing-worker',

@@ -7,15 +7,15 @@ const {createMariaDbTenantWriteAuditStore}=require('./tenant-write-audit-mariadb
 const {createMariaDbTenantWriteIdempotencyStore}=require('./tenant-write-idempotency-mariadb');
 const {buildNextRentalBill}=require('../services/rental-api/write-routes');
 const {buildPropertyFeeBill}=require('../services/shared/property-fee-routes');
-const JOBS={rental:'rental_bill',property:'property_fee'},CHUNK_SIZE=50,LEASE_SECONDS=120,MAX_ATTEMPTS=8;
+const JOBS={rental:'rental_bill',property:'property_fee'},CHUNK_SIZE=50,LEASE_SECONDS=120,MAX_ATTEMPTS=8,MAX_CHUNK_SIZE=200;
 const dateOnly=v=>v instanceof Date?v.toISOString().slice(0,10):String(v).slice(0,10);
 function fail(code,status=409){return Object.assign(new Error(code),{code,status});}
-function createTenantBillingJobProcessor({registry,secretProvider,tenantPoolManager,authorizeSystem,appIds=['rental','property'],leaseSeconds=LEASE_SECONDS,createToken=crypto.randomUUID}={}){
+function createTenantBillingJobProcessor({registry,secretProvider,tenantPoolManager,authorizeSystem,appIds=['rental','property'],leaseSeconds=LEASE_SECONDS,chunkSize=CHUNK_SIZE,createToken=crypto.randomUUID}={}){
  if(!registry||typeof registry.findTenantById!=='function'||typeof registry.listActiveTenants!=='function')throw new TypeError('BILLING_PROCESSOR_REGISTRY_REQUIRED');
  if(!secretProvider||typeof secretProvider.getDatabaseCredentials!=='function')throw new TypeError('BILLING_PROCESSOR_SECRET_PROVIDER_REQUIRED');
  if(!tenantPoolManager||typeof tenantPoolManager.getPool!=='function')throw new TypeError('BILLING_PROCESSOR_POOL_MANAGER_REQUIRED');
  if(typeof authorizeSystem!=='function')throw new TypeError('BILLING_PROCESSOR_SYSTEM_AUTHORIZER_REQUIRED');
- if(!Number.isInteger(leaseSeconds)||leaseSeconds<30||leaseSeconds>3600||typeof createToken!=='function')throw new TypeError('BILLING_PROCESSOR_LEASE_CONFIG_INVALID');
+ if(!Number.isInteger(leaseSeconds)||leaseSeconds<30||leaseSeconds>3600||!Number.isInteger(chunkSize)||chunkSize<1||chunkSize>MAX_CHUNK_SIZE||typeof createToken!=='function')throw new TypeError('BILLING_PROCESSOR_LEASE_CONFIG_INVALID');
  if(!Array.isArray(appIds)||appIds.length<1||appIds.some(app=>!Object.hasOwn(JOBS,app))||new Set(appIds).size!==appIds.length)throw new TypeError('BILLING_PROCESSOR_APP_SCOPE_INVALID');
  const systemWrite=createTenantSystemWriteService({authorizeSystem,auditWriter:createMariaDbTenantWriteAuditStore(),idempotencyStore:createMariaDbTenantWriteIdempotencyStore()});
  async function processTenant({tenantId,appId,workerId}){
@@ -44,13 +44,13 @@ function createTenantBillingJobProcessor({registry,secretProvider,tenantPoolMana
    if(Number(job.cursor_id||0)!==cursor)throw fail('BILLING_GENERATION_JOB_CURSOR_CHANGED');
    let generated=0,skipped=0,processed=0,nextCursor=cursor,complete=false;
    if(appId==='rental'){
-    const [rows]=await tx.execute("SELECT * FROM contracts WHERE status='active' AND id>? ORDER BY id ASC LIMIT ? FOR UPDATE",[cursor,CHUNK_SIZE+1]);
-    const batch=rows.slice(0,CHUNK_SIZE);
+    const [rows]=await tx.execute("SELECT * FROM contracts WHERE status='active' AND id>? ORDER BY id ASC LIMIT ? FOR UPDATE",[cursor,chunkSize+1]);
+    const batch=rows.slice(0,chunkSize);
     for(const c of batch){const [last]=await tx.execute('SELECT period_end FROM bills WHERE contract_id=? AND source=? ORDER BY period_end DESC LIMIT 1 FOR UPDATE',[c.id,'rental']);try{await tx.insert('bills',buildNextRentalBill(c,last.length?dateOnly(last[0].period_end):null,dateOnly(job.period_key)));generated++;}catch(e){if(['RENTAL_BILL_NOT_DUE','CONTRACT_PERIOD_FINISHED'].includes(e.code)){skipped++;continue;}throw e;}}
-    processed=batch.length;nextCursor=batch.length?Number(batch[batch.length-1].id):cursor;complete=rows.length<=CHUNK_SIZE;
+    processed=batch.length;nextCursor=batch.length?Number(batch[batch.length-1].id):cursor;complete=rows.length<=chunkSize;
    }else{
     
-    const [rows]=await tx.execute('SELECT r.id AS room_id,r.owner_id,r.property_fee,COALESCE(m.water_fee,0) AS water_fee,COALESCE(m.elec_fee,0) AS elec_fee FROM rooms r LEFT JOIN meters m ON m.room_id=r.id AND m.month=? WHERE r.owner_id IS NOT NULL AND r.id>? ORDER BY r.id LIMIT ? FOR UPDATE',[job.period_key,cursor,CHUNK_SIZE+1]);
+    const [rows]=await tx.execute('SELECT r.id AS room_id,r.owner_id,r.property_fee,COALESCE(m.water_fee,0) AS water_fee,COALESCE(m.elec_fee,0) AS elec_fee FROM rooms r LEFT JOIN meters m ON m.room_id=r.id AND m.month=? WHERE r.owner_id IS NOT NULL AND r.id>? ORDER BY r.id LIMIT ? FOR UPDATE',[job.period_key,cursor,chunkSize+1]);
     const batch=rows.slice(0,CHUNK_SIZE);
     for(const room of batch){const bill=buildPropertyFeeBill(room,job.period_key);if(!bill){skipped++;continue;}const [exists]=await tx.execute("SELECT id FROM bills WHERE source='property' AND room_id=? AND period_start=? LIMIT 1 FOR UPDATE",[bill.room_id,bill.period_start]);if(exists.length){skipped++;continue;}await tx.insert('bills',bill);generated++;}
     processed=batch.length;nextCursor=batch.length?Number(batch[batch.length-1].room_id):cursor;complete=rows.length<=CHUNK_SIZE;
@@ -67,6 +67,6 @@ function createTenantBillingJobProcessor({registry,secretProvider,tenantPoolMana
   for(const appId of appIds){let cursor='';for(;;){const page=await registry.listActiveTenants({appId,afterTenantId:cursor,limit:tenantScanBatchSize});for(const tenantId of page.tenantIds){try{const r=await processTenant({tenantId,appId,workerId});if(r.worked)return Object.freeze({...r,workerId});}catch(e){if(!firstError)firstError=e;}}if(!page.nextCursor)break;if(page.nextCursor===cursor)throw fail('BILLING_TENANT_SCAN_CURSOR_STALLED',500);cursor=page.nextCursor;}}
   if(firstError)throw firstError;return Object.freeze({worked:false,state:'idle'});
  }
- return Object.freeze({processTenant,processNextBatch});
+ return Object.freeze({processTenant,processNextBatch,leaseSeconds,chunkSize,appIds:Object.freeze([...appIds])});
 }
-module.exports={createTenantBillingJobProcessor,CHUNK_SIZE,LEASE_SECONDS,MAX_ATTEMPTS};
+module.exports={createTenantBillingJobProcessor,CHUNK_SIZE,LEASE_SECONDS,MAX_ATTEMPTS,MAX_CHUNK_SIZE};
