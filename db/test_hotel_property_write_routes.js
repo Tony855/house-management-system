@@ -307,3 +307,40 @@ test('property collection action records only an overdue unsettled property bill
     } finally {await new Promise(resolve=>settledServer.close(resolve));}
   } finally {await new Promise(resolve=>server.close(resolve));}
 });
+
+test('property collection follow-up queue returns latest due action and validates pagination', async () => {
+  const calls=[];const app=express();
+  app.use((req,_res,next)=>{req.tenantDb={execute:async(sql,params)=>{calls.push({sql,params});
+    if(sql.includes('COUNT(*)')) return [[{total_count:2}]];
+    return [[{action_id:8,bill_id:41,action_type:'phone',outcome:'promised',contacted_at:'2030-02-01',
+      follow_up_date:'2030-02-08',note:'Call back',room_id:4,room_no:'P-401',tenant_id:8,tenant_name:'Owner Ltd',
+      outstanding_amount:'100.00',days_follow_up_overdue:2}]];
+  }};next();});
+  app.use('/api',createPropertyFeeRouter());app.use((e,_q,res,_n)=>res.status(e.status||500).json({error:e.code||'ERROR'}));
+  const server=http.createServer(app);await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  try {
+    const response=await fetch('http://127.0.0.1:'+server.address().port+'/api/property-fees/collection-follow-ups?as_of=2030-02-10&page=2&page_size=10');
+    assert.equal(response.status,200);const body=await response.json();
+    assert.equal(body.total_count,2);assert.equal(body.items[0].bill_id,41);
+    assert.equal(body.items[0].days_follow_up_overdue,2);assert.equal(body.items[0].tenant_name,'Owner Ltd');
+    assert.match(calls[1].sql,/SELECT MAX\(latest.id\)/);
+    assert.deepEqual(calls[1].params,['2030-02-10','2030-02-10',10,10]);
+    const invalid=await fetch('http://127.0.0.1:'+server.address().port+'/api/property-fees/collection-follow-ups?as_of=2030-02-30');
+    assert.equal(invalid.status,400);assert.deepEqual(await invalid.json(),{error:'PROPERTY_COLLECTION_DATE_INVALID'});
+  } finally {await new Promise(resolve=>server.close(resolve));}
+});
+test('property collection history is restricted to a property bill and ordered newest first', async () => {
+  const calls=[];const app=express();
+  app.use((req,_res,next)=>{req.tenantDb={execute:async(sql,params)=>{calls.push({sql,params});
+    return sql.includes('SELECT id FROM bills')?[[{id:41}]]:[[{id:8,bill_id:41,action_type:'phone',outcome:'promised',
+      contacted_at:'2030-02-01',follow_up_date:'2030-02-08',note:'Call back',created_at:'2030-02-01 10:00:00'}]];
+  }};next();});
+  app.use('/api',createPropertyFeeRouter());app.use((e,_q,res,_n)=>res.status(e.status||500).json({error:e.code||'ERROR'}));
+  const server=http.createServer(app);await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  try {
+    const response=await fetch('http://127.0.0.1:'+server.address().port+'/api/property-fees/41/collection-actions');
+    assert.equal(response.status,200);const body=await response.json();
+    assert.equal(body.bill_id,41);assert.equal(body.items.length,1);assert.equal(body.items[0].follow_up_date,'2030-02-08');
+    assert.match(calls[1].sql,/ORDER BY contacted_at DESC, id DESC LIMIT 100/);
+  } finally {await new Promise(resolve=>server.close(resolve));}
+});

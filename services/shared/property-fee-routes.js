@@ -164,6 +164,77 @@ function createPropertyFeeRouter() {
       return res.status(201).json(result);
     } catch (error) { return next(error); }
   });
+  router.get('/property-fees/collection-follow-ups', async (req, res, next) => {
+    try {
+      if (!req.tenantDb || typeof req.tenantDb.execute !== 'function') {
+        return res.status(503).json({ error: 'TENANT_DATABASE_UNAVAILABLE' });
+      }
+      const asOf = req.query.as_of === undefined ? new Date().toISOString().slice(0, 10) : req.query.as_of;
+      if (!validDate(asOf)) throw propertyFeeError('PROPERTY_COLLECTION_DATE_INVALID');
+      const page = req.query.page === undefined ? 1 : Number(req.query.page);
+      const pageSize = req.query.page_size === undefined ? 50 : Number(req.query.page_size);
+      if (!Number.isSafeInteger(page) || page < 1 || page > 100000 ||
+          !Number.isSafeInteger(pageSize) || pageSize < 1 || pageSize > 100) {
+        throw propertyFeeError('PROPERTY_COLLECTION_PAGINATION_INVALID');
+      }
+      const offset = (page - 1) * pageSize;
+      const filter = `b.source = 'property' AND b.amount > b.paid_amount
+        AND a.follow_up_date IS NOT NULL AND a.follow_up_date <= ?
+        AND a.id = (SELECT MAX(latest.id) FROM property_collection_actions latest WHERE latest.bill_id = a.bill_id)`;
+      const [countRows] = await req.tenantDb.execute(
+        `SELECT COUNT(*) AS total_count FROM property_collection_actions a
+           INNER JOIN bills b ON b.id = a.bill_id WHERE ${filter}`, [asOf]
+      );
+      const [rows] = await req.tenantDb.execute(
+        `SELECT a.id AS action_id, a.bill_id, a.action_type, a.outcome, a.contacted_at,
+                a.follow_up_date, a.note, b.room_id, r.room_no, b.tenant_id,
+                t.name AS tenant_name, ROUND(b.amount - b.paid_amount, 2) AS outstanding_amount,
+                DATEDIFF(?, a.follow_up_date) AS days_follow_up_overdue
+           FROM property_collection_actions a
+           INNER JOIN bills b ON b.id = a.bill_id
+           INNER JOIN rooms r ON r.id = b.room_id
+           LEFT JOIN tenants t ON t.id = b.tenant_id
+          WHERE ${filter}
+          ORDER BY a.follow_up_date ASC, a.id ASC LIMIT ? OFFSET ?`,
+        [asOf, asOf, pageSize, offset]
+      );
+      return res.json({
+        as_of: asOf, page, page_size: pageSize,
+        total_count: Number(countRows[0]?.total_count || 0),
+        items: rows.map(row => ({
+          action_id: Number(row.action_id), bill_id: Number(row.bill_id), action_type: row.action_type,
+          outcome: row.outcome, contacted_at: dateOnly(row.contacted_at),
+          follow_up_date: dateOnly(row.follow_up_date), note: row.note || '',
+          room_id: Number(row.room_id), room_no: row.room_no,
+          tenant_id: row.tenant_id === null ? null : Number(row.tenant_id),
+          tenant_name: row.tenant_name || '', outstanding_amount: Number(row.outstanding_amount),
+          days_follow_up_overdue: Number(row.days_follow_up_overdue)
+        }))
+      });
+    } catch (error) { return next(error); }
+  });
+  router.get('/property-fees/:billId/collection-actions', async (req, res, next) => {
+    try {
+      if (!req.tenantDb || typeof req.tenantDb.execute !== 'function') {
+        return res.status(503).json({ error: 'TENANT_DATABASE_UNAVAILABLE' });
+      }
+      const billId = Number(req.params.billId);
+      if (!Number.isSafeInteger(billId) || billId < 1) throw propertyFeeError('PROPERTY_COLLECTION_BILL_ID_INVALID');
+      const [billRows] = await req.tenantDb.execute(
+        "SELECT id FROM bills WHERE id = ? AND source = 'property' LIMIT 1", [billId]
+      );
+      if (!billRows.length) throw propertyFeeError('PROPERTY_COLLECTION_BILL_NOT_FOUND', 404);
+      const [rows] = await req.tenantDb.execute(
+        'SELECT id, bill_id, action_type, outcome, contacted_at, follow_up_date, note, created_at FROM property_collection_actions WHERE bill_id = ? ORDER BY contacted_at DESC, id DESC LIMIT 100',
+        [billId]
+      );
+      return res.json({ bill_id: billId, items: rows.map(row => ({
+        id: Number(row.id), bill_id: Number(row.bill_id), action_type: row.action_type, outcome: row.outcome,
+        contacted_at: dateOnly(row.contacted_at), follow_up_date: row.follow_up_date ? dateOnly(row.follow_up_date) : null,
+        note: row.note || '', created_at: row.created_at
+      })) });
+    } catch (error) { return next(error); }
+  });
   router.get('/property-fees/arrears', async (req, res, next) => {
     try {
       if (!req.tenantDb || typeof req.tenantDb.execute !== 'function') {
