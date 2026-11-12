@@ -6,8 +6,14 @@ function assertPool(pool) {
   if (!pool || typeof pool.query !== 'function') throw new TypeError('RECURRING_BILLING_POOL_REQUIRED');
 }
 function assertPeriod(appId, periodKey) {
-  const valid = appId === 'rental' ? /^\d{4}-\d{2}-\d{2}$/.test(periodKey || '') :
-    appId === 'property' ? /^\d{4}-(0[1-9]|1[0-2])$/.test(periodKey || '') : false;
+  let valid = false;
+  if (appId === 'rental' && /^\d{4}-\d{2}-\d{2}$/.test(periodKey || '')) {
+    const [year, month, day] = periodKey.split('-').map(Number);
+    const date = new Date(Date.UTC(year, month - 1, day));
+    valid = date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
+  } else if (appId === 'property') {
+    valid = /^\d{4}-(0[1-9]|1[0-2])$/.test(periodKey || '');
+  }
   if (!valid) throw new TypeError('RECURRING_BILLING_PERIOD_INVALID');
 }
 function assertWorker(value) {

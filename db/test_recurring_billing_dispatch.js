@@ -6,7 +6,7 @@ const { createRecurringBillingDispatchStore, assertPeriod } = require('../server
 const { createRecurringBillingDispatcher } = require('../server/recurring-billing-dispatcher');
 
 const tenant = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
-const row = { id: 5, tenant_uuid: tenant, app_id: 'property', job_type: 'property_fee', period_key: '2030-02', request_id: 'auto-property_fee-' + tenant + '-2030-02', state: 'dispatching', attempt_count: 1, lease_owner: 'worker-a', lease_expires_at: '2030-02-01 00:03:00', error_code: null };
+const row = { id: 5, tenantId: tenant, appId: 'property', jobType: 'property_fee', periodKey: '2030-02', requestId: 'auto-property_fee-' + tenant + '-2030-02', state: 'dispatching', attemptCount: 1, workerId: 'worker-a', leaseExpiresAt: '2030-02-01 00:03:00', errorCode: null };
 
 test('billing dispatch period validation is product-specific and strict', () => {
   assertPeriod('rental', '2030-02-01');
@@ -48,7 +48,7 @@ test('dispatcher uses tenant-local idempotent adapter and marks success only aft
   assert.deepEqual(calls.map(x => x[0]), ['claim', 'enqueue', 'dispatched']);
   assert.deepEqual(calls[1][1], {
     tenantId: tenant, appId: 'property', jobType: 'property_fee',
-    periodKey: '2030-02', requestId: row.request_id
+    periodKey: '2030-02', requestId: row.requestId
   });
 });
 
