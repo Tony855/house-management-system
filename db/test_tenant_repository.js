@@ -79,7 +79,8 @@ test('tenant repository rejects unreviewed and sensitive columns in reads, filte
   const repo = createTenantRepository({ pool, appId: 'rental' });
   await assert.rejects(repo.list('tenants', { columns: ['id', 'id_card'] }), /TENANT_COLUMN_NOT_ALLOWED/);
   await assert.rejects(repo.list('rooms', { filters: { password: 'x' } }), /TENANT_COLUMN_NOT_ALLOWED/);
-  await assert.rejects(repo.insert('tenants', { id_card: 'passport-number' }), /TENANT_COLUMN_NOT_ALLOWED/);
+  await assert.rejects(repo.list('tenants', { columns: ['id', 'license_no'] }), /TENANT_COLUMN_NOT_ALLOWED/);
+  await assert.rejects(repo.insert('tenants', { org_id: 999 }), /TENANT_COLUMN_NOT_ALLOWED/);
   await assert.rejects(repo.updateById('rooms', 1, { org_id: 999 }), /TENANT_COLUMN_NOT_ALLOWED/);
   assert.equal(pool.calls.length, 0);
 });
@@ -90,4 +91,17 @@ test('tenant repository defaults to explicit reviewed columns and never selects 
   await repo.list('org_employees', { limit: 5 });
   assert.match(pool.calls[0].sql, /^SELECT `id`, `company`, `owner_id`, `room_id`, `name`, `phone`, `department`, `position`, `remark`, `created_at` FROM/);
   assert.doesNotMatch(pool.calls[0].sql, /SELECT \*/);
+});
+
+test('tenant repository permits reviewed identity fields for writes without exposing them in reads', async () => {
+  const pool = fakePool();
+  const rental = createTenantRepository({ pool, appId: 'rental' });
+  await rental.insert('tenants', { name: 'Resident', id_card: 'ID-123' });
+  await rental.updateById('tenants', 1, { id_card: 'ID-456' });
+  const property = createTenantRepository({ pool, appId: 'property' });
+  await property.insert('tenants', { name: 'Company', license_no: 'LIC-123' });
+  assert.match(pool.calls[0].sql, /\`id_card\`/);
+  assert.match(pool.calls[1].sql, /\`id_card\`/);
+  assert.match(pool.calls[2].sql, /\`license_no\`/);
+  assert.equal(pool.calls.some(call => /^SELECT/.test(call.sql) && /id_card|license_no/.test(call.sql)), false);
 });

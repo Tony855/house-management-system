@@ -59,6 +59,14 @@ function assertColumn(appId, table, column) {
   }
   return identifier(column);
 }
+function assertWriteColumn(appId, table, column) {
+  if (table === 'tenants' && (
+    (['rental', 'hotel'].includes(appId) && column === 'id_card') ||
+    (appId === 'property' && column === 'license_no')
+  )) return identifier(column);
+  return assertColumn(appId, table, column);
+}
+
 function normalizeFields(fields) {
   if (!fields || typeof fields !== 'object' || Array.isArray(fields)) throw new TypeError('TENANT_FIELDS_INVALID');
   const entries = Object.entries(fields);
@@ -116,7 +124,7 @@ function createTenantRepository({ pool, appId, queryable = pool, allowTransactio
   async function insert(table, fields) {
     const tableSql = assertTable(appId, table);
     const entries = normalizeFields(fields);
-    entries.forEach(([key]) => assertColumn(appId, table, key));
+    entries.forEach(([key]) => assertWriteColumn(appId, table, key));
     const [result] = await queryable.execute(
       'INSERT INTO ' + tableSql + ' (' + entries.map(([key]) => identifier(key)).join(', ') + ')' +
       ' VALUES (' + entries.map(() => '?').join(', ') + ')',
