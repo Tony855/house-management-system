@@ -212,8 +212,9 @@ test('POST /contracts/:id/terminate requires settled rent bills and leaves depos
   const calls=[]; const app=express(); app.use(express.json());
   app.use((req,_res,next)=>{req.tenantWrite=async input=>{calls.push(input);return input.mutate({
     execute:async (sql)=> {
-      if(sql.includes('FROM contracts')) return [[{id:9,room_id:3,tenant_id:8,start_date:'2026-01-01',end_date:'2026-12-31',deposit:'500.00',status:'active'}]];
+      if(sql.includes('id <> ?')) return [[]];
       if(sql.includes('outstanding_count')) return [[{outstanding_count:0,outstanding_amount:'0.00'}]];
+      if(sql.includes('FROM contracts')) return [[{id:9,room_id:3,tenant_id:8,start_date:'2026-01-01',end_date:'2026-12-31',deposit:'500.00',status:'active'}]];
       return [[]];
     },
     updateById:async(table,id,fields)=>{calls.push({table,id,fields});return {affectedRows:1};}
