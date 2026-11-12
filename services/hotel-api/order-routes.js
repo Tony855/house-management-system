@@ -86,6 +86,31 @@ function createHotelOrderRouter() {
       return res.json(result);
     } catch (error) { return next(error); }
   });
+  router.post('/rooms/:id/cleaning-complete', async (req, res, next) => {
+    try {
+      if (typeof req.tenantWrite !== 'function') return res.status(503).json({ error: 'TENANT_WRITE_UNAVAILABLE' });
+      const id = Number(req.params.id);
+      if (!Number.isSafeInteger(id) || id < 1 || !req.body || typeof req.body !== 'object' ||
+          Array.isArray(req.body) || Object.keys(req.body).length) throw hotelError('HOTEL_CLEANING_INPUT_INVALID');
+      const result = await req.tenantWrite({
+        operation: 'update', reason: req.get('x-operation-reason'),
+        stepUpToken: req.get('x-step-up-token'), requestId: req.get('idempotency-key'),
+        payload: { id, __resource: 'hotel-room-cleaning' },
+        mutate: async tx => {
+          const [rooms] = await tx.execute('SELECT id, status FROM rooms WHERE id = ? LIMIT 1 FOR UPDATE', [id]);
+          if (!rooms.length) throw hotelError('ROOM_NOT_FOUND', 404);
+          if (rooms[0].status !== 'cleaning') throw hotelError('ROOM_NOT_IN_CLEANING', 409);
+          const [activeOrders] = await tx.execute(
+            "SELECT id FROM orders WHERE room_id = ? AND status IN ('booked','checked_in') LIMIT 1 FOR UPDATE", [id]
+          );
+          if (activeOrders.length) throw hotelError('ROOM_HAS_ACTIVE_ORDER', 409);
+          await tx.updateById('rooms', id, { status: 'vacant' });
+          return { room_id: id, status: 'vacant' };
+        }
+      });
+      return res.json(result);
+    } catch (error) { return next(error); }
+  });
   return router;
 }
 

@@ -207,3 +207,35 @@ test('finance reconciliation runs against the authenticated tenant database and 
     assert.match(calls[0].sql,/FROM bill_transactions/);
   } finally {await new Promise(resolve=>server.close(resolve));}
 });
+
+
+test('hotel cleaning completion requires a cleaning room and no active orders', async () => {
+  const calls=[]; const app=express(); app.use(express.json());
+  app.use((req,_res,next)=>{req.tenantWrite=async input=>{calls.push(input);return input.mutate({
+    execute:async sql=>sql.includes('FROM rooms')?[[{id:12,status:'cleaning'}]]:[[]],
+    updateById:async(table,id,fields)=>{calls.push({table,id,fields});return {affectedRows:1};}
+  });};next();});
+  app.use('/api',createHotelOrderRouter()); app.use((e,_q,res,_n)=>res.status(e.status||500).json({error:e.code||'ERROR'}));
+  const server=http.createServer(app);await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  try {
+    const response=await fetch('http://127.0.0.1:'+server.address().port+'/api/rooms/12/cleaning-complete',{method:'POST',
+      headers:{'content-type':'application/json','x-operation-reason':'Complete hotel room cleaning','x-step-up-token':'step-up-token-123456789','idempotency-key':'hotel-cleaning-0001'},body:'{}'});
+    assert.equal(response.status,200);assert.deepEqual(await response.json(),{room_id:12,status:'vacant'});
+    assert.equal(calls[0].payload.__resource,'hotel-room-cleaning');
+    assert.ok(calls.some(x=>x.table==='rooms'&&x.fields.status==='vacant'));
+  } finally {await new Promise(resolve=>server.close(resolve));}
+});
+
+test('hotel cleaning completion rejects a room that is not in cleaning state', async () => {
+  const app=express();app.use(express.json());
+  app.use((req,_res,next)=>{req.tenantWrite=input=>input.mutate({
+    execute:async()=>[[{id:12,status:'vacant'}]],updateById:async()=>{throw new Error('must not change room');}
+  });next();});
+  app.use('/api',createHotelOrderRouter());app.use((e,_q,res,_n)=>res.status(e.status||500).json({error:e.code||'ERROR'}));
+  const server=http.createServer(app);await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  try {
+    const response=await fetch('http://127.0.0.1:'+server.address().port+'/api/rooms/12/cleaning-complete',{method:'POST',
+      headers:{'content-type':'application/json','x-operation-reason':'Complete hotel room cleaning','x-step-up-token':'step-up-token-123456789','idempotency-key':'hotel-cleaning-invalid-0001'},body:'{}'});
+    assert.equal(response.status,409);assert.deepEqual(await response.json(),{error:'ROOM_NOT_IN_CLEANING'});
+  } finally {await new Promise(resolve=>server.close(resolve));}
+});

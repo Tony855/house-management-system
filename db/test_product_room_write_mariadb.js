@@ -245,9 +245,29 @@ async function main() {
         assert.equal(orderCheckout.status, 200, 'hotel order check-out');
         const [[cleaningRoom]] = await pool.query('SELECT status FROM rooms WHERE id = ?', [availableRoom.id]);
         assert.equal(cleaningRoom.status, 'cleaning', 'hotel check-out sends room to cleaning');
+        const cleaningComplete = await hotelOrderRequest(base, 'POST', '/api/rooms/' + availableRoom.id + '/cleaning-complete', {}, 'ci-hotel-cleaning-complete-0001');
+        assert.equal(cleaningComplete.status, 200, 'hotel cleaning completion');
+        const [[cleanedRoom]] = await pool.query('SELECT status FROM rooms WHERE id = ?', [availableRoom.id]);
+        assert.equal(cleanedRoom.status, 'vacant', 'cleaning completion releases room');
+
         const [[checkoutBill]] = await pool.query('SELECT source, room_id, tenant_id, order_id, amount, paid_amount, status FROM bills WHERE order_id = ?', [order.id]);
         assert.deepEqual(checkoutBill, { source: 'hotel', room_id: availableRoom.id, tenant_id: tenantBody.id, order_id: order.id, amount: '240.00', paid_amount: '0.00', status: 'unpaid' }, 'hotel checkout creates receivable exactly once');
 
+        const cancelRoomResponse = await post(base, { building_id: buildingBody.id, room_no: 'CI-H-CANCEL-ROOM', day_price: 40, deposit: 15, status: 'vacant' }, 'ci-hotel-cancel-room-0001');
+        assert.equal(cancelRoomResponse.status, 201, 'hotel cancellation room create');
+        const cancelRoom = await cancelRoomResponse.json();
+        const cancelOrderResponse = await hotelOrderRequest(base, 'POST', '/api/orders', {
+          order_no: 'CI-H-CANCEL-0001', room_id: cancelRoom.id, guest_id: tenantBody.id,
+          check_in_date: '2031-01-02', check_out_date: '2031-01-04'
+        }, 'ci-hotel-cancel-order-0001');
+        assert.equal(cancelOrderResponse.status, 201, 'hotel cancellation order create');
+        const cancelOrder = await cancelOrderResponse.json();
+        const cancelResponse = await hotelOrderRequest(base, 'PATCH', '/api/orders/' + cancelOrder.id + '/status', { status: 'cancelled' }, 'ci-hotel-cancel-order-status-0001');
+        assert.equal(cancelResponse.status, 200, 'hotel booking cancellation');
+        const [[cancelledOrder]] = await pool.query('SELECT status FROM orders WHERE id = ?', [cancelOrder.id]);
+        const [[cancelledRoom]] = await pool.query('SELECT status FROM rooms WHERE id = ?', [cancelRoom.id]);
+        assert.equal(cancelledOrder.status, 'cancelled', 'hotel cancellation persisted');
+        assert.equal(cancelledRoom.status, 'vacant', 'hotel cancellation releases room');
         const invalidReentry = await hotelOrderRequest(base, 'PATCH', '/api/orders/' + order.id + '/status', { status: 'checked_in' }, 'ci-hotel-order-reentry-0001');
         assert.equal(invalidReentry.status, 409, 'hotel order cannot re-enter after checkout');
       }
