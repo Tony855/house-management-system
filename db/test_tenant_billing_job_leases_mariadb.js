@@ -14,13 +14,13 @@ test('MariaDB enforces single-owner leases, retry scheduling, terminal cutoff an
   assert.equal(results.reduce((a,b)=>a+b,0),1,'exactly one concurrent worker must acquire the job');
   const [owned]=await pool.execute("SELECT lease_owner,lease_token,attempt_count FROM property_fee_generation_jobs WHERE billing_month=?",[month]);
   assert.equal(owned.length,1);assert.equal(Number(owned[0].attempt_count),0,'claiming must not count as a failed attempt');
-  const oldToken=owned[0].lease_token;
+  const oldToken=owned[0].lease_token,oldOwner=owned[0].lease_owner;
   await pool.execute("UPDATE property_fee_generation_jobs SET lease_expires_at=DATE_SUB(UTC_TIMESTAMP(),INTERVAL 1 SECOND) WHERE billing_month=?",[month]);
   const reclaimed=await claim('worker-recovery',tokenC);
   assert.equal(reclaimed,1,'expired lease must be reclaimable');
   const [recovered]=await pool.execute("SELECT lease_owner,lease_token,attempt_count,lease_expires_at>UTC_TIMESTAMP() AS live FROM property_fee_generation_jobs WHERE billing_month=?",[month]);
   assert.equal(recovered[0].lease_owner,'worker-recovery');assert.equal(recovered[0].lease_token,tokenC);assert.equal(Number(recovered[0].attempt_count),0);assert.equal(Number(recovered[0].live),1);
-  const [stale]=await pool.execute("UPDATE property_fee_generation_jobs SET state='completed' WHERE billing_month=? AND lease_token=? AND lease_owner='worker-a'",[month,oldToken]);
+  const [stale]=await pool.execute("UPDATE property_fee_generation_jobs SET state='completed' WHERE billing_month=? AND lease_token=? AND lease_owner=?",[month,oldToken,oldOwner]);
   assert.equal(Number(stale.affectedRows),0,'a stale worker token must not complete a reclaimed job');
   await pool.execute("UPDATE property_fee_generation_jobs SET state='queued',lease_owner=NULL,lease_token=NULL,lease_expires_at=NULL,next_attempt_at=DATE_ADD(UTC_TIMESTAMP(),INTERVAL 60 SECOND) WHERE billing_month=?",[month]);
   assert.equal(await claim('too-early',tokenA),0,'a future retry must not be claimed early');
