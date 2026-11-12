@@ -107,3 +107,23 @@ test('platform runtime keeps recurring billing scheduler disabled without a secr
   assert.equal(runtime.app.locals.recurringBillingRunner, undefined);
   await runtime.close();
 });
+
+test('platform runtime starts an injected tenant billing worker and drains it before DB close', async () => {
+  const calls = [];
+  const config = options({
+    tenantSecretManager: { getSecret: async () => ({ user: 'tenant-user', password: 'tenant-password', version: 'v1' }) },
+    billingJobWorker: { start: () => calls.push('start'), stop: async () => calls.push('stop') }
+  });
+  const runtime = createPlatformApiRuntime(config);
+  assert.equal(runtime.app.locals.tenantBillingJobWorker, config.billingJobWorker);
+  assert.deepEqual(calls, ['start']);
+  await runtime.close();
+  assert.deepEqual(calls, ['start', 'stop']);
+  assert.equal(config.pool.ended, 1);
+});
+
+test('platform runtime rejects a billing worker without tenant secret manager', () => {
+  assert.throws(() => createPlatformApiRuntime(options({
+    billingJobWorker: { start() {}, stop: async () => {} }
+  })), /PLATFORM_BILLING_JOB_WORKER_DEPENDENCIES_REQUIRED/);
+});

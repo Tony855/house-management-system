@@ -17,9 +17,10 @@ function createPlatformApiRuntime({
   env = process.env, createPool, mfaEncryption, recoveryCodePepper, loginRateLimitHmacKey,
   signingKeyProvider, verificationKeyProvider, issuer, authOptions,
   migrationConnectionResolver, migrationWorkerId, migrationConcurrency,
-  tenantSecretManager, tenantPoolCreatePool = mysql.createPool, billingWorkerId, billingPollIntervalMs
+  tenantSecretManager, tenantPoolCreatePool = mysql.createPool, billingWorkerId, billingPollIntervalMs, billingJobWorker
 } = {}) {
   if (!mfaEncryption || !signingKeyProvider || !verificationKeyProvider) throw new TypeError('PLATFORM_SECURITY_DEPENDENCIES_REQUIRED');
+  if (billingJobWorker && (tenantSecretManager === undefined || typeof billingJobWorker.start !== 'function' || typeof billingJobWorker.stop !== 'function')) throw new TypeError('PLATFORM_BILLING_JOB_WORKER_DEPENDENCIES_REQUIRED');
   const platformPool = createPlatformPool({ env, ...(createPool ? { createPool } : {}) });
   try {
     const auth = createPlatformAdminAuthDependencies({
@@ -37,6 +38,7 @@ function createPlatformApiRuntime({
     });
     let tenantPoolManager = null;
     let recurringBillingRunner = null;
+    let tenantBillingJobWorker = null;
     if (tenantSecretManager !== undefined) {
       const registry = createPlatformTenantRegistry(platformPool);
       const secretProvider = createTenantDatabaseSecretProvider(tenantSecretManager);
@@ -62,6 +64,14 @@ function createPlatformApiRuntime({
     } else {
       app.locals.stopRecurringBillingRunner = async () => {};
     }
+    if (billingJobWorker) {
+      tenantBillingJobWorker = billingJobWorker;
+      tenantBillingJobWorker.start();
+      app.locals.tenantBillingJobWorker = tenantBillingJobWorker;
+      app.locals.stopTenantBillingJobWorker = () => tenantBillingJobWorker.stop();
+    } else {
+      app.locals.stopTenantBillingJobWorker = async () => {};
+    }
     let closed = false;
     return Object.freeze({
       app, pool: platformPool, auth,
@@ -69,6 +79,7 @@ function createPlatformApiRuntime({
         if (closed) return;
         closed = true;
         if (typeof app.locals.stopRecurringBillingRunner === 'function') await app.locals.stopRecurringBillingRunner();
+        if (typeof app.locals.stopTenantBillingJobWorker === 'function') await app.locals.stopTenantBillingJobWorker();
         if (tenantPoolManager) await tenantPoolManager.closeAll();
         if (typeof app.locals.stopTenantMigrationRunner === 'function') await app.locals.stopTenantMigrationRunner();
         if (typeof platformPool.end === 'function') await platformPool.end();
