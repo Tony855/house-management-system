@@ -527,16 +527,27 @@ function createRentalWriteRouter() {
       if (!Number.isSafeInteger(id) || id < 1) throw contractError('RENTAL_DEPOSIT_CONTRACT_ID_INVALID');
       const [rows] = await req.tenantDb.execute('SELECT id, deposit, status FROM contracts WHERE id = ? LIMIT 1', [id]);
       if (!rows.length) throw contractError('CONTRACT_NOT_FOUND', 404);
+      const page = req.query.page === undefined ? 1 : Number(req.query.page);
+      const pageSize = req.query.page_size === undefined ? 50 : Number(req.query.page_size);
+      if (!Number.isSafeInteger(page) || page < 1 || page > 100000 ||
+          !Number.isSafeInteger(pageSize) || pageSize < 1 || pageSize > 100) {
+        throw contractError('RENTAL_DEPOSIT_PAGINATION_INVALID');
+      }
+      const offset = (page - 1) * pageSize;
       const balance = await readRentalDepositBalance(req.tenantDb, id);
-      const [transactions] = await req.tenantDb.execute(
-        'SELECT id, transaction_type, amount, pay_method, external_reference, note, transaction_date, created_at FROM rental_contract_deposit_transactions WHERE contract_id = ? ORDER BY id DESC LIMIT 100',
-        [id]
-      );
+      const [[countRows], [transactions]] = await Promise.all([
+        req.tenantDb.execute('SELECT COUNT(*) AS total_count FROM rental_contract_deposit_transactions WHERE contract_id = ?', [id]),
+        req.tenantDb.execute(
+          'SELECT id, transaction_type, amount, pay_method, external_reference, note, transaction_date, created_at FROM rental_contract_deposit_transactions WHERE contract_id = ? ORDER BY id DESC LIMIT ? OFFSET ?',
+          [id, pageSize, offset]
+        )
+      ]);
       const expected_amount = Number(rows[0].deposit);
       return res.json({ contract_id: id, contract_status: rows[0].status, expected_amount, ...balance,
         remaining_to_receive: Math.round((expected_amount - balance.received_amount) * 100) / 100,
         settlement_status: balance.held_amount <= 0 && balance.received_amount > 0 ? 'settled' :
           (balance.refunded_amount + balance.deducted_amount > 0 ? 'partially_settled' : 'pending'),
+        page, page_size: pageSize, total_count: Number(countRows[0].total_count || 0),
         transactions });
     } catch (error) { return next(error); }
   });

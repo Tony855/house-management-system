@@ -383,3 +383,27 @@ test('durable rental bill job ID validation rejects invalid identifiers', () => 
     assert.throws(() => validateRentalBillJobId(value), error => error.code === 'RENTAL_BILL_JOB_ID_INVALID');
   }
 });
+
+test('GET rental deposit ledger paginates history while returning complete balances and rejects invalid paging', async () => {
+  const calls=[]; const app=express();
+  app.use((req,_res,next)=>{req.tenantDb={execute:async(sql,params)=>{
+    calls.push({sql,params});
+    if(sql.includes('SELECT id, deposit, status FROM contracts')) return [[{id:9,deposit:'500.00',status:'terminated'}]];
+    if(sql.includes('SUM(CASE WHEN transaction_type')) return [[{received_amount:'500.00',refunded_amount:'100.00',deducted_amount:'25.00'}]];
+    if(sql.includes('COUNT(*) AS total_count')) return [[{total_count:135}]];
+    if(sql.includes('ORDER BY id DESC LIMIT')) return [[{id:110,transaction_type:'refund',amount:'20.00'}]];
+    throw new Error('UNEXPECTED_SQL');
+  }};next();});
+  app.use('/api',createRentalWriteRouter());app.use((e,_q,res,_n)=>res.status(e.status||500).json({error:e.code||'ERROR'}));
+  const server=http.createServer(app);await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  try {
+    const response=await fetch('http://127.0.0.1:'+server.address().port+'/api/contracts/9/deposit?page=3&page_size=25');
+    assert.equal(response.status,200);const body=await response.json();
+    assert.equal(body.page,3);assert.equal(body.page_size,25);assert.equal(body.total_count,135);
+    assert.equal(body.held_amount,375);assert.equal(body.remaining_to_receive,0);
+    assert.equal(body.settlement_status,'partially_settled');assert.equal(body.transactions[0].id,110);
+    assert.deepEqual(calls.find(x=>x.sql.includes('ORDER BY id DESC LIMIT')).params,[9,25,50]);
+    const invalid=await fetch('http://127.0.0.1:'+server.address().port+'/api/contracts/9/deposit?page=1&page_size=101');
+    assert.equal(invalid.status,400);assert.deepEqual(await invalid.json(),{error:'RENTAL_DEPOSIT_PAGINATION_INVALID'});
+  } finally {await new Promise(resolve=>server.close(resolve));}
+});
