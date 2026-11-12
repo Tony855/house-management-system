@@ -293,3 +293,85 @@ test('rental deposit receipts, refunds and deductions enforce contract state and
     assert.equal(ledger.length,3);
   } finally {await new Promise(resolve=>server.close(resolve));}
 });
+
+
+test('tenant-wide rental bill batch is bounded, resumable by contract cursor and skips future periods', async () => {
+  const app = express();
+  app.use(express.json());
+  const created = [];
+  const calls = [];
+  const contracts = [
+    { id: 3, room_id: 10, tenant_id: 20, contract_no: 'R-3', start_date: '2026-01-01', end_date: '2027-12-31', rent: '100.00', pay_cycle: 1, status: 'active' },
+    { id: 4, room_id: 11, tenant_id: 21, contract_no: 'R-4', start_date: '2027-01-01', end_date: '2027-12-31', rent: '200.00', pay_cycle: 1, status: 'active' },
+    { id: 5, room_id: 12, tenant_id: 22, contract_no: 'R-5', start_date: '2026-02-01', end_date: '2027-12-31', rent: '300.00', pay_cycle: 1, status: 'active' }
+  ];
+  app.use((req, _res, next) => {
+    req.tenantWrite = async input => {
+      calls.push(input);
+      return input.mutate({
+        execute: async (sql, params) => {
+          if (sql.includes("FROM contracts WHERE status = 'active'")) {
+            assert.equal(params[0], 0);
+            assert.equal(params[1], 3);
+            return [contracts];
+          }
+          if (sql.includes('FROM bills WHERE contract_id')) {
+            return [params[0] === 3 ? [{ period_end: '2026-10-31' }] : []];
+          }
+          throw new Error('UNEXPECTED_SQL');
+        },
+        insert: async (_table, bill) => {
+          created.push(bill);
+          return { insertId: created.length };
+        }
+      });
+    };
+    next();
+  });
+  app.use('/api', createRentalWriteRouter());
+  app.use((error, _req, res, _next) => res.status(error.status || 500).json({ error: error.code || 'ERROR' }));
+  const server = http.createServer(app);
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const response = await fetch('http://127.0.0.1:' + server.address().port + '/api/rental-bills/generate-due', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-operation-reason': 'Monthly rental bill batch', 'x-step-up-token': 'step-up-token-123456789', 'idempotency-key': 'rental-bill-batch-000001' },
+      body: JSON.stringify({ as_of: '2026-11-12', after_contract_id: 0, limit: 2 })
+    });
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    assert.equal(payload.processed_count, 2);
+    assert.equal(payload.generated_count, 1);
+    assert.equal(payload.skipped_count, 1);
+    assert.equal(payload.next_after_contract_id, 4);
+    assert.equal(payload.has_more, true);
+    assert.equal(created[0].contract_id, 3);
+    assert.equal(created[0].period_start, '2026-11-01');
+    assert.equal(created[0].amount, 100);
+    assert.equal(calls[0].payload.__resource, 'rental-bill-batch');
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+  }
+});
+
+test('tenant-wide rental bill batch rejects unbounded limits and invalid cursors before writing', async () => {
+  let writes = 0;
+  const app = express();
+  app.use(express.json());
+  app.use((req, _res, next) => { req.tenantWrite = async () => { writes++; }; next(); });
+  app.use('/api', createRentalWriteRouter());
+  app.use((error, _req, res, _next) => res.status(error.status || 500).json({ error: error.code || 'ERROR' }));
+  const server = http.createServer(app);
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  try {
+    for (const body of [{ limit: 5000 }, { after_contract_id: -1 }, { as_of: '2026-02-30' }, { unexpected: true }]) {
+      const response = await fetch('http://127.0.0.1:' + server.address().port + '/api/rental-bills/generate-due', {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body)
+      });
+      assert.equal(response.status, 400);
+    }
+    assert.equal(writes, 0);
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+  }
+});

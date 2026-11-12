@@ -251,6 +251,69 @@ function createRentalWriteRouter() {
       return res.status(201).json(result);
     } catch (error) { return next(error); }
   });
+  // Bounded tenant-wide batch entry point for schedulers. Each call is one audited
+  // tenant transaction and advances by contract ID; callers can resume with the
+  // returned cursor without loading an unbounded contract set.
+  router.post('/rental-bills/generate-due', async (req, res, next) => {
+    try {
+      if (typeof req.tenantWrite !== 'function') return res.status(503).json({ error: 'TENANT_WRITE_UNAVAILABLE' });
+      const body = req.body;
+      if (!body || typeof body !== 'object' || Array.isArray(body) ||
+          Object.keys(body).some(key => !['as_of', 'after_contract_id', 'limit'].includes(key))) {
+        throw contractError('RENTAL_BILL_BATCH_INPUT_INVALID');
+      }
+      const asOf = body.as_of === undefined ? new Date().toISOString().slice(0, 10) : body.as_of;
+      const afterId = body.after_contract_id === undefined ? 0 : Number(body.after_contract_id);
+      const limit = body.limit === undefined ? 50 : Number(body.limit);
+      if (!validDate(asOf) || !Number.isSafeInteger(afterId) || afterId < 0 ||
+          !Number.isSafeInteger(limit) || limit < 1 || limit > 50) {
+        throw contractError('RENTAL_BILL_BATCH_INPUT_INVALID');
+      }
+      const result = await req.tenantWrite({
+        operation: 'create', reason: req.get('x-operation-reason'),
+        stepUpToken: req.get('x-step-up-token'), requestId: req.get('idempotency-key'),
+        payload: { as_of: asOf, after_contract_id: afterId, limit, __resource: 'rental-bill-batch' },
+        mutate: async tx => {
+          const [contracts] = await tx.execute(
+            "SELECT * FROM contracts WHERE status = 'active' AND id > ? ORDER BY id ASC LIMIT ? FOR UPDATE",
+            [afterId, limit + 1]
+          );
+          const batch = contracts.slice(0, limit);
+          const bills = [];
+          let skipped = 0;
+          for (const contract of batch) {
+            const [lastBills] = await tx.execute(
+              'SELECT period_end FROM bills WHERE contract_id = ? AND source = ? ORDER BY period_end DESC LIMIT 1 FOR UPDATE',
+              [contract.id, 'rental']
+            );
+            try {
+              const bill = buildNextRentalBill(
+                contract,
+                lastBills.length ? String(lastBills[0].period_end).slice(0, 10) : null,
+                asOf
+              );
+              const inserted = await tx.insert('bills', bill);
+              bills.push({ id: Number(inserted.insertId), ...bill });
+            } catch (error) {
+              if (['RENTAL_BILL_NOT_DUE', 'CONTRACT_PERIOD_FINISHED'].includes(error.code)) {
+                skipped += 1;
+                continue;
+              }
+              throw error;
+            }
+          }
+          const cursor = batch.length ? Number(batch[batch.length - 1].id) : afterId;
+          return {
+            as_of: asOf, after_contract_id: afterId, next_after_contract_id: cursor,
+            processed_count: batch.length, generated_count: bills.length, skipped_count: skipped,
+            has_more: contracts.length > limit, bills
+          };
+        }
+      });
+      return res.status(200).json(result);
+    } catch (error) { return next(error); }
+  });
+
   router.post('/contracts/:id/renew', async (req, res, next) => {
     try {
       if (typeof req.tenantWrite !== 'function') return res.status(503).json({ error: 'TENANT_WRITE_UNAVAILABLE' });
