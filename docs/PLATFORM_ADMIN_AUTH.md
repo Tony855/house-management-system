@@ -47,3 +47,6 @@ Still required before production activation:
 Run platform migrations against disposable MariaDB, verify schema versioning, KMS round trips, key rotation, concurrent rate limiting, challenge expiry/replay/lockout, recovery-code single use, session revocation, permission refresh and step-up expiry. Confirm logs contain no authentication secrets. Keep PR in Draft until all production acceptance gates and review are complete.
 
 The legacy runtime remains the production entrypoint until the migration and cutover plan is completed.
+
+
+MFA reset HTTP route is fail-closed and returns `503 PLATFORM_MFA_RECOVERY_UNAVAILABLE` until trusted-channel identity verification, a short-lived single-use enrollment grant, and secure delivery are integrated into the production runtime. The underlying transactional reset store method is not exposed by the HTTP route.
