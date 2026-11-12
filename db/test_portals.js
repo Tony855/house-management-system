@@ -33,5 +33,5 @@ test('platform portal is separate from tenant product entrypoints', () => {
   assert.match(html, /Super Admin/);
   assert.match(html, /平台总管理/);
   assert.match(html, /平台账单/);
-  assert.match(html, /禁止读取租户业务数据库/);
+  assert.match(html, /禁止读取租户业务数据库/);\n  const js = fs.readFileSync('apps/super-admin-web/portal.js', 'utf8');\n  assert.match(js, /mfa\\/verify/);\n  assert.match(js, /api\\/platform\\/auth\\/login/);
 });
