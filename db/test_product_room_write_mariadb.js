@@ -351,22 +351,26 @@ async function main() {
         assert.equal(nextBillResponse.status, 201, 'rental next contract billing period');
         const nextBill = await nextBillResponse.json();
         assert.equal(nextBill.period_start, '2020-02-01', 'rental next period follows last bill');
-        const rentalBatch = await writeBuilding(base, 'POST', '/api/rental-bills/generate-due', {
-          as_of: '2020-03-01', after_contract_id: 0, limit: 50
-        }, 'ci-rental-bill-batch-0001');
+        const [rentalBatch, rentalBatchConcurrent] = await Promise.all([
+          writeBuilding(base, 'POST', '/api/rental-bills/generate-due', {
+            as_of: '2020-03-01', after_contract_id: 0, limit: 50
+          }, 'ci-rental-bill-batch-0001'),
+          writeBuilding(base, 'POST', '/api/rental-bills/generate-due', {
+            as_of: '2020-03-01', after_contract_id: 0, limit: 50
+          }, 'ci-rental-bill-batch-0002')
+        ]);
         assert.equal(rentalBatch.status, 200, 'tenant-wide rental due bill batch');
-        const rentalBatchBody = await rentalBatch.json();
+        assert.equal(rentalBatchConcurrent.status, 200, 'concurrent tenant-wide rental batch');
+        const [rentalBatchBody, rentalBatchConcurrentBody] = await Promise.all([rentalBatch.json(), rentalBatchConcurrent.json()]);
         assert.equal(rentalBatchBody.processed_count, 1, 'rental batch processes active contract');
-        assert.equal(rentalBatchBody.generated_count, 1, 'rental batch creates next due period');
         assert.equal(rentalBatchBody.next_after_contract_id, contract.id, 'rental batch returns resumable contract cursor');
         assert.equal(rentalBatchBody.has_more, false, 'rental batch reports completion');
-        assert.equal(rentalBatchBody.bills[0].period_start, '2020-03-01', 'rental batch advances from prior period');
-        const rentalBatchReplay = await writeBuilding(base, 'POST', '/api/rental-bills/generate-due', {
-          as_of: '2020-03-01', after_contract_id: 0, limit: 50
-        }, 'ci-rental-bill-batch-0002');
-        assert.equal(rentalBatchReplay.status, 200, 'rental batch replay is safe');
+        assert.equal(rentalBatchBody.generated_count + rentalBatchConcurrentBody.generated_count, 1,
+          'concurrent batch requests generate the due period exactly once');
+        const generatedBatch = rentalBatchBody.generated_count === 1 ? rentalBatchBody : rentalBatchConcurrentBody;
+        assert.equal(generatedBatch.bills[0].period_start, '2020-03-01', 'rental batch advances from prior period');
         const [[rentalBatchCount]] = await pool.query('SELECT COUNT(*) AS total FROM bills WHERE contract_id = ? AND source = ?', [contract.id, 'rental']);
-        assert.equal(Number(rentalBatchCount.total), 3, 'rental batch does not duplicate prior periods');
+        assert.equal(Number(rentalBatchCount.total), 3, 'concurrent rental batch does not duplicate prior periods');
         const renewalResponse = await writeBuilding(base, 'POST', '/api/contracts/' + contract.id + '/renew', {
           end_date: '2041-12-31', rent: 130, deposit: 25, pay_cycle: 1
         }, 'ci-rental-contract-renew-0001');
