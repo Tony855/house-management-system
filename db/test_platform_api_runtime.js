@@ -92,6 +92,7 @@ test('platform runtime leaves migration worker disabled when no secure resolver 
 test('platform runtime refuses to start recurring billing scheduler without system authorization', () => {
   const config = options({
     tenantSecretManager: { getSecret: async () => ({ user: 'tenant-user', password: 'tenant-password', version: 'v1' }) },
+    billingSchedulerEnabled: true,
     billingWorkerId: 'billing-runtime-worker',
     billingPollIntervalMs: 60000
   });
@@ -103,6 +104,7 @@ test('platform runtime enables recurring billing scheduler only with secret mana
   const config = options({
     tenantSecretManager: { getSecret: async () => ({ user: 'tenant-user', password: 'tenant-password', version: 'v1' }) },
     billingSystemWriteAuthorizer: async () => true,
+    billingSchedulerEnabled: true,
     billingWorkerId: 'billing-runtime-worker',
     billingPollIntervalMs: 60000
   });
@@ -119,7 +121,7 @@ test('platform runtime keeps recurring billing scheduler disabled without a secr
   await runtime.close();
 });
 
-test('platform runtime refuses an injected tenant billing worker without system authorization', () => {
+test('platform runtime refuses an explicitly enabled tenant billing worker without system authorization', () => {
   const config = options({
     tenantSecretManager: { getSecret: async () => ({ user: 'tenant-user', password: 'tenant-password', version: 'v1' }) },
     billingJobWorker: { start() {}, stop: async () => {} }
@@ -154,6 +156,7 @@ test('platform runtime composes an automatic billing processor only with explici
     tenantSecretManager: { getSecret: async () => ({ user: 'tenant-user', password: 'tenant-password', version: 'v1' }) },
     billingSystemWriteAuthorizer: async () => true,
     billingWorkerId: 'billing-runtime-worker',
+    billingJobWorkerEnabled: true,
     billingJobWorkerConcurrency: 2
   });
   const runtime = createPlatformApiRuntime(config);
@@ -164,9 +167,10 @@ test('platform runtime composes an automatic billing processor only with explici
   assert.equal(config.pool.ended, 1);
 });
 
-test('platform runtime rejects tenant secret manager without system authorization before allocating resources', () => {
+test('platform runtime rejects an explicitly enabled billing scheduler without system authorization before allocating resources', () => {
   const config = options({
-    tenantSecretManager: { getSecret: async () => ({ user: 'tenant-user', password: 'tenant-password', version: 'v1' }) }
+    tenantSecretManager: { getSecret: async () => ({ user: 'tenant-user', password: 'tenant-password', version: 'v1' }) },
+    billingSchedulerEnabled: true
   });
   assert.throws(() => createPlatformApiRuntime(config), /PLATFORM_BILLING_SYSTEM_AUTHORIZER_REQUIRED/);
   assert.equal(config.pool.ended, 0);
@@ -178,4 +182,31 @@ test('platform runtime exposes configured billing lease and chunk bounds to the 
   assert.equal(runtime.app.locals.tenantBillingJobProcessor.leaseSeconds, 900);
   assert.equal(runtime.app.locals.tenantBillingJobProcessor.chunkSize, 25);
   await runtime.close();
+});
+
+
+test('platform runtime keeps scheduler and processor disabled by default even when tenant credentials and authorizer exist', async () => {
+  const config = options({
+    tenantSecretManager: { getSecret: async () => ({ user: 'tenant-user', password: 'tenant-password', version: 'v1' }) },
+    billingSystemWriteAuthorizer: async () => true
+  });
+  const runtime = createPlatformApiRuntime(config);
+  assert.equal(runtime.app.locals.recurringBillingRunner, undefined);
+  assert.equal(runtime.app.locals.tenantBillingJobWorker, undefined);
+  await runtime.close();
+  assert.equal(config.pool.ended, 1);
+});
+
+test('platform runtime can enable scheduler without enabling tenant bill generation worker', async () => {
+  const config = options({
+    tenantSecretManager: { getSecret: async () => ({ user: 'tenant-user', password: 'tenant-password', version: 'v1' }) },
+    billingSystemWriteAuthorizer: async () => true,
+    billingSchedulerEnabled: true,
+    billingPollIntervalMs: 60000
+  });
+  const runtime = createPlatformApiRuntime(config);
+  assert.equal(runtime.app.locals.recurringBillingRunner.isRunning(), true);
+  assert.equal(runtime.app.locals.tenantBillingJobWorker, undefined);
+  await runtime.close();
+  assert.equal(config.pool.ended, 1);
 });

@@ -19,11 +19,12 @@ function createPlatformApiRuntime({
   env = process.env, createPool, mfaEncryption, recoveryCodePepper, loginRateLimitHmacKey,
   signingKeyProvider, verificationKeyProvider, issuer, authOptions,
   migrationConnectionResolver, migrationWorkerId, migrationConcurrency,
-  tenantSecretManager, tenantPoolCreatePool = mysql.createPool, billingWorkerId, billingPollIntervalMs, billingJobWorker, billingSystemWriteAuthorizer, billingJobWorkerConcurrency = 4, billingJobLeaseSeconds = Number(env.BILLING_JOB_LEASE_SECONDS || 600), billingJobChunkSize = Number(env.BILLING_JOB_CHUNK_SIZE || 50)
+  tenantSecretManager, tenantPoolCreatePool = mysql.createPool, billingWorkerId, billingPollIntervalMs, billingJobWorker, billingSystemWriteAuthorizer, billingSchedulerEnabled = env.BILLING_SCHEDULER_ENABLED === 'true', billingJobWorkerEnabled = env.BILLING_JOB_WORKER_ENABLED === 'true', billingJobWorkerConcurrency = 4, billingJobLeaseSeconds = Number(env.BILLING_JOB_LEASE_SECONDS || 600), billingJobChunkSize = Number(env.BILLING_JOB_CHUNK_SIZE || 50)
 } = {}) {
   if (!mfaEncryption || !signingKeyProvider || !verificationKeyProvider) throw new TypeError('PLATFORM_SECURITY_DEPENDENCIES_REQUIRED');
   if (billingJobWorker && (tenantSecretManager === undefined || typeof billingJobWorker.start !== 'function' || typeof billingJobWorker.stop !== 'function')) throw new TypeError('PLATFORM_BILLING_JOB_WORKER_DEPENDENCIES_REQUIRED');
-  if ((billingJobWorker || tenantSecretManager !== undefined) && typeof billingSystemWriteAuthorizer !== 'function') {
+  if ((billingSchedulerEnabled || billingJobWorkerEnabled || billingJobWorker) &&
+      (tenantSecretManager === undefined || typeof billingSystemWriteAuthorizer !== 'function')) {
     throw new TypeError('PLATFORM_BILLING_SYSTEM_AUTHORIZER_REQUIRED');
   }
   if (billingSystemWriteAuthorizer !== undefined && (tenantSecretManager === undefined || typeof billingSystemWriteAuthorizer !== 'function')) throw new TypeError('PLATFORM_BILLING_SYSTEM_AUTHORIZER_REQUIRED');
@@ -47,7 +48,7 @@ function createPlatformApiRuntime({
     let tenantSecretProvider = null;
     let recurringBillingRunner = null;
     let tenantBillingJobWorker = null;
-    if (tenantSecretManager !== undefined && typeof billingSystemWriteAuthorizer === 'function') {
+    if ((billingSchedulerEnabled || billingJobWorkerEnabled) && tenantSecretManager !== undefined && typeof billingSystemWriteAuthorizer === 'function') {
       const registry = createPlatformTenantRegistry(platformPool);
       const secretProvider = createTenantDatabaseSecretProvider(tenantSecretManager);
       tenantRegistry = registry;
@@ -60,17 +61,21 @@ function createPlatformApiRuntime({
         workerId: billingWorkerId || env.BILLING_WORKER_ID || 'platform-billing-worker',
         enqueueTenantJob: input => tenantAdapter.enqueueTenantJob(input)
       });
-      recurringBillingRunner = createRecurringBillingRunner({
-        store: dispatchStore, dispatcher,
-        workerId: billingWorkerId || env.BILLING_WORKER_ID || 'platform-billing-worker',
-        pollIntervalMs: billingPollIntervalMs || Number(env.BILLING_POLL_INTERVAL_MS || 60000),
-        onError: event => {
-          if (typeof env.BILLING_RUNNER_ON_ERROR === 'function') env.BILLING_RUNNER_ON_ERROR(event);
-        }
-      });
-      recurringBillingRunner.start();
-      app.locals.recurringBillingRunner = recurringBillingRunner;
-      app.locals.stopRecurringBillingRunner = () => recurringBillingRunner.stop();
+      if (billingSchedulerEnabled) {
+        recurringBillingRunner = createRecurringBillingRunner({
+          store: dispatchStore, dispatcher,
+          workerId: billingWorkerId || env.BILLING_WORKER_ID || 'platform-billing-worker',
+          pollIntervalMs: billingPollIntervalMs || Number(env.BILLING_POLL_INTERVAL_MS || 60000),
+          onError: event => {
+            if (typeof env.BILLING_RUNNER_ON_ERROR === 'function') env.BILLING_RUNNER_ON_ERROR(event);
+          }
+        });
+        recurringBillingRunner.start();
+        app.locals.recurringBillingRunner = recurringBillingRunner;
+        app.locals.stopRecurringBillingRunner = () => recurringBillingRunner.stop();
+      } else {
+        app.locals.stopRecurringBillingRunner = async () => {};
+      }
     } else {
       app.locals.stopRecurringBillingRunner = async () => {};
     }
@@ -79,7 +84,7 @@ function createPlatformApiRuntime({
       tenantBillingJobWorker.start();
       app.locals.tenantBillingJobWorker = tenantBillingJobWorker;
       app.locals.stopTenantBillingJobWorker = () => tenantBillingJobWorker.stop();
-    } else if (tenantRegistry && tenantSecretProvider && billingSystemWriteAuthorizer) {
+    } else if (billingJobWorkerEnabled && tenantRegistry && tenantSecretProvider && billingSystemWriteAuthorizer) {
       const processor = createTenantBillingJobProcessor({
         registry: tenantRegistry, secretProvider: tenantSecretProvider,
         tenantPoolManager, authorizeSystem: billingSystemWriteAuthorizer,
