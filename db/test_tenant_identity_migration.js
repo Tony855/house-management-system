@@ -86,7 +86,7 @@ test('copy mode verifies target readback and requires audit and full adapters', 
   const result = await copyTenantIdentity({ ...deps, mode: 'copy' });
   assert.equal(result.copied, true);
   assert.ok(events.includes('tenant_identity_migration_copy_verified'));
-  await assert.rejects(copyTenantIdentity({ ...deps, targetReader: { readTenantIdentity: async () => ({ tables: { ...written, users: [] } }) }, mode: 'copy' }), /TENANT_IDENTITY_MIGRATION_RECONCILIATION_FAILED/);
+  await assert.rejects(copyTenantIdentity({ ...deps, targetReader: { readTenantIdentity: async () => ({ tables: { ...written, users: [] } }) }, mode: 'copy' }), /TENANT_IDENTITY_MIGRATION_TARGET_NOT_EMPTY/);
   await assert.rejects(copyTenantIdentity({ ...deps, targetWriter: undefined, mode: 'copy' }), /TENANT_IDENTITY_MIGRATION_TARGET_REQUIRED/);
   await assert.rejects(copyTenantIdentity({ ...deps, audit: undefined, mode: 'dry-run' }), /TENANT_IDENTITY_MIGRATION_AUDIT_REQUIRED/);
 });
