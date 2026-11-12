@@ -33,9 +33,9 @@ function createTenantBillingJobProcessor({registry,secretProvider,tenantPoolMana
   if(Number(claim.affectedRows)!==1)return Object.freeze({worked:false,appId,state:'idle'});
   const [found]=await pool.execute('SELECT id,'+dateCol+' AS period_key,state,'+cursorCol+' AS cursor_id,attempt_count FROM '+table+' WHERE lease_token=? AND lease_owner=? LIMIT 1',[leaseToken,workerId]);
   if(!found.length)return Object.freeze({worked:false,appId,state:'lease_lost'});
-  const candidate=found[0],cursor=Number(candidate.cursor_id||0),requestId='system-billing-'+tenantId+'-'+candidate.id+'-'+cursor;
+  const candidate=found[0],cursor=Number(candidate.cursor_id||0),attempt=Number(candidate.attempt_count||1),requestId='system-billing-'+tenantId+'-'+candidate.id+'-'+cursor;
   const payload={job_id:Number(candidate.id),cursor_id:cursor,__resource:table+'-worker'};
-  const result=await systemWrite.execute({workerId,appId,tenantId,tenantContext:context,repository,jobType:JOBS[appId],requestId,payload,mutate:async tx=>{
+  let result;try{result=await systemWrite.execute({workerId,appId,tenantId,tenantContext:context,repository,jobType:JOBS[appId],requestId,payload,mutate:async tx=>{
    const [locked]=await tx.execute('SELECT id,'+dateCol+' AS period_key,state,'+cursorCol+' AS cursor_id,generated_count,skipped_count FROM '+table+' WHERE id=? AND lease_token=? AND lease_owner=? LIMIT 1 FOR UPDATE',[candidate.id,leaseToken,workerId]);
    if(!locked.length)throw fail('BILLING_GENERATION_JOB_LEASE_LOST');
    const job=locked[0];if(job.state==='completed')return{worked:false,state:'completed'};
@@ -53,9 +53,9 @@ function createTenantBillingJobProcessor({registry,secretProvider,tenantPoolMana
     for(const room of batch){const pf=Number(room.property_fee),wf=Number(room.water_fee),ef=Number(room.elec_fee);if(![pf,wf,ef].every(v=>Number.isFinite(v)&&v>=0))throw fail('PROPERTY_FEE_AMOUNT_INVALID');const amount=Math.round((pf+wf+ef)*100)/100;if(amount<=0){skipped++;continue;}const [exists]=await tx.execute("SELECT id FROM bills WHERE source='property' AND room_id=? AND period_start=? LIMIT 1 FOR UPDATE",[room.room_id,dates.start]);if(exists.length){skipped++;continue;}const detail=[pf>0?'物业费 '+pf.toFixed(2):'',wf>0?'水费 '+wf.toFixed(2):'',ef>0?'电费 '+ef.toFixed(2):''].filter(Boolean).join(' + ');await tx.insert('bills',{source:'property',room_id:Number(room.room_id),tenant_id:Number(room.owner_id),period_start:dates.start,period_end:dates.end,due_date:dates.due,amount,paid_amount:0,status:'unpaid',remark:'明细：'+detail});generated++;}
     processed=batch.length;nextCursor=batch.length?Number(batch[batch.length-1].room_id):cursor;complete=rows.length<=CHUNK_SIZE;
    }
-   await tx.execute('UPDATE '+table+' SET state=?, '+cursorCol+'=?,generated_count=generated_count+?,skipped_count=skipped_count+?,lease_owner=NULL,lease_token=NULL,lease_expires_at=NULL,next_attempt_at=NULL,last_error=NULL,completed_at=CASE WHEN ?='completed' THEN UTC_TIMESTAMP() ELSE NULL END,updated_at=UTC_TIMESTAMP() WHERE id=? AND lease_token=?",[complete?'completed':'running',nextCursor,generated,skipped,complete?'completed':'running',candidate.id,leaseToken]);
+   await tx.execute('UPDATE '+table+' SET state=?, '+cursorCol+'=?,generated_count=generated_count+?,skipped_count=skipped_count+?,lease_owner=NULL,lease_token=NULL,lease_expires_at=NULL,next_attempt_at=NULL,last_error=NULL,completed_at=CASE WHEN ?='completed' THEN UTC_TIMESTAMP() ELSE NULL END,updated_at=UTC_TIMESTAMP() WHERE id=? AND lease_token=?',[complete?'completed':'running',nextCursor,generated,skipped,complete?'completed':'running',candidate.id,leaseToken]);
    return{worked:true,appId,state:complete?'completed':'running',jobId:Number(candidate.id),processed,generated,skipped,cursor:nextCursor,hasMore:!complete};
-  }});
+  }});}catch(error){const code=typeof error?.code==='string'&&/^[A-Z][A-Z0-9_]{1,95}$/.test(error.code)?error.code:'BILLING_GENERATION_FAILED';const dead=attempt>=MAX_ATTEMPTS;const delay=Math.min(3600,30*Math.pow(2,Math.max(0,attempt-1)));await pool.execute('UPDATE '+table+' SET state=?,next_attempt_at=CASE WHEN ?=1 THEN NULL ELSE DATE_ADD(UTC_TIMESTAMP(),INTERVAL '+delay+' SECOND) END,last_error=?,lease_owner=NULL,lease_token=NULL,lease_expires_at=NULL,updated_at=UTC_TIMESTAMP() WHERE id=? AND lease_token=? AND lease_owner=?',[dead?'dead_letter':'queued',dead?1:0,code,candidate.id,leaseToken,workerId]);throw error;}
   return Object.freeze({...result,worked:Boolean(result?.worked),appId});
  }
  async function processNextBatch({workerId,tenantScanBatchSize=100}={}){
