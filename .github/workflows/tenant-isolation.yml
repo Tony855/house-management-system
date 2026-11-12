@@ -153,14 +153,15 @@ jobs:
           DB_USER: root
           DB_PASSWORD: house-api-test-root
         run: npm run test:tenant-identity-mariadb
-      - name: Verify tenant-local idempotency and write-audit migrations
+      - name: Verify tenant-local idempotency, audit and billing job leases against MariaDB
         env:
           NODE_ENV: test
           DB_HOST: 127.0.0.1
           DB_PORT: 3306
           DB_USER: root
           DB_PASSWORD: house-api-test-root
-        run: bash scripts/test-tenant-system-schema.sh
+          DB_NAME: tenant_system_schema_test
+        run: bash scripts/test-tenant-system-schema.sh && npm run test:tenant-billing-leases-mariadb
       - name: Verify building and room writes plus cross-tenant DB isolation against MariaDB
         env:
           NODE_ENV: test
