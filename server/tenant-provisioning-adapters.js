@@ -115,10 +115,29 @@ function createPlatformTenantProvisioningAdapters({
   platformPool, databaseAdmin, secretManager, runMigrations, verifyIsolation
 }) {
   const registry = createPlatformTenantRegistry(platformPool);
+  if (!platformPool || typeof platformPool.getConnection !== 'function') {
+    throw new TypeError('TENANT_PLATFORM_TRANSACTION_POOL_REQUIRED');
+  }
   if (!databaseAdmin || !['createDatabase', 'createPrincipal', 'grantDatabaseOnly', 'dropPrincipal', 'dropDatabase'].every(k => typeof databaseAdmin[k] === 'function') ||
       typeof databaseAdmin.host !== 'string' || !Number.isInteger(databaseAdmin.port)) {
     throw new TypeError('TENANT_DATABASE_ADMIN_REQUIRED');
   }
+
+  async function withPlatformTransaction(work) {
+    const connection = await platformPool.getConnection();
+    try {
+      await connection.beginTransaction();
+      const result = await work(connection);
+      await connection.commit();
+      return result;
+    } catch (error) {
+      try { await connection.rollback(); } catch (rollbackError) { error.rollbackError = rollbackError; }
+      throw error;
+    } finally {
+      connection.release();
+    }
+  }
+
   return Object.freeze({
     registry: Object.freeze({
       async createProvisioningTenant(record) {
@@ -133,27 +152,38 @@ function createPlatformTenantProvisioningAdapters({
         );
       },
       async activateTenant(tenantId, { schemaVersion }) {
-        const [result] = await platformPool.query(
-          "UPDATE platform_tenants SET lifecycle_state = 'active', schema_version = ? WHERE tenant_uuid = ? AND lifecycle_state = 'provisioning'",
-          [schemaVersion, tenantId]
-        );
-        if (Number(result.affectedRows) !== 1) throw new Error('TENANT_REGISTRY_ACTIVATION_CONFLICT');
-        await platformPool.query(
-          'INSERT INTO platform_provisioning_events (tenant_uuid, event_type, outcome, detail_code) VALUES (?, ?, ?, ?)',
-          [tenantId, 'tenant_activation', 'succeeded', schemaVersion]
-        );
+        if (typeof tenantId !== 'string' || !UUID_RE.test(tenantId) ||
+            typeof schemaVersion !== 'string' || !schemaVersion || schemaVersion.length > 100) {
+          throw new TypeError('TENANT_REGISTRY_ACTIVATION_INPUT_INVALID');
+        }
+        return withPlatformTransaction(async connection => {
+          const [result] = await connection.query(
+            "UPDATE platform_tenants SET lifecycle_state = 'active', schema_version = ? WHERE tenant_uuid = ? AND lifecycle_state = 'provisioning'",
+            [schemaVersion, tenantId]
+          );
+          if (Number(result.affectedRows) !== 1) throw new Error('TENANT_REGISTRY_ACTIVATION_CONFLICT');
+          await connection.query(
+            'INSERT INTO platform_provisioning_events (tenant_uuid, event_type, outcome, detail_code) VALUES (?, ?, ?, ?)',
+            [tenantId, 'tenant_activation', 'succeeded', schemaVersion]
+          );
+        });
       },
       async markProvisioningFailed(tenantId, detailCode) {
+        if (typeof tenantId !== 'string' || !UUID_RE.test(tenantId)) {
+          throw new TypeError('TENANT_REGISTRY_FAILURE_INPUT_INVALID');
+        }
         const safeCode = typeof detailCode === 'string' && /^[A-Z0-9_]{1,100}$/.test(detailCode)
           ? detailCode : 'PROVISIONING_FAILED';
-        await platformPool.query(
-          "UPDATE platform_tenants SET lifecycle_state = 'provisioning_failed' WHERE tenant_uuid = ? AND lifecycle_state = 'provisioning'",
-          [tenantId]
-        );
-        await platformPool.query(
-          'INSERT INTO platform_provisioning_events (tenant_uuid, event_type, outcome, detail_code) VALUES (?, ?, ?, ?)',
-          [tenantId, 'tenant_provisioning', 'failed', safeCode]
-        );
+        return withPlatformTransaction(async connection => {
+          await connection.query(
+            "UPDATE platform_tenants SET lifecycle_state = 'provisioning_failed' WHERE tenant_uuid = ? AND lifecycle_state = 'provisioning'",
+            [tenantId]
+          );
+          await connection.query(
+            'INSERT INTO platform_provisioning_events (tenant_uuid, event_type, outcome, detail_code) VALUES (?, ?, ?, ?)',
+            [tenantId, 'tenant_provisioning', 'failed', safeCode]
+          );
+        });
       }
     }),
     databaseAdmin,
@@ -162,7 +192,6 @@ function createPlatformTenantProvisioningAdapters({
     isolationVerifier: createTenantProvisioningIsolationVerifier(verifyIsolation)
   });
 }
-
 module.exports = {
   createMariaDbTenantDatabaseAdmin,
   createTenantProvisioningSecretStore,
