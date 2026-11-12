@@ -34,8 +34,9 @@ function createTenantSystemWriteService({ authorizeSystem, auditWriter, idempote
       const authorization = await authorizeSystem({ workerId, appId, tenantId, jobType });
       if (authorization !== true) throw systemWriteError('TENANT_SYSTEM_WRITE_FORBIDDEN');
       const requestFingerprint = fingerprintPayload(payload);
+      // jobType is used for policy authorization but is not an audit-store field.
       const event = {
-        workerId, appId, tenantId, jobType, operation: 'update',
+        workerId, appId, tenantId, operation: 'update',
         reason: 'Automated ' + jobType + ' generation',
         requestId
       };
