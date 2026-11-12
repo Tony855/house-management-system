@@ -130,14 +130,45 @@ async function copyTenantOrgData({
   }
 
   try {
-    await targetWriter.importTenantSnapshot({ appId, tenantId, tables: normalized.tables });
-    const target = await targetReader.readTenantSnapshot({ appId, tenantId });
-    const targetNormalized = normalizeTargetSnapshot(appId, target);
-    if (!compareManifests(normalized.manifest, targetNormalized.manifest)) {
-      const error = new Error('TENANT_DATA_MIGRATION_RECONCILIATION_FAILED');
-      error.code = 'TENANT_DATA_MIGRATION_RECONCILIATION_FAILED';
-      throw error;
+    // A previous attempt may have committed the tenant transaction but lost its
+    // final audit acknowledgement. Reconcile an existing target before writing
+    // so the operator can safely retry without duplicating or overwriting rows.
+    let target = await targetReader.readTenantSnapshot({ appId, tenantId });
+    let targetNormalized = normalizeTargetSnapshot(appId, target);
+    let alreadyImported = compareManifests(normalized.manifest, targetNormalized.manifest);
+
+    if (!alreadyImported) {
+      const targetHasRows = Object.values(targetNormalized.manifest).some(item => item.rowCount > 0);
+      if (targetHasRows) {
+        const error = new Error('TENANT_DATA_MIGRATION_TARGET_NOT_EMPTY');
+        error.code = 'TENANT_DATA_MIGRATION_TARGET_NOT_EMPTY';
+        throw error;
+      }
+
+      try {
+        await targetWriter.importTenantSnapshot({ appId, tenantId, tables: normalized.tables });
+      } catch (writeError) {
+        // Another worker may have won the advisory lock and committed the same
+        // snapshot. Accept only an exact manifest match; all other failures stay
+        // fail-closed and are surfaced to the operator.
+        if (writeError.message !== 'TENANT_DATA_MIGRATION_TARGET_NOT_EMPTY') throw writeError;
+        target = await targetReader.readTenantSnapshot({ appId, tenantId });
+        targetNormalized = normalizeTargetSnapshot(appId, target);
+        if (!compareManifests(normalized.manifest, targetNormalized.manifest)) throw writeError;
+        alreadyImported = true;
+      }
+
+      if (!alreadyImported) {
+        target = await targetReader.readTenantSnapshot({ appId, tenantId });
+        targetNormalized = normalizeTargetSnapshot(appId, target);
+        if (!compareManifests(normalized.manifest, targetNormalized.manifest)) {
+          const error = new Error('TENANT_DATA_MIGRATION_RECONCILIATION_FAILED');
+          error.code = 'TENANT_DATA_MIGRATION_RECONCILIATION_FAILED';
+          throw error;
+        }
+      }
     }
+
     await audit({ event: 'tenant_data_migration_copy_verified', appId, tenantId, sourceOrgId, manifest: normalized.manifest });
     return { mode, appId, tenantId, sourceOrgId, manifest: normalized.manifest, copied: true, cutover: false };
   } catch (error) {

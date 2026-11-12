@@ -16,7 +16,7 @@ function adapters(appId, orgId) {
     calls,
     sourceReader: { exportOrgSnapshot: async args => { calls.push(['source', args]); return sourceSnapshot(appId, orgId); } },
     targetWriter: { importTenantSnapshot: async args => { calls.push(['write', args]); stored = args.tables; } },
-    targetReader: { readTenantSnapshot: async () => ({ tables: stored }) },
+    targetReader: { readTenantSnapshot: async () => ({ tables: stored || Object.fromEntries([...TABLES[appId]].map(table => [table, []])) }) },
     audit: async event => { calls.push(['audit', event.event]); }
   };
 }
@@ -122,4 +122,41 @@ test('migration accepts internally consistent room and billing relationships', a
     appId: 'rental', tenantId, sourceOrgId: 89, mode: 'copy', ...a
   });
   assert.equal(result.copied, true);
+});
+
+
+test('copy retry reconciles an already committed target after final audit acknowledgement fails', async () => {
+  const a = adapters('hotel', 91);
+  let failVerifiedOnce = true;
+  const originalAudit = a.audit;
+  a.audit = async event => {
+    if (event.event === 'tenant_data_migration_copy_verified' && failVerifiedOnce) {
+      failVerifiedOnce = false;
+      throw new Error('AUDIT_ACK_TIMEOUT');
+    }
+    return originalAudit(event);
+  };
+
+  await assert.rejects(copyTenantOrgData({
+    appId: 'hotel', tenantId, sourceOrgId: 91, mode: 'copy', ...a
+  }), /AUDIT_ACK_TIMEOUT/);
+  assert.equal(a.calls.filter(call => call[0] === 'write').length, 1);
+
+  const retry = await copyTenantOrgData({
+    appId: 'hotel', tenantId, sourceOrgId: 91, mode: 'copy', ...a
+  });
+  assert.equal(retry.copied, true);
+  assert.equal(a.calls.filter(call => call[0] === 'write').length, 1);
+  assert.ok(a.calls.some(call => call[0] === 'audit' && call[1] === 'tenant_data_migration_copy_verified'));
+});
+
+test('copy refuses a pre-existing target whose contents do not match the source manifest', async () => {
+  const a = adapters('rental', 92);
+  a.targetReader.readTenantSnapshot = async () => ({
+    tables: Object.fromEntries([...TABLES.rental].map(table => [table, table === 'buildings' ? [{ id: 999, name: 'unrelated' }] : []]))
+  });
+  await assert.rejects(copyTenantOrgData({
+    appId: 'rental', tenantId, sourceOrgId: 92, mode: 'copy', ...a
+  }), /TENANT_DATA_MIGRATION_TARGET_NOT_EMPTY/);
+  assert.equal(a.calls.some(call => call[0] === 'write'), false);
 });
