@@ -18,7 +18,7 @@ function createRecurringBillingDispatcher({ store, workerId, enqueueTenantJob, l
       // Renew the platform claim while cross-database tenant enqueue is in flight.
       heartbeat = setInterval(() => {
         if (heartbeatInFlight || leaseLost) return;
-        heartbeatInFlight = Promise.resolve().then(() => store.renewLease({ id: job.id, workerId, leaseSeconds }))
+        heartbeatInFlight = Promise.resolve().then(() => store.renewLease({ id: job.id, workerId, leaseToken: job.leaseToken, leaseSeconds }))
           .then(renewed => { if (!renewed) leaseLost = true; })
           .catch(() => { leaseLost = true; })
           .finally(() => { heartbeatInFlight = null; });
@@ -31,14 +31,14 @@ function createRecurringBillingDispatcher({ store, workerId, enqueueTenantJob, l
       clearInterval(heartbeat); heartbeat = null;
       if (heartbeatInFlight) await heartbeatInFlight;
       if (leaseLost) return Object.freeze({ id: job.id, state: 'lease_lost' });
-      const completed = await store.markDispatched({ id: job.id, workerId });
+      const completed = await store.markDispatched({ id: job.id, workerId, leaseToken: job.leaseToken });
       return Object.freeze({ id: job.id, state: completed ? 'dispatched' : 'lease_lost' });
     } catch (error) {
       if (heartbeat) clearInterval(heartbeat);
       if (heartbeatInFlight) await heartbeatInFlight;
       let recorded = false;
       try { recorded = await store.markFailed({
-        id: job.id, workerId,
+        id: job.id, workerId, leaseToken: job.leaseToken,
         errorCode: error && error.code
       }); } catch (_) {}
       return Object.freeze({

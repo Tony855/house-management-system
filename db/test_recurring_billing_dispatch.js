@@ -6,7 +6,7 @@ const { createRecurringBillingDispatchStore, assertPeriod } = require('../server
 const { createRecurringBillingDispatcher } = require('../server/recurring-billing-dispatcher');
 
 const tenant = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
-const row = { id: 5, tenantId: tenant, appId: 'property', jobType: 'property_fee', periodKey: '2030-02', requestId: 'auto-property_fee-' + tenant + '-2030-02', state: 'dispatching', attemptCount: 1, workerId: 'worker-a', leaseExpiresAt: '2030-02-01 00:03:00', errorCode: null };
+const row = { id: 5, tenantId: tenant, appId: 'property', jobType: 'property_fee', periodKey: '2030-02', requestId: 'auto-property_fee-' + tenant + '-2030-02', state: 'dispatching', attemptCount: 1, workerId: 'worker-a', leaseToken: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', leaseExpiresAt: '2030-02-01 00:03:00', errorCode: null };
 
 test('billing dispatch period validation is product-specific and strict', () => {
   assertPeriod('rental', '2030-02-01');
