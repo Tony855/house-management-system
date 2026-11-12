@@ -95,10 +95,31 @@ async function main() {
       }
 
       const adapters2 = createMariaDbTenantMigrationAdapters({ appId, sourcePool, targetPool: target2.pool });
-      await copyTenantOrgData({
+      let loseAuditAcknowledgement = true;
+      let firstRetryError;
+      try {
+        await copyTenantOrgData({
+          appId, tenantId: tenantId2, sourceOrgId, mode: 'copy', ...adapters2,
+          audit: async event => {
+            if (event.event === 'tenant_data_migration_copy_verified' && loseAuditAcknowledgement) {
+              loseAuditAcknowledgement = false;
+              throw new Error('SIMULATED_MARIADB_AUDIT_ACK_LOSS');
+            }
+          }
+        });
+      } catch (error) {
+        firstRetryError = error;
+      }
+      if (firstRetryError?.message !== 'SIMULATED_MARIADB_AUDIT_ACK_LOSS') {
+        throw new Error('TENANT_DATA_MIGRATION_MARIADB_AUDIT_LOSS_FIXTURE_FAILED_' + appId);
+      }
+      const retryResult = await copyTenantOrgData({
         appId, tenantId: tenantId2, sourceOrgId, mode: 'copy', ...adapters2,
         audit: async () => {}
       });
+      if (!retryResult.alreadyImported || !retryResult.copied) {
+        throw new Error('TENANT_DATA_MIGRATION_MARIADB_RETRY_NOT_RECONCILED_' + appId);
+      }
       const [rows1] = await target.pool.execute('SELECT `id`, `name` FROM `buildings` WHERE `id` = ?', [firstId]);
       const [rows2] = await target2.pool.execute('SELECT `id`, `name` FROM `buildings` WHERE `id` = ?', [firstId]);
       if (rows1.length !== 1 || rows2.length !== 1 || rows1[0].name !== rows2[0].name) {
