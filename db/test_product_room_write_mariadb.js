@@ -14,7 +14,7 @@ const { createHotelApi } = require('../services/hotel-api/app');
 const { createPropertyApi } = require('../services/property-api/app');
 
 const APPS = Object.freeze({
-  rental: { create: createRentalApi, room: { building_id: 1, room_no: 'CI-R-101', rent: 120, deposit: 50 } },
+  rental: { create: createRentalApi, room: { building_id: 1, room_no: 'CI-R-101', rent: 120, deposit: 50, water_price: 2, elec_price: 1.5 } },
   hotel: { create: createHotelApi, room: { building_id: 1, room_no: 'CI-H-101', day_price: 60, deposit: 20, status: 'booked' } },
   property: { create: createPropertyApi, room: { building_id: 1, room_no: 'CI-P-101', owner_id: 1, property_fee: 100, water_price: 2, elec_price: 1.5 } }
 });
@@ -249,6 +249,24 @@ async function main() {
 
         const invalidReentry = await hotelOrderRequest(base, 'PATCH', '/api/orders/' + order.id + '/status', { status: 'checked_in' }, 'ci-hotel-order-reentry-0001');
         assert.equal(invalidReentry.status, 409, 'hotel order cannot re-enter after checkout');
+      }
+
+
+      if (appId === 'rental' || appId === 'property') {
+        const meterPayload = { room_id: firstBody.id, month: '2030-01', water_prev: 10, water_curr: 12.5, elec_prev: 20, elec_curr: 23 };
+        const meterCreated = await hotelOrderRequest(base, 'POST', '/api/meters', meterPayload, 'ci-meter-create-' + appId + '-0001');
+        assert.equal(meterCreated.status, 201, appId + ' meter create');
+        const meter = await meterCreated.json();
+        assert.equal(Number(meter.water_usage), 2.5, appId + ' water usage');
+        assert.equal(Number(meter.water_fee), 5, appId + ' water fee from room rate');
+        assert.equal(Number(meter.elec_usage), 3, appId + ' electricity usage');
+        assert.equal(Number(meter.elec_fee), 4.5, appId + ' electricity fee from room rate');
+        const [[meterRows]] = await pool.query('SELECT water_fee, elec_fee FROM meters WHERE id = ?', [meter.id]);
+        assert.equal(Number(meterRows.water_fee), 5, appId + ' persisted water fee');
+        const duplicateMeter = await hotelOrderRequest(base, 'POST', '/api/meters', meterPayload, 'ci-meter-duplicate-' + appId + '-0001');
+        assert.equal(duplicateMeter.status, 409, appId + ' duplicate room-month meter rejected');
+        const invalidBaseline = await hotelOrderRequest(base, 'POST', '/api/meters', { ...meterPayload, month: '2030-02', water_prev: 11 }, 'ci-meter-baseline-' + appId + '-0001');
+        assert.equal(invalidBaseline.status, 409, appId + ' next period baseline must match previous reading');
       }
 
       const room = { ...definition.room };

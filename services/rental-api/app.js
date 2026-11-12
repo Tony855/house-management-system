@@ -6,6 +6,7 @@ const { createTenantBusinessWriteRouter } = require('../shared/tenant-business-w
 const { createBuildingWriteRouter } = require('../shared/building-write-routes');
 const { createRoomUpdateRouter } = require('../shared/room-update-routes');
 const { createRentalWriteRouter } = require('./write-routes');
+const { createMeterWriteRouter } = require('../shared/meter-write-routes');
 
 function createRentalApi(dependencies) {
   return createProductApi({
@@ -18,6 +19,7 @@ function createRentalApi(dependencies) {
       router.use(createBuildingWriteRouter());
       router.use(createRoomUpdateRouter('rental'));
       router.use(createRentalWriteRouter());
+      router.use(createMeterWriteRouter('rental'));
       return router;
     })
   });

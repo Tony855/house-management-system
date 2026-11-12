@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const { validateProductRoom } = require('../services/shared/product-room-write-routes');
 const { validateHotelOrder, createHotelOrderRouter } = require('../services/hotel-api/order-routes');
+const { validateMeter, createMeterWriteRouter } = require('../services/shared/meter-write-routes');
 const http = require('node:http');
 const express = require('express');
 
@@ -68,5 +69,27 @@ test('hotel order status transitions are constrained and room state follows life
   try {
     const response=await fetch('http://127.0.0.1:'+server.address().port+'/api/orders/22/status',{method:'PATCH',headers:{'content-type':'application/json','x-operation-reason':'Check in hotel guest','x-step-up-token':'step-up-token-123456789','idempotency-key':'hotel-order-status-0001'},body:JSON.stringify({status:'checked_in'})});
     assert.equal(response.status,200);assert.ok(calls.some(x=>x.table==='rooms'&&x.fields.status==='rented'));
+  } finally {await new Promise(resolve=>server.close(resolve));}
+});
+
+test('meter DTO validates monotonic readings and rejects client-calculated fees', () => {
+  const valid = { room_id: 4, month: '2030-01', water_prev: 10, water_curr: 12.5, elec_prev: 20, elec_curr: 23 };
+  assert.equal(validateMeter(valid).water_curr, 12.5);
+  for (const bad of [{ ...valid, water_fee: 999 }, { ...valid, month: '2030-13' }, { ...valid, water_curr: 9 }, { ...valid, elec_curr: 19 }]) {
+    assert.throws(() => validateMeter(bad), e => e.code === 'METER_INPUT_INVALID');
+  }
+});
+test('meter creation derives fees from locked room rates and previous reading', async () => {
+  const calls=[];const app=express();app.use(express.json());
+  app.use((req,_res,next)=>{req.tenantWrite=async input=>{calls.push(input);return input.mutate({
+    execute:async sql=>sql.includes('FROM rooms')?[[{id:4,water_price:2,elec_price:1.5}]]:sql.includes('month <')?[[{month:'2029-12',water_curr:10,elec_curr:20}]]:[[]],
+    insert:async(table,fields)=>{calls.push({table,fields});return {insertId:12};}
+  });};next();});
+  app.use('/api',createMeterWriteRouter('rental'));app.use((e,_q,res,_n)=>res.status(e.status||500).json({error:e.code||'ERROR'}));
+  const server=http.createServer(app);await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  try {
+    const response=await fetch('http://127.0.0.1:'+server.address().port+'/api/meters',{method:'POST',headers:{'content-type':'application/json','x-operation-reason':'Record monthly meter','x-step-up-token':'step-up-token-123456789','idempotency-key':'meter-create-0001'},body:JSON.stringify({room_id:4,month:'2030-01',water_prev:10,water_curr:12.5,elec_prev:20,elec_curr:23})});
+    assert.equal(response.status,201);const body=await response.json();assert.equal(body.water_fee,5);assert.equal(body.elec_fee,4.5);
+    assert.equal(calls[0].payload.__resource,'meters');assert.ok(calls.some(x=>x.table==='meters'&&x.fields.water_usage===2.5));
   } finally {await new Promise(resolve=>server.close(resolve));}
 });
