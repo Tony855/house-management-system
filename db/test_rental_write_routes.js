@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const http = require('node:http');
 const express = require('express');
-const { createRentalWriteRouter, validateRoom, validateContract, buildNextRentalBill } = require('../services/rental-api/write-routes');
+const { createRentalWriteRouter, validateRoom, validateContract, validateContractRenewal, buildNextRentalBill } = require('../services/rental-api/write-routes');
 
 const valid = Object.freeze({ building_id: 7, room_no: '  A-101 ', rent: '1200.00', deposit: 1000 });
 
@@ -160,4 +160,49 @@ test('POST /contracts/:id/generate-bill locks contract and creates next period i
     assert.equal(calls[0].payload.__resource,'rental-bills');
     assert.ok(calls.some(x=>x.table==='bills'&&x.fields.amount===1200));
   } finally { await new Promise(resolve=>server.close(resolve)); }
+});
+
+
+test('rental contract renewal accepts only an extension and bounded optional terms', () => {
+  assert.deepEqual(validateContractRenewal({ end_date: '2028-12-31', rent: 1350, deposit: 1400, pay_cycle: 3 }), {
+    end_date: '2028-12-31', rent: 1350, deposit: 1400, pay_cycle: 3
+  });
+  for (const bad of [{ end_date: '2028-02-30' }, { end_date: '2028-12-31', status: 'expired' },
+    { end_date: '2028-12-31', rent: -1 }, { end_date: '2028-12-31', pay_cycle: 37 }, {}]) {
+    assert.throws(() => validateContractRenewal(bad), e => e.code === 'CONTRACT_RENEWAL_INPUT_INVALID');
+  }
+});
+
+test('POST /contracts/:id/renew locks active contract and records changed terms through tenant write audit boundary', async () => {
+  const calls=[]; const app=express(); app.use(express.json());
+  app.use((req,_res,next)=>{req.tenantWrite=async input=>{calls.push(input);return input.mutate({
+    execute:async()=>[[{id:9,contract_no:'R-9',room_id:3,tenant_id:8,start_date:'2026-01-01',end_date:'2026-12-31',rent:'1200.00',deposit:'500.00',pay_cycle:1,status:'active'}]],
+    updateById:async(table,id,fields)=>{calls.push({table,id,fields});return {affectedRows:1};}
+  });};next();});
+  app.use('/api',createRentalWriteRouter()); app.use((e,_q,res,_n)=>res.status(e.status||500).json({error:e.code||'ERROR'}));
+  const server=http.createServer(app); await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  try {
+    const response=await fetch('http://127.0.0.1:'+server.address().port+'/api/contracts/9/renew',{method:'POST',
+      headers:{'content-type':'application/json','x-operation-reason':'Renew rental agreement','x-step-up-token':'step-up-token-123456789','idempotency-key':'rental-renew-0001'},
+      body:JSON.stringify({end_date:'2027-12-31',rent:1350,deposit:600,pay_cycle:3})});
+    assert.equal(response.status,200); const body=await response.json();
+    assert.equal(body.previous_end_date,'2026-12-31'); assert.equal(body.end_date,'2027-12-31'); assert.equal(body.rent,1350);
+    assert.equal(calls[0].payload.__resource,'contract-renewals');
+    assert.deepEqual(calls.find(x=>x.table==='contracts').fields,{end_date:'2027-12-31',rent:1350,deposit:600,pay_cycle:3});
+  } finally { await new Promise(resolve=>server.close(resolve)); }
+});
+
+test('contract renewal cannot shorten the current term or renew an inactive contract', async () => {
+  const makeApp = status => { const app=express(); app.use(express.json()); app.use((req,_res,next)=>{req.tenantWrite=async input=>input.mutate({
+    execute:async()=>[[{id:9,room_id:3,end_date:'2026-12-31',status}]], updateById:async()=>({affectedRows:1})
+  });next();}); app.use('/api',createRentalWriteRouter()); app.use((e,_q,res,_n)=>res.status(e.status||500).json({error:e.code||'ERROR'})); return app; };
+  for (const [status,endDate,expected] of [['active','2026-12-30','CONTRACT_RENEWAL_MUST_EXTEND'],['expired','2027-12-31','CONTRACT_NOT_ACTIVE']]) {
+    const server=http.createServer(makeApp(status)); await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+    try {
+      const response=await fetch('http://127.0.0.1:'+server.address().port+'/api/contracts/9/renew',{method:'POST',
+        headers:{'content-type':'application/json','x-operation-reason':'Renew rental agreement','x-step-up-token':'step-up-token-123456789','idempotency-key':'rental-renew-reject-'+status},
+        body:JSON.stringify({end_date:endDate})});
+      assert.equal(response.status,409); assert.equal((await response.json()).error,expected);
+    } finally { await new Promise(resolve=>server.close(resolve)); }
+  }
 });

@@ -72,6 +72,33 @@ function validateContract(input) {
     rent: money(input.rent), deposit: money(input.deposit), pay_cycle, sign_date: input.sign_date, remark: input.remark || '' });
 }
 
+
+const RENEWAL_FIELDS = new Set(['end_date', 'rent', 'deposit', 'pay_cycle', 'remark']);
+function validateContractRenewal(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input) ||
+      Object.keys(input).length === 0 || Object.keys(input).some(key => !RENEWAL_FIELDS.has(key)) ||
+      !validDate(input.end_date)) throw contractError('CONTRACT_RENEWAL_INPUT_INVALID');
+  const result = { end_date: input.end_date };
+  for (const field of ['rent', 'deposit']) {
+    if (input[field] !== undefined) {
+      const value = Number(input[field]);
+      if (!Number.isFinite(value) || value < 0 || value > 100000000 ||
+          Math.round(value * 100) !== value * 100) throw contractError('CONTRACT_RENEWAL_INPUT_INVALID');
+      result[field] = value;
+    }
+  }
+  if (input.pay_cycle !== undefined) {
+    const cycle = Number(input.pay_cycle);
+    if (!Number.isSafeInteger(cycle) || cycle < 1 || cycle > 36) throw contractError('CONTRACT_RENEWAL_INPUT_INVALID');
+    result.pay_cycle = cycle;
+  }
+  if (input.remark !== undefined) {
+    if (typeof input.remark !== 'string' || input.remark.length > 200) throw contractError('CONTRACT_RENEWAL_INPUT_INVALID');
+    result.remark = input.remark;
+  }
+  return Object.freeze(result);
+}
+
 function addCalendarMonths(date, months) {
   const [year, month, day] = date.split('-').map(Number);
   const first = new Date(Date.UTC(year, month - 1 + months, 1));
@@ -194,6 +221,35 @@ function createRentalWriteRouter() {
       return res.status(201).json(result);
     } catch (error) { return next(error); }
   });
+  router.post('/contracts/:id/renew', async (req, res, next) => {
+    try {
+      if (typeof req.tenantWrite !== 'function') return res.status(503).json({ error: 'TENANT_WRITE_UNAVAILABLE' });
+      const id = Number(req.params.id);
+      if (!Number.isSafeInteger(id) || id < 1) throw contractError('CONTRACT_RENEWAL_INPUT_INVALID');
+      const renewal = validateContractRenewal(req.body);
+      const result = await req.tenantWrite({
+        operation: 'update', reason: req.get('x-operation-reason'),
+        stepUpToken: req.get('x-step-up-token'), requestId: req.get('idempotency-key'),
+        payload: { id, ...renewal, __resource: 'contract-renewals' },
+        mutate: async tx => {
+          const [rows] = await tx.execute('SELECT * FROM contracts WHERE id = ? LIMIT 1 FOR UPDATE', [id]);
+          if (!rows.length) throw contractError('CONTRACT_NOT_FOUND', 404);
+          const current = rows[0];
+          if (current.status !== 'active') throw contractError('CONTRACT_NOT_ACTIVE', 409);
+          const currentEnd = String(current.end_date).slice(0, 10);
+          if (renewal.end_date <= currentEnd) throw contractError('CONTRACT_RENEWAL_MUST_EXTEND', 409);
+          const patch = { end_date: renewal.end_date };
+          for (const field of ['rent', 'deposit', 'pay_cycle', 'remark']) {
+            if (Object.hasOwn(renewal, field)) patch[field] = renewal[field];
+          }
+          await tx.updateById('contracts', id, patch);
+          return { id, status: 'active', ...patch, previous_end_date: currentEnd };
+        }
+      });
+      return res.json(result);
+    } catch (error) { return next(error); }
+  });
+
   router.patch('/contracts/:id', async (req, res, next) => {
     try {
       if (typeof req.tenantWrite !== 'function') return res.status(503).json({ error: 'TENANT_WRITE_UNAVAILABLE' });
@@ -218,4 +274,4 @@ function createRentalWriteRouter() {
   return router;
 }
 
-module.exports = { ALLOWED_FIELDS, validateRoom, validateContract, buildNextRentalBill, createRentalWriteRouter };
+module.exports = { ALLOWED_FIELDS, validateRoom, validateContract, validateContractRenewal, buildNextRentalBill, createRentalWriteRouter };

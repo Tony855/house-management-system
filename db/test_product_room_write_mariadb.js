@@ -290,6 +290,14 @@ async function main() {
         assert.equal(nextBillResponse.status, 201, 'rental next contract billing period');
         const nextBill = await nextBillResponse.json();
         assert.equal(nextBill.period_start, '2020-02-01', 'rental next period follows last bill');
+        const renewalResponse = await writeBuilding(base, 'POST', '/api/contracts/' + contract.id + '/renew', {
+          end_date: '2041-12-31', rent: 130, deposit: 25, pay_cycle: 1
+        }, 'ci-rental-contract-renew-0001');
+        assert.equal(renewalResponse.status, 200, 'rental contract renewal');
+        const renewed = await renewalResponse.json();
+        assert.equal(renewed.previous_end_date, '2040-12-31', 'rental renewal previous end date');
+        const [[renewedContract]] = await pool.query('SELECT end_date, rent, deposit, pay_cycle, status FROM contracts WHERE id = ?', [contract.id]);
+        assert.deepEqual(renewedContract, { end_date: new Date('2041-12-31T00:00:00.000Z'), rent: '130.00', deposit: '25.00', pay_cycle: 1, status: 'active' }, 'rental renewal terms persisted');
         const [[allContractBills]] = await pool.query('SELECT COUNT(*) AS total FROM bills WHERE contract_id = ? AND source = ?', [contract.id, 'rental']);
         assert.equal(Number(allContractBills.total), 2, 'rental sequential generation creates next period only');
       }
