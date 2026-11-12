@@ -1,9 +1,9 @@
 'use strict';
 
 const TABLES = Object.freeze({
-  rental: new Set(['buildings', 'rooms', 'tenants', 'contracts', 'meters', 'room_net_lines', 'net_changes', 'net_requests', 'bills', 'bill_transactions', 'repairs']),
-  hotel: new Set(['buildings', 'rooms', 'tenants', 'orders', 'bills', 'bill_transactions', 'repairs']),
-  property: new Set(['buildings', 'rooms', 'tenants', 'org_employees', 'meters', 'room_net_lines', 'net_changes', 'net_requests', 'bills', 'bill_transactions', 'repairs', 'complaints'])
+  rental: new Set(['buildings', 'rooms', 'tenants', 'contracts', 'meters', 'room_net_lines', 'net_changes', 'net_requests', 'bills', 'repairs']),
+  hotel: new Set(['buildings', 'rooms', 'tenants', 'orders', 'bills', 'repairs']),
+  property: new Set(['buildings', 'rooms', 'tenants', 'org_employees', 'meters', 'room_net_lines', 'net_changes', 'net_requests', 'bills', 'repairs', 'complaints'])
 });
 const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
 
@@ -53,7 +53,7 @@ function identifier(value) {
   return '`' + value + '`';
 }
 function assertTable(appId, table) {
-  if (!TABLES[appId] || !TABLES[appId].has(table)) throw new TypeError('TENANT_TABLE_NOT_ALLOWED');
+  if (!TABLES[appId] || (!TABLES[appId].has(table) && table !== 'bill_transactions')) throw new TypeError('TENANT_TABLE_NOT_ALLOWED');
   return identifier(table);
 }
 function assertColumn(appId, table, column) {

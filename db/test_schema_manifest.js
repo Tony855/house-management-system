@@ -46,9 +46,13 @@ test('tenant identity schema is separate and does not create a legacy sessions t
 
 test('tenant system manifest is covered by dedicated tenant-local migrations', () => {
   for (const table of manifest.tenantSystemTables) {
-    const migration = table === 'tenant_write_idempotency'
-      ? fs.readFileSync(path.join(__dirname, 'migrations/tenant/002_tenant_write_idempotency.sql'), 'utf8')
-      : fs.readFileSync(path.join(__dirname, 'migrations/tenant/003_tenant_write_audit.sql'), 'utf8');
+    const migrationPath = ({
+      tenant_write_idempotency: '002_tenant_write_idempotency.sql',
+      tenant_write_audit_events: '003_tenant_write_audit.sql',
+      bill_transactions: '004_bill_transactions.sql'
+    })[table];
+    assert.ok(migrationPath, 'tenant system table has a versioned migration');
+    const migration = fs.readFileSync(path.join(__dirname, 'migrations/tenant', migrationPath), 'utf8');
     assert.match(migration, new RegExp('CREATE TABLE IF NOT EXISTS ' + table + '\\b'));
   }
 });

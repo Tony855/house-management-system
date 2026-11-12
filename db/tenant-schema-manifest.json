@@ -92,6 +92,7 @@
   ],
   "tenantSystemTables": [
     "tenant_write_idempotency",
-    "tenant_write_audit_events"
+    "tenant_write_audit_events",
+    "bill_transactions"
   ]
 }
