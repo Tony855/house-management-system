@@ -23,6 +23,9 @@ function createPlatformApiRuntime({
 } = {}) {
   if (!mfaEncryption || !signingKeyProvider || !verificationKeyProvider) throw new TypeError('PLATFORM_SECURITY_DEPENDENCIES_REQUIRED');
   if (billingJobWorker && (tenantSecretManager === undefined || typeof billingJobWorker.start !== 'function' || typeof billingJobWorker.stop !== 'function')) throw new TypeError('PLATFORM_BILLING_JOB_WORKER_DEPENDENCIES_REQUIRED');
+  if ((billingJobWorker || tenantSecretManager !== undefined) && typeof billingSystemWriteAuthorizer !== 'function') {
+    throw new TypeError('PLATFORM_BILLING_SYSTEM_AUTHORIZER_REQUIRED');
+  }
   if (billingSystemWriteAuthorizer !== undefined && (tenantSecretManager === undefined || typeof billingSystemWriteAuthorizer !== 'function')) throw new TypeError('PLATFORM_BILLING_SYSTEM_AUTHORIZER_REQUIRED');
   const platformPool = createPlatformPool({ env, ...(createPool ? { createPool } : {}) });
   try {
@@ -44,7 +47,7 @@ function createPlatformApiRuntime({
     let tenantSecretProvider = null;
     let recurringBillingRunner = null;
     let tenantBillingJobWorker = null;
-    if (tenantSecretManager !== undefined) {
+    if (tenantSecretManager !== undefined && typeof billingSystemWriteAuthorizer === 'function') {
       const registry = createPlatformTenantRegistry(platformPool);
       const secretProvider = createTenantDatabaseSecretProvider(tenantSecretManager);
       tenantRegistry = registry;

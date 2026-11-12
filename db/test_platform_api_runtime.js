@@ -89,9 +89,20 @@ test('platform runtime leaves migration worker disabled when no secure resolver 
   assert.equal(config.pool.ended, 1);
 });
 
-test('platform runtime enables recurring billing scheduler only with secret manager and drains it on shutdown', async () => {
+test('platform runtime refuses to start recurring billing scheduler without system authorization', () => {
   const config = options({
     tenantSecretManager: { getSecret: async () => ({ user: 'tenant-user', password: 'tenant-password', version: 'v1' }) },
+    billingWorkerId: 'billing-runtime-worker',
+    billingPollIntervalMs: 60000
+  });
+  assert.throws(() => createPlatformApiRuntime(config), /PLATFORM_BILLING_SYSTEM_AUTHORIZER_REQUIRED/);
+  assert.equal(config.pool.ended, 1);
+});
+
+test('platform runtime enables recurring billing scheduler only with secret manager and system authorization, then drains it on shutdown', async () => {
+  const config = options({
+    tenantSecretManager: { getSecret: async () => ({ user: 'tenant-user', password: 'tenant-password', version: 'v1' }) },
+    billingSystemWriteAuthorizer: async () => true,
     billingWorkerId: 'billing-runtime-worker',
     billingPollIntervalMs: 60000
   });
@@ -108,10 +119,20 @@ test('platform runtime keeps recurring billing scheduler disabled without a secr
   await runtime.close();
 });
 
+test('platform runtime refuses an injected tenant billing worker without system authorization', () => {
+  const config = options({
+    tenantSecretManager: { getSecret: async () => ({ user: 'tenant-user', password: 'tenant-password', version: 'v1' }) },
+    billingJobWorker: { start() {}, stop: async () => {} }
+  });
+  assert.throws(() => createPlatformApiRuntime(config), /PLATFORM_BILLING_SYSTEM_AUTHORIZER_REQUIRED/);
+  assert.equal(config.pool.ended, 1);
+});
+
 test('platform runtime starts an injected tenant billing worker and drains it before DB close', async () => {
   const calls = [];
   const config = options({
     tenantSecretManager: { getSecret: async () => ({ user: 'tenant-user', password: 'tenant-password', version: 'v1' }) },
+    billingSystemWriteAuthorizer: async () => true,
     billingJobWorker: { start: () => calls.push('start'), stop: async () => calls.push('stop') }
   });
   const runtime = createPlatformApiRuntime(config);
