@@ -66,3 +66,14 @@ test('worker does not execute missing or terminal jobs', async () => {
   const worker = createPlatformTenantMigrationWorker({ store, workerId: 'worker-a', executeJob: async () => { throw new Error('must not run'); } });
   assert.equal((await worker.runJob(8)).state, 'not_found');
 });
+
+test('worker reports lease loss when a failure cannot be recorded by the expired owner', async () => {
+  const store = fakeStore({ async failJob() { return false; } });
+  const worker = createPlatformTenantMigrationWorker({
+    store, workerId: 'worker-a',
+    executeJob: async () => { throw Object.assign(new Error('operation failed'), { code: 'SOURCE_UNAVAILABLE' }); }
+  });
+  const result = await worker.runJob(8);
+  assert.equal(result.state, 'lease_lost');
+  assert.equal(store.calls.some(call => call[0] === 'complete'), false);
+});

@@ -61,13 +61,14 @@ function createPlatformTenantMigrationWorker({ store, workerId, executeJob, leas
         await assertLease(() => store.completeJob({ id: job.id, workerId }));
         return Object.freeze({ claimed: true, state: 'completed', jobId: job.id, result });
       } catch (error) {
+        let failureRecorded = false;
         if (!leaseLost) {
-          try { await store.failJob({ id: job.id, workerId, errorCode: safeErrorCode(error) }); }
+          try { failureRecorded = await store.failJob({ id: job.id, workerId, errorCode: safeErrorCode(error) }); }
           catch (_) { /* lease expiry/recovery remains the source of truth */ }
         }
         return Object.freeze({
           claimed: true,
-          state: leaseLost ? 'lease_lost' : 'failed',
+          state: leaseLost || failureRecorded !== true ? 'lease_lost' : 'failed',
           jobId: job.id,
           errorCode: safeErrorCode(error)
         });
