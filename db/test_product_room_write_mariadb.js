@@ -202,6 +202,19 @@ async function main() {
         name: buildingName
       }, 'ci-building-duplicate-' + appId);
       assert.equal(duplicateBuilding.status, 409, appId + ' duplicate building name');
+      const tenantPayload = appId === 'property'
+        ? { name: 'CI Company ' + appId, contact: 'CI Admin', phone: '123456', license_no: 'CI-LIC-' + appId }
+        : { name: 'CI Person ' + appId, gender: '女', phone: '123456', id_card: 'CI-ID-' + appId };
+      const tenantCreated = await writeBuilding(base, 'POST', '/api/tenants', tenantPayload, 'ci-tenant-create-' + appId + '-0001');
+      assert.equal(tenantCreated.status, 201, appId + ' tenant/company create');
+      const tenantBody = await tenantCreated.json();
+      assert.ok(Number.isSafeInteger(tenantBody.id), appId + ' tenant/company ID');
+      const tenantUpdated = await writeBuilding(base, 'PATCH', '/api/tenants/' + tenantBody.id, {
+        phone: '987654'
+      }, 'ci-tenant-patch-' + appId + '-0001');
+      assert.equal(tenantUpdated.status, 200, appId + ' tenant/company patch');
+      const [[tenantRows]] = await pool.query('SELECT phone FROM tenants WHERE id = ?', [tenantBody.id]);
+      assert.equal(tenantRows.phone, '987654', appId + ' tenant/company persisted');
       const room = { ...definition.room };
       const requestId = 'ci-room-create-' + appId + '-000001';
 
@@ -220,6 +233,26 @@ async function main() {
       const eventCounts = Object.fromEntries(auditEvents.map(row => [row.event, Number(row.total)]));
       assert.deepEqual(eventCounts, { tenant_write_started: 2, tenant_write_committed: 1, tenant_write_replayed: 1 }, appId + ' transactional audit events');
 
+      const repairCreated = await writeBuilding(base, 'POST', '/api/repairs', {
+        room_id: firstBody.id, title: 'CI repair ' + appId, content: 'Integration repair'
+      }, 'ci-repair-create-' + appId + '-0001');
+      assert.equal(repairCreated.status, 201, appId + ' repair create');
+      const repairBody = await repairCreated.json();
+      assert.equal(repairBody.status, 'pending', appId + ' repair initial status');
+      const skipRepairState = await writeBuilding(base, 'PATCH', '/api/repairs/' + repairBody.id, {
+        status: 'done'
+      }, 'ci-repair-skip-' + appId + '-0001');
+      assert.equal(skipRepairState.status, 409, appId + ' repair cannot skip processing');
+      const repairProcessing = await writeBuilding(base, 'PATCH', '/api/repairs/' + repairBody.id, {
+        status: 'processing', handler: 'CI technician'
+      }, 'ci-repair-processing-' + appId + '-0001');
+      assert.equal(repairProcessing.status, 200, appId + ' repair processing');
+      const repairDone = await writeBuilding(base, 'PATCH', '/api/repairs/' + repairBody.id, {
+        status: 'done', handle_note: 'Verified by CI'
+      }, 'ci-repair-done-' + appId + '-0001');
+      assert.equal(repairDone.status, 200, appId + ' repair completion');
+      const [[repairRows]] = await pool.query('SELECT status, handler, handle_note FROM repairs WHERE id = ?', [repairBody.id]);
+      assert.deepEqual(repairRows, { status: 'done', handler: 'CI technician', handle_note: 'Verified by CI' }, appId + ' repair persisted');
       denyAuthorization = true;
       const forbidden = await post(base, { ...room, room_no: 'CI-DENY-' + appId }, 'ci-write-denied-' + appId);
       assert.equal(forbidden.status, 403, appId + ' authorization denied');
