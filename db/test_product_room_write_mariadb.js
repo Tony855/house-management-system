@@ -244,6 +244,9 @@ async function main() {
         assert.equal(orderCheckout.status, 200, 'hotel order check-out');
         const [[cleaningRoom]] = await pool.query('SELECT status FROM rooms WHERE id = ?', [availableRoom.id]);
         assert.equal(cleaningRoom.status, 'cleaning', 'hotel check-out sends room to cleaning');
+        const [[checkoutBill]] = await pool.query('SELECT source, room_id, tenant_id, order_id, amount, paid_amount, status FROM bills WHERE order_id = ?', [order.id]);
+        assert.deepEqual(checkoutBill, { source: 'hotel', room_id: availableRoom.id, tenant_id: tenantBody.id, order_id: order.id, amount: '240.00', paid_amount: '0.00', status: 'unpaid' }, 'hotel checkout creates receivable exactly once');
+
         const invalidReentry = await hotelOrderRequest(base, 'PATCH', '/api/orders/' + order.id + '/status', { status: 'checked_in' }, 'ci-hotel-order-reentry-0001');
         assert.equal(invalidReentry.status, 409, 'hotel order cannot re-enter after checkout');
       }

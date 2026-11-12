@@ -55,14 +55,32 @@ function createHotelOrderRouter() {
         stepUpToken: req.get('x-step-up-token'), requestId: req.get('idempotency-key'),
         payload: { id, status, __resource: 'orders' },
         mutate: async tx => {
-          const [rows] = await tx.execute('SELECT id, room_id, status FROM orders WHERE id = ? LIMIT 1 FOR UPDATE', [id]);
+          const [rows] = await tx.execute('SELECT id, room_id, guest_id, order_no, check_in_date, check_out_date, total, status FROM orders WHERE id = ? LIMIT 1 FOR UPDATE', [id]);
           if (!rows.length) throw hotelError('ORDER_NOT_FOUND', 404);
-          const current = rows[0].status;
+          const order = rows[0];
+          const current = order.status;
           const allowed = (current === 'booked' && ['checked_in','cancelled'].includes(status)) || (current === 'checked_in' && status === 'checked_out');
           if (!allowed) throw hotelError('HOTEL_ORDER_TRANSITION_INVALID', 409);
-          await tx.updateById('orders', id, { status });
+          const now = new Date();
+          const orderPatch = { status };
+          if (status === 'checked_in') orderPatch.checkin_time = now;
+          if (status === 'checked_out') orderPatch.checkout_time = now;
+          await tx.updateById('orders', id, orderPatch);
           const roomStatus = status === 'checked_in' ? 'rented' : status === 'checked_out' ? 'cleaning' : 'vacant';
-          await tx.updateById('rooms', rows[0].room_id, { status: roomStatus });
+          await tx.updateById('rooms', order.room_id, { status: roomStatus });
+          if (status === 'checked_out') {
+            const [existingBills] = await tx.execute('SELECT id FROM bills WHERE order_id = ? LIMIT 1 FOR UPDATE', [id]);
+            if (!existingBills.length) {
+              const amount = Number(order.total);
+              if (!Number.isFinite(amount) || amount < 0) throw hotelError('HOTEL_ORDER_AMOUNT_INVALID', 409);
+              await tx.insert('bills', {
+                source: 'hotel', room_id: order.room_id, tenant_id: order.guest_id, order_id: id,
+                period_start: order.check_in_date, period_end: order.check_out_date,
+                due_date: order.check_out_date, amount, paid_amount: 0, status: 'unpaid',
+                remark: '订单 ' + order.order_no + ' 房费'
+              });
+            }
+          }
           return { id, status, room_status: roomStatus };
         } });
       return res.json(result);

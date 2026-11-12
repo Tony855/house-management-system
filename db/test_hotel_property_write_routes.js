@@ -59,7 +59,8 @@ test('hotel order creation derives price from locked room and updates room statu
 test('hotel order status transitions are constrained and room state follows lifecycle', async () => {
   const calls=[];const app=express();app.use(express.json());
   app.use((req,_res,next)=>{req.tenantWrite=async input=>{calls.push(input);return input.mutate({
-    execute:async()=>[[{id:22,room_id:4,status:'booked'}]],
+    execute:async sql=>sql.includes('FROM orders')?[[{id:22,room_id:4,guest_id:8,order_no:'H-100',check_in_date:'2026-11-15',check_out_date:'2026-11-18',total:240,status:'booked'}]]:[[]],
+    insert:async(table,fields)=>{calls.push({table,fields});return {insertId:9};},
     updateById:async(table,id,fields)=>{calls.push({table,id,fields});return {affectedRows:1};}
   });};next();});
   app.use('/api',createHotelOrderRouter());app.use((e,_q,res,_n)=>res.status(e.status||500).json({error:e.code||'ERROR'}));
