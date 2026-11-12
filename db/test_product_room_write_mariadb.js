@@ -79,6 +79,19 @@ async function post(base, room, requestId) {
   });
 }
 
+async function writeBuilding(base, method, path, body, requestId) {
+  return fetch(base + path, {
+    method,
+    headers: {
+      'content-type': 'application/json',
+      'x-operation-reason': 'CI approved building maintenance',
+      'x-step-up-token': 'ci-step-up-token-123456789',
+      'idempotency-key': requestId
+    },
+    body: JSON.stringify(body)
+  });
+}
+
 async function main() {
   if (process.env.NODE_ENV !== 'test') throw new Error('PRODUCT_ROOM_WRITE_MARIADB_TEST_ONLY');
   const config = {
@@ -101,6 +114,20 @@ async function main() {
       const tenantId = crypto.randomUUID();
       const tenantDb = await createTenantDb(adminPool, config, appId, tenantId, created, createdUsers);
       const pool = tenantDb.pool;
+      pools.push(pool);
+      const peerTenantId = crypto.randomUUID();
+      const peerTenantDb = await createTenantDb(adminPool, config, appId, peerTenantId, created, createdUsers);
+      pools.push(peerTenantDb.pool);
+      await assert.rejects(
+        mysql.createConnection({ ...config, ...tenantDb.credentials, database: tenantDatabaseName(appId, peerTenantId) }),
+        /denied|access/i,
+        appId + ' tenant principal cannot open a peer tenant database'
+      );
+      await assert.rejects(
+        mysql.createConnection({ ...config, ...peerTenantDb.credentials, database: tenantDatabaseName(appId, tenantId) }),
+        /denied|access/i,
+        appId + ' peer tenant principal cannot open this tenant database'
+      );
       pools.push(pool);
       const runtimeCredentials = tenantDb.credentials;
       const runtimeProbe = await mysql.createConnection({ ...config, ...runtimeCredentials, database: tenantDatabaseName(appId, tenantId) });
@@ -151,6 +178,31 @@ async function main() {
       const endpoint = await startServer(app);
       servers.push(endpoint.server);
       const base = endpoint.base;
+      const buildingName = 'CI-WRITE-' + appId.toUpperCase();
+      const buildingRequestId = 'ci-building-create-' + appId + '-0001';
+      const buildingCreated = await writeBuilding(base, 'POST', '/api/buildings', {
+        name: buildingName, address: 'Phnom Penh', remark: 'MariaDB tenant E2E'
+      }, buildingRequestId);
+      assert.equal(buildingCreated.status, 201, appId + ' building create');
+      const buildingBody = await buildingCreated.json();
+      assert.ok(Number.isSafeInteger(buildingBody.id), appId + ' building create ID');
+      const buildingReplay = await writeBuilding(base, 'POST', '/api/buildings', {
+        name: buildingName, address: 'Phnom Penh', remark: 'MariaDB tenant E2E'
+      }, buildingRequestId);
+      assert.equal(buildingReplay.status, 201, appId + ' building idempotent replay');
+      assert.equal((await buildingReplay.json()).id, buildingBody.id, appId + ' building replay ID');
+      const buildingUpdated = await writeBuilding(base, 'PATCH', '/api/buildings/' + buildingBody.id, {
+        address: 'Phnom Penh, Cambodia'
+      }, 'ci-building-patch-' + appId + '-0001');
+      assert.equal(buildingUpdated.status, 200, appId + ' building patch');
+      const [[buildingRows]] = await pool.query('SELECT name, address, remark FROM buildings WHERE id = ?', [buildingBody.id]);
+      assert.deepEqual(buildingRows, {
+        name: buildingName, address: 'Phnom Penh, Cambodia', remark: 'MariaDB tenant E2E'
+      }, appId + ' persisted building state');
+      const duplicateBuilding = await writeBuilding(base, 'POST', '/api/buildings', {
+        name: buildingName
+      }, 'ci-building-duplicate-' + appId);
+      assert.equal(duplicateBuilding.status, 409, appId + ' duplicate building name');
       const room = { ...definition.room };
       const requestId = 'ci-room-create-' + appId + '-000001';
 

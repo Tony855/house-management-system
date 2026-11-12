@@ -153,7 +153,7 @@ jobs:
           DB_USER: root
           DB_PASSWORD: house-api-test-root
         run: bash scripts/test-tenant-system-schema.sh
-      - name: Verify product room write APIs against isolated MariaDB tenant schemas
+      - name: Verify building and room writes plus cross-tenant DB isolation against MariaDB
         env:
           NODE_ENV: test
           DB_HOST: 127.0.0.1
