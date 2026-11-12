@@ -327,6 +327,31 @@ async function main() {
         assert.equal(Number(meter.elec_fee), 4.5, appId + ' electricity fee from room rate');
         const [[meterRows]] = await pool.query('SELECT water_fee, elec_fee FROM meters WHERE id = ?', [meter.id]);
         assert.equal(Number(meterRows.water_fee), 5, appId + ' persisted water fee');
+        if (appId === 'property') {
+          const generatedFees = await writeBuilding(base, 'POST', '/api/property-fees/generate', {
+            month: '2030-01'
+          }, 'ci-property-fees-generate-0001');
+          assert.equal(generatedFees.status, 201, 'property monthly fee generation');
+          const generatedBody = await generatedFees.json();
+          assert.equal(generatedBody.generated, 1, 'property monthly fee generated once');
+          assert.equal(generatedBody.bills.length, 1, 'property monthly fee bill count');
+          assert.equal(Number(generatedBody.bills[0].amount), 109.5, 'property fee plus meter charges');
+          assert.equal(generatedBody.bills[0].tenant_id, tenantBody.id, 'property fee billed to owner');
+          const [[propertyBill]] = await pool.query(
+            "SELECT source, tenant_id, period_start, period_end, due_date, amount, status FROM bills WHERE source = 'property' AND room_id = ? AND period_start = '2030-01-01'",
+            [firstBody.id]
+          );
+          assert.deepEqual(propertyBill, {
+            source: 'property', tenant_id: tenantBody.id, period_start: new Date('2030-01-01T00:00:00.000Z'),
+            period_end: new Date('2030-01-31T00:00:00.000Z'), due_date: new Date('2030-01-10T00:00:00.000Z'),
+            amount: '109.50', status: 'unpaid'
+          }, 'property receivable persisted with legacy billing dates');
+          const feeReplay = await writeBuilding(base, 'POST', '/api/property-fees/generate', {
+            month: '2030-01'
+          }, 'ci-property-fees-generate-0002');
+          assert.equal(feeReplay.status, 201, 'property fee duplicate period safely skipped');
+          assert.equal((await feeReplay.json()).generated, 0, 'property fee not duplicated with a new request key');
+        }
         const duplicateMeter = await hotelOrderRequest(base, 'POST', '/api/meters', meterPayload, 'ci-meter-duplicate-' + appId + '-0001');
         assert.equal(duplicateMeter.status, 409, appId + ' duplicate room-month meter rejected');
         const invalidBaseline = await hotelOrderRequest(base, 'POST', '/api/meters', { ...meterPayload, month: '2030-02', water_prev: 11 }, 'ci-meter-baseline-' + appId + '-0001');

@@ -8,6 +8,7 @@ const { createRoomUpdateRouter } = require('../shared/room-update-routes');
 const { createProductRoomWriteRouter } = require('../shared/product-room-write-routes');
 const { createMeterWriteRouter } = require('../shared/meter-write-routes');
 const { createBillPaymentRouter } = require('../shared/bill-payment-routes');
+const { createPropertyFeeRouter } = require('../shared/property-fee-routes');
 function createPropertyApi(dependencies) {
   return createProductApi({ ...dependencies, appId: 'property', routes: dependencies.routes || (() => {
     const router = express.Router();
@@ -18,6 +19,7 @@ function createPropertyApi(dependencies) {
     router.use(createProductRoomWriteRouter('property'));
     router.use(createMeterWriteRouter('property'));
     router.use(createBillPaymentRouter('property'));
+    router.use(createPropertyFeeRouter());
     return router;
   }) });
 }

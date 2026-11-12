@@ -5,6 +5,7 @@ const { validateProductRoom } = require('../services/shared/product-room-write-r
 const { validateHotelOrder, createHotelOrderRouter } = require('../services/hotel-api/order-routes');
 const { validateMeter, createMeterWriteRouter } = require('../services/shared/meter-write-routes');
 const { validateBillPayment, createBillPaymentRouter } = require('../services/shared/bill-payment-routes');
+const { validatePropertyFeeGeneration, monthDates, createPropertyFeeRouter } = require('../services/shared/property-fee-routes');
 const http = require('node:http');
 const express = require('express');
 
@@ -114,4 +115,64 @@ test('bill payment applies partial and final settlement under a locked balance',
     assert.equal(response.status,200);const body=await response.json();assert.equal(body.paid_amount,55);assert.equal(body.remaining,45);assert.equal(body.status,'partial');
     assert.equal(calls[0].payload.__resource,'bill-payments');assert.ok(calls.some(x=>x.table==='bills'&&x.fields.paid_amount===55));
   } finally {await new Promise(resolve=>server.close(resolve));}
+});
+
+
+test('property fee generation validates a strict month-only request', () => {
+  assert.deepEqual(validatePropertyFeeGeneration({ month: '2030-02' }), { month: '2030-02' });
+  assert.deepEqual(monthDates('2030-02'), { start: '2030-02-01', end: '2030-02-28', due: '2030-02-10' });
+  for (const bad of [{ month: '2030-13' }, { month: '2030-2' }, { month: '2030-02', amount: 1 }, {}, null]) {
+    assert.throws(() => validatePropertyFeeGeneration(bad), e => e.code === 'PROPERTY_FEE_INPUT_INVALID');
+  }
+});
+
+test('property fee generation creates owner receivable from server-side property fee and meter charges', async () => {
+  const calls = [];
+  const app = express(); app.use(express.json());
+  app.use((req, _res, next) => {
+    req.tenantWrite = async input => {
+      calls.push(input);
+      return input.mutate({
+        execute: async (sql, params) => {
+          calls.push({ sql, params });
+          if (sql.includes('FROM rooms')) return [[
+            { room_id: 4, owner_id: 8, room_no: 'P-401', property_fee: '100.00', water_fee: '5.00', elec_fee: '4.50' },
+            { room_id: 5, owner_id: 9, room_no: 'P-402', property_fee: '0.00', water_fee: '0.00', elec_fee: '0.00' }
+          ]];
+          return [[]];
+        },
+        insert: async (table, fields) => {
+          calls.push({ table, fields });
+          return { insertId: 41 };
+        }
+      });
+    };
+    next();
+  });
+  app.use('/api', createPropertyFeeRouter());
+  app.use((e, _q, res, _n) => res.status(e.status || 500).json({ error: e.code || 'ERROR' }));
+  const server = http.createServer(app);
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const response = await fetch('http://127.0.0.1:' + server.address().port + '/api/property-fees/generate', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-operation-reason': 'Generate monthly property receivables',
+        'x-step-up-token': 'step-up-token-123456789', 'idempotency-key': 'property-fees-2030-02' },
+      body: JSON.stringify({ month: '2030-02' })
+    });
+    assert.equal(response.status, 201);
+    const body = await response.json();
+    assert.equal(body.generated, 1);
+    assert.equal(body.skipped, 1);
+    assert.equal(body.bills[0].id, 41);
+    assert.equal(body.bills[0].tenant_id, 8);
+    assert.equal(body.bills[0].amount, 109.5);
+    assert.equal(body.bills[0].period_end, '2030-02-28');
+    assert.equal(calls[0].payload.__resource, 'property-bills');
+    const inserted = calls.find(call => call.table === 'bills');
+    assert.equal(inserted.fields.source, 'property');
+    assert.equal(inserted.fields.remark, '明细：物业费 100.00 + 水费 5.00 + 电费 4.50');
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+  }
 });
