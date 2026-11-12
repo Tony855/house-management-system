@@ -5,6 +5,7 @@ const { validateProductRoom } = require('../services/shared/product-room-write-r
 const { validateHotelOrder, createHotelOrderRouter } = require('../services/hotel-api/order-routes');
 const { validateMeter, createMeterWriteRouter } = require('../services/shared/meter-write-routes');
 const { validateBillPayment, createBillPaymentRouter } = require('../services/shared/bill-payment-routes');
+const { validateReconciliationRange, createFinanceReconciliationRouter } = require('../services/shared/finance-reconciliation-routes');
 const { validatePropertyFeeGeneration, monthDates, createPropertyFeeRouter } = require('../services/shared/property-fee-routes');
 const http = require('node:http');
 const express = require('express');
@@ -175,4 +176,34 @@ test('property fee generation creates owner receivable from server-side property
   } finally {
     await new Promise(resolve => server.close(resolve));
   }
+});
+
+
+test('finance reconciliation validates a bounded inclusive date range', () => {
+  assert.deepEqual(validateReconciliationRange({ from_date: '2030-01-01', to_date: '2030-12-31' }), {
+    from_date: '2030-01-01', to_date: '2030-12-31'
+  });
+  for (const query of [{ from_date: '2030-02-30', to_date: '2030-03-01' },
+    { from_date: '2030-03-02', to_date: '2030-03-01' },
+    { from_date: '2028-01-01', to_date: '2030-01-01' }]) {
+    assert.throws(() => validateReconciliationRange(query), e => e.code.startsWith('FINANCE_RECONCILIATION_'));
+  }
+});
+
+test('finance reconciliation runs against the authenticated tenant database and reports ledger mismatches', async () => {
+  const calls=[]; const app=express();
+  app.use((req,_res,next)=>{req.tenantDb={execute:async(sql,params)=>{
+    calls.push({sql,params});
+    return [[{source:'rental',bills_count:4,receipts:'100.00',refunds:'20.00',net_transactions:'80.00',mismatch_count:0}]];
+  }};next();});
+  app.use('/api',createFinanceReconciliationRouter('rental'));
+  app.use((e,_q,res,_n)=>res.status(e.status||500).json({error:e.code||'ERROR'}));
+  const server=http.createServer(app);await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  try {
+    const response=await fetch('http://127.0.0.1:'+server.address().port+'/api/finance/reconciliation?from_date=2030-01-01&to_date=2030-12-31');
+    assert.equal(response.status,200);const body=await response.json();
+    assert.deepEqual(body.totals,{bills_count:4,receipts:100,refunds:20,net_transactions:80,mismatch_count:0});
+    assert.deepEqual(calls[0].params,['2030-01-01','2030-12-31','2030-01-01','2030-12-31']);
+    assert.match(calls[0].sql,/FROM bill_transactions/);
+  } finally {await new Promise(resolve=>server.close(resolve));}
 });

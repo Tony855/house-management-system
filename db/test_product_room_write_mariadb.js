@@ -361,6 +361,15 @@ async function main() {
       assert.equal(refundBody.status, 'partial', appId + ' refunded bill becomes partial');
       const [[refundLedger]] = await pool.query("SELECT transaction_type, amount, external_reference FROM bill_transactions WHERE bill_id = ? AND transaction_type = 'refund'", [billSeed.insertId]);
       assert.deepEqual(refundLedger, { transaction_type: 'refund', amount: '20.00', external_reference: 'CI-REFUND-' + appId }, appId + ' refund audit ledger');
+      const reconciliationResponse = await fetch(base + '/api/finance/reconciliation?from_date=2030-01-01&to_date=2030-12-31');
+      assert.equal(reconciliationResponse.status, 200, appId + ' finance reconciliation endpoint');
+      const reconciliation = await reconciliationResponse.json();
+      const billSource = appId === 'hotel' ? 'hotel' : appId === 'property' ? 'property' : 'rental';
+      const reconciledSource = reconciliation.items.find(item => item.source === billSource);
+      assert.ok(reconciledSource, appId + ' reconciliation includes product source');
+      assert.equal(reconciledSource.mismatch_count, 0, appId + ' bill ledger balances reconcile');
+      assert.ok(reconciledSource.receipts >= 100, appId + ' reconciliation includes receipts');
+      assert.ok(reconciledSource.refunds >= 20, appId + ' reconciliation includes refunds');
       const excessiveRefund = await hotelOrderRequest(base, 'POST', '/api/bills/' + billSeed.insertId + '/refund', { amount: 81 }, 'ci-bill-refund-excess-' + appId);
       assert.equal(excessiveRefund.status, 409, appId + ' refund cannot exceed net received amount');
       const overpayment = await hotelOrderRequest(base, 'POST', '/api/bills/' + billSeed.insertId + '/pay', { amount: 21 }, 'ci-bill-overpay-' + appId);
