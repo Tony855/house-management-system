@@ -72,6 +72,37 @@ function validateContract(input) {
     rent: money(input.rent), deposit: money(input.deposit), pay_cycle, sign_date: input.sign_date, remark: input.remark || '' });
 }
 
+function addCalendarMonths(date, months) {
+  const [year, month, day] = date.split('-').map(Number);
+  const first = new Date(Date.UTC(year, month - 1 + months, 1));
+  const lastDay = new Date(Date.UTC(first.getUTCFullYear(), first.getUTCMonth() + 1, 0)).getUTCDate();
+  const result = new Date(Date.UTC(first.getUTCFullYear(), first.getUTCMonth(), Math.min(day, lastDay)));
+  return result.toISOString().slice(0, 10);
+}
+function addCalendarDays(date, days) {
+  const [year, month, day] = date.split('-').map(Number);
+  return new Date(Date.UTC(year, month - 1, day + days)).toISOString().slice(0, 10);
+}
+function buildNextRentalBill(contract, lastPeriodEnd, today) {
+  if (!contract || !validDate(contract.start_date) || !validDate(contract.end_date) ||
+      !validDate(today) || (lastPeriodEnd && !validDate(lastPeriodEnd))) throw contractError('RENTAL_BILL_CONTEXT_INVALID');
+  if (contract.status !== 'active') throw contractError('CONTRACT_NOT_ACTIVE', 409);
+  const cycle = Number(contract.pay_cycle) || 1;
+  const rent = Number(contract.rent);
+  if (!Number.isSafeInteger(cycle) || cycle < 1 || cycle > 36 || !Number.isFinite(rent) || rent < 0) throw contractError('RENTAL_BILL_CONTEXT_INVALID');
+  const periodStart = lastPeriodEnd ? addCalendarDays(lastPeriodEnd, 1) : contract.start_date;
+  if (periodStart > today) throw contractError('RENTAL_BILL_NOT_DUE', 409);
+  if (periodStart > contract.end_date) throw contractError('CONTRACT_PERIOD_FINISHED', 409);
+  const calculatedEnd = addCalendarDays(addCalendarMonths(periodStart, cycle), -1);
+  const periodEnd = calculatedEnd > contract.end_date ? contract.end_date : calculatedEnd;
+  return Object.freeze({
+    source: 'rental', room_id: Number(contract.room_id), tenant_id: Number(contract.tenant_id),
+    contract_id: Number(contract.id), period_start: periodStart, period_end: periodEnd,
+    due_date: periodStart, amount: Math.round(rent * cycle * 100) / 100,
+    paid_amount: 0, status: 'unpaid', remark: '合同 ' + contract.contract_no
+  });
+}
+
 function createRentalWriteRouter() {
   const router = express.Router();
   router.post('/rooms', async (req, res, next) => {
@@ -137,6 +168,32 @@ function createRentalWriteRouter() {
       return res.status(201).json(result);
     } catch (error) { return next(error); }
   });
+  router.post('/contracts/:id/generate-bill', async (req, res, next) => {
+    try {
+      if (typeof req.tenantWrite !== 'function') return res.status(503).json({ error: 'TENANT_WRITE_UNAVAILABLE' });
+      const id = Number(req.params.id);
+      if (!Number.isSafeInteger(id) || id < 1 || (req.body && Object.keys(req.body).length)) throw contractError('RENTAL_BILL_INPUT_INVALID');
+      const today = new Date().toISOString().slice(0, 10);
+      const result = await req.tenantWrite({
+        operation: 'create', reason: req.get('x-operation-reason'),
+        stepUpToken: req.get('x-step-up-token'), requestId: req.get('idempotency-key'),
+        payload: { contract_id: id, __resource: 'rental-bills' },
+        mutate: async tx => {
+          const [rows] = await tx.execute('SELECT * FROM contracts WHERE id = ? LIMIT 1 FOR UPDATE', [id]);
+          if (!rows.length) throw contractError('CONTRACT_NOT_FOUND', 404);
+          const contract = rows[0];
+          const [lastBills] = await tx.execute(
+            'SELECT period_end FROM bills WHERE contract_id = ? AND source = ? ORDER BY period_end DESC LIMIT 1 FOR UPDATE',
+            [id, 'rental']
+          );
+          const bill = buildNextRentalBill(contract, lastBills.length ? String(lastBills[0].period_end).slice(0, 10) : null, today);
+          const inserted = await tx.insert('bills', bill);
+          return { id: Number(inserted.insertId), ...bill };
+        }
+      });
+      return res.status(201).json(result);
+    } catch (error) { return next(error); }
+  });
   router.patch('/contracts/:id', async (req, res, next) => {
     try {
       if (typeof req.tenantWrite !== 'function') return res.status(503).json({ error: 'TENANT_WRITE_UNAVAILABLE' });
@@ -161,4 +218,4 @@ function createRentalWriteRouter() {
   return router;
 }
 
-module.exports = { ALLOWED_FIELDS, validateRoom, validateContract, createRentalWriteRouter };
+module.exports = { ALLOWED_FIELDS, validateRoom, validateContract, buildNextRentalBill, createRentalWriteRouter };

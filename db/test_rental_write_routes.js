@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const http = require('node:http');
 const express = require('express');
-const { createRentalWriteRouter, validateRoom, validateContract } = require('../services/rental-api/write-routes');
+const { createRentalWriteRouter, validateRoom, validateContract, buildNextRentalBill } = require('../services/rental-api/write-routes');
 
 const valid = Object.freeze({ building_id: 7, room_no: '  A-101 ', rent: '1200.00', deposit: 1000 });
 
@@ -124,5 +124,40 @@ test('POST /contracts uses transaction boundary and marks its vacant room rented
     assert.equal(response.status,201); assert.equal((await response.json()).id,31);
     assert.equal(calls[0].payload.__resource,'contracts');
     assert.ok(calls.some(x=>x.table==='rooms'&&x.fields.status==='rented'));
+  } finally { await new Promise(resolve=>server.close(resolve)); }
+});
+
+test('rental bill period follows contract cycle, clamps final period and rejects future/finished periods', () => {
+  const contract = { id: 9, contract_no: 'R-9', room_id: 3, tenant_id: 8, start_date: '2026-01-31', end_date: '2026-12-31', rent: '1200.00', pay_cycle: 1, status: 'active' };
+  const first = buildNextRentalBill(contract, null, '2026-02-28');
+  assert.equal(first.period_start, '2026-01-31');
+  assert.equal(first.period_end, '2026-02-27');
+  assert.equal(first.amount, 1200);
+  const next = buildNextRentalBill({ ...contract, pay_cycle: 3 }, '2026-02-27', '2026-05-01');
+  assert.equal(next.period_start, '2026-02-28');
+  assert.equal(next.period_end, '2026-05-27');
+  assert.equal(next.amount, 3600);
+  const final = buildNextRentalBill({ ...contract, start_date: '2026-11-01', pay_cycle: 3 }, '2026-11-30', '2026-12-01');
+  assert.equal(final.period_end, '2026-12-31');
+  assert.equal(final.amount, 3600);
+  assert.throws(() => buildNextRentalBill({ ...contract, start_date: '2027-01-01' }, null, '2026-12-01'), e => e.code === 'RENTAL_BILL_NOT_DUE');
+  assert.throws(() => buildNextRentalBill(contract, '2026-12-31', '2026-12-31'), e => e.code === 'CONTRACT_PERIOD_FINISHED');
+  assert.throws(() => buildNextRentalBill({ ...contract, status: 'terminated' }, null, '2026-02-01'), e => e.code === 'CONTRACT_NOT_ACTIVE');
+});
+
+test('POST /contracts/:id/generate-bill locks contract and creates next period inside tenant write boundary', async () => {
+  const calls=[]; const app=express(); app.use(express.json());
+  app.use((req,_res,next)=>{req.tenantWrite=async input=>{calls.push(input);return input.mutate({
+    execute:async sql=>sql.includes('FROM contracts')?[[{id:9,contract_no:'R-9',room_id:3,tenant_id:8,start_date:'2026-01-01',end_date:'2026-12-31',rent:'1200.00',pay_cycle:1,status:'active'}]]:[[]],
+    insert:async(table,fields)=>{calls.push({table,fields});return {insertId:91};}
+  });};next();});
+  app.use('/api',createRentalWriteRouter()); app.use((e,_q,res,_n)=>res.status(e.status||500).json({error:e.code||'ERROR'}));
+  const server=http.createServer(app); await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  try {
+    const response=await fetch('http://127.0.0.1:'+server.address().port+'/api/contracts/9/generate-bill',{method:'POST',headers:{'content-type':'application/json','x-operation-reason':'Generate next contract rent bill','x-step-up-token':'step-up-token-123456789','idempotency-key':'rental-bill-generate-0001'},body:'{}'});
+    assert.equal(response.status,201); const body=await response.json();
+    assert.equal(body.id,91); assert.equal(body.source,'rental'); assert.equal(body.contract_id,9);
+    assert.equal(calls[0].payload.__resource,'rental-bills');
+    assert.ok(calls.some(x=>x.table==='bills'&&x.fields.amount===1200));
   } finally { await new Promise(resolve=>server.close(resolve)); }
 });
