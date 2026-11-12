@@ -23,7 +23,8 @@
     "test:tenant-identity-mariadb": "node db/test_tenant_identity_migration_mariadb.js",
     "test:platform-login-limiter-mariadb": "node db/test_platform_login_limiter_mariadb.js",
     "test:recurring-billing-mariadb": "node db/test_recurring_billing_dispatch_mariadb.js",
-    "test:tenant-billing-leases-mariadb": "node --test db/test_tenant_billing_job_leases_mariadb.js"
+    "test:tenant-billing-leases-mariadb": "node --test db/test_tenant_billing_job_leases_mariadb.js",
+    "test:platform-billing-worker-mariadb": "node --test db/test_platform_billing_worker_authorizer_mariadb.js"
   },
   "dependencies": {
     "express": "^5.3.0",

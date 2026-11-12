@@ -78,6 +78,14 @@ jobs:
           DB_PASSWORD: platform-test-root
           DB_NAME: platform_control_test
         run: npm run test:recurring-billing-mariadb
+      - name: Verify registered billing worker credentials and scopes against MariaDB
+        env:
+          DB_HOST: 127.0.0.1
+          DB_PORT: 3306
+          DB_USER: root
+          DB_PASSWORD: platform-test-root
+          DB_NAME: platform_control_test
+        run: npm run test:platform-billing-worker-mariadb
       - name: Verify login rate limiter against MariaDB
         env:
           DB_HOST: 127.0.0.1
