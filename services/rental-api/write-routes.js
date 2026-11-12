@@ -54,7 +54,7 @@ function validateRoom(body) {
 const CONTRACT_FIELDS = new Set(['contract_no', 'room_id', 'tenant_id', 'start_date', 'end_date', 'rent', 'deposit', 'pay_cycle', 'sign_date', 'remark']);
 function contractError(code, status = 400) { return Object.assign(new Error(code), { code, status }); }
 function validDate(value) {
-  if (typeof value !== 'string' || !/^\\d{4}-\\d{2}-\\d{2}$/.test(value)) return false;
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
   const date = new Date(value + 'T00:00:00Z');
   return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value;
 }
@@ -71,7 +71,8 @@ function validateContract(input) {
   return Object.freeze({ contract_no: input.contract_no.trim(), room_id, tenant_id, start_date: input.start_date, end_date: input.end_date,
     rent: money(input.rent), deposit: money(input.deposit), pay_cycle, sign_date: input.sign_date, remark: input.remark || '' });
 }
-\nfunction createRentalWriteRouter() {
+
+function createRentalWriteRouter() {
   const router = express.Router();
   router.post('/rooms', async (req, res, next) => {
     try {
