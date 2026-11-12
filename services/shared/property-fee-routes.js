@@ -15,6 +15,10 @@ function validatePropertyFeeGeneration(input) {
   return Object.freeze({ month: input.month });
 }
 
+function dateOnly(value) {
+  return value instanceof Date ? value.toISOString().slice(0, 10) : String(value).slice(0, 10);
+}
+
 function monthDates(month) {
   const [year, monthNumber] = month.split('-').map(Number);
   const start = month + '-01';
@@ -129,7 +133,7 @@ function createPropertyFeeRouter() {
         id: Number(row.id), source: row.source, room_id: Number(row.room_id),
         room_no: row.room_no, owner_id: row.owner_id === null ? null : Number(row.owner_id),
         tenant_id: row.tenant_id === null ? null : Number(row.tenant_id),
-        tenant_name: row.tenant_name || '', due_date: String(row.due_date).slice(0, 10),
+        tenant_name: row.tenant_name || '', due_date: dateOnly(row.due_date),
         amount: Number(row.amount), paid_amount: Number(row.paid_amount),
         outstanding_amount: Number(row.outstanding_amount), days_overdue: Number(row.days_overdue)
       }));
