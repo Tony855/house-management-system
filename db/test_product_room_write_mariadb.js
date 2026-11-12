@@ -252,6 +252,17 @@ async function main() {
       }
 
 
+
+      const room = { ...definition.room };
+      const requestId = 'ci-room-create-' + appId + '-000001';
+
+      const [first, replay] = await Promise.all([
+        post(base, room, requestId),
+        post(base, room, requestId)
+      ]);
+      assert.equal(first.status, 201, appId + ' first create');
+      assert.equal(replay.status, 201, appId + ' idempotent replay');
+      const firstBody = await first.json();
       if (appId === 'rental' || appId === 'property') {
         const meterPayload = { room_id: firstBody.id, month: '2030-01', water_prev: 10, water_curr: 12.5, elec_prev: 20, elec_curr: 23 };
         const meterCreated = await hotelOrderRequest(base, 'POST', '/api/meters', meterPayload, 'ci-meter-create-' + appId + '-0001');
@@ -269,16 +280,6 @@ async function main() {
         assert.equal(invalidBaseline.status, 409, appId + ' next period baseline must match previous reading');
       }
 
-      const room = { ...definition.room };
-      const requestId = 'ci-room-create-' + appId + '-000001';
-
-      const [first, replay] = await Promise.all([
-        post(base, room, requestId),
-        post(base, room, requestId)
-      ]);
-      assert.equal(first.status, 201, appId + ' first create');
-      assert.equal(replay.status, 201, appId + ' idempotent replay');
-      const firstBody = await first.json();
       const replayBody = await replay.json();
       assert.equal(firstBody.id, replayBody.id, appId + ' replay ID');
       const [[countRows]] = await pool.query('SELECT COUNT(*) AS total FROM rooms WHERE room_no = ?', [room.room_no]);
