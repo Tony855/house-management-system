@@ -105,6 +105,8 @@ function createPlatformAuthRouter({ authService, mfaService, auditStore, adminSt
       return res.status(204).end();
     } catch (error) { return next(error); }
   });
+  // Fail closed until a trusted-channel enrollment grant and delivery provider are
+  // wired into the production runtime. Directly clearing MFA would lock out the target.
   router.post('/admins/:adminId/mfa/reset', authService.authenticate, (req, _res, next) => {
     if (!req.platformAuth?.permissions?.includes('platform:admins:write') ||
         req.platformAuth.stepUpVerified !== true) {
@@ -118,33 +120,9 @@ function createPlatformAuthRouter({ authService, mfaService, auditStore, adminSt
         code: 'PLATFORM_ACTION_REASON_REQUIRED', status: 400
       }));
     }
-    return next();
-  }, async (req, res, next) => {
-    try {
-      const targetAdminId = Number(req.params.adminId);
-      if (!Number.isSafeInteger(targetAdminId) || targetAdminId < 1) {
-        return next(Object.assign(new Error('PLATFORM_ADMIN_ID_INVALID'), {
-          code: 'PLATFORM_ADMIN_ID_INVALID', status: 400
-        }));
-      }
-      if (!adminStore || typeof adminStore.resetAdminMfa !== 'function') {
-        return next(Object.assign(new Error('PLATFORM_ADMIN_MANAGEMENT_UNAVAILABLE'), {
-          code: 'PLATFORM_ADMIN_MANAGEMENT_UNAVAILABLE', status: 503
-        }));
-      }
-      const reset = await adminStore.resetAdminMfa({
-        actorAdminId: req.platformAuth.adminId,
-        targetAdminId,
-        sessionId: req.platformAuth.sessionId,
-        reason: req.body.reason
-      });
-      if (reset !== true) {
-        return next(Object.assign(new Error('PLATFORM_ADMIN_MFA_RESET_REJECTED'), {
-          code: 'PLATFORM_ADMIN_MFA_RESET_REJECTED', status: 409
-        }));
-      }
-      return res.status(204).end();
-    } catch (error) { return next(error); }
+    return next(Object.assign(new Error('PLATFORM_MFA_RECOVERY_UNAVAILABLE'), {
+      code: 'PLATFORM_MFA_RECOVERY_UNAVAILABLE', status: 503
+    }));
   });
   router.post('/admins/:adminId/reenable/request', authService.authenticate, (req, _res, next) => {
     if (!req.platformAuth?.permissions?.includes('platform:admins:write') ||
