@@ -215,4 +215,4 @@ function createHotelOrderRouter() {
   return router;
 }
 
-module.exports = { validateHotelOrder, createHotelOrderRouter };
+module.exports = { validateHotelOrder, validateHotelDepositTransaction, createHotelOrderRouter };
