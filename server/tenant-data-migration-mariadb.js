@@ -29,6 +29,7 @@ function assertPool(pool, method, code) {
 function createMariaDbTenantMigrationAdapters({ appId, sourcePool, targetPool }) {
   if (!APP_IDS.has(appId)) throw new TypeError('TENANT_DATA_MIGRATION_APP_INVALID');
   assertPool(sourcePool, 'execute', 'TENANT_MIGRATION_SOURCE_POOL_REQUIRED');
+  assertPool(sourcePool, 'getConnection', 'TENANT_MIGRATION_SOURCE_CONNECTION_REQUIRED');
   assertPool(targetPool, 'execute', 'TENANT_MIGRATION_TARGET_POOL_REQUIRED');
   assertPool(targetPool, 'getConnection', 'TENANT_MIGRATION_TARGET_CONNECTION_REQUIRED');
   const tables = [...TABLES[appId]].sort();
@@ -38,16 +39,34 @@ function createMariaDbTenantMigrationAdapters({ appId, sourcePool, targetPool })
       if (requestedAppId !== appId || !Number.isSafeInteger(sourceOrgId) || sourceOrgId < 1) {
         throw new TypeError('TENANT_DATA_MIGRATION_SOURCE_SCOPE_INVALID');
       }
-      await assertDatabase(sourcePool, 'house_sys_' + appId, 'TENANT_DATA_MIGRATION_SOURCE_DATABASE_MISMATCH');
-      const result = {};
-      for (const table of tables) {
-        const [rows] = await sourcePool.execute(
-          'SELECT * FROM ' + quoteIdentifier(table) + ' WHERE `org_id` = ? ORDER BY `id` ASC',
-          [sourceOrgId]
-        );
-        result[table] = rows;
+      const connection = await sourcePool.getConnection();
+      let transactionStarted = false;
+      try {
+        await assertDatabase(connection, 'house_sys_' + appId, 'TENANT_DATA_MIGRATION_SOURCE_DATABASE_MISMATCH');
+        // All product tables must come from one repeatable-read snapshot. A
+        // per-table pool query can otherwise mix rows from different commits.
+        await connection.execute('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
+        await connection.execute('START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY');
+        transactionStarted = true;
+        const result = {};
+        for (const table of tables) {
+          const [rows] = await connection.execute(
+            'SELECT * FROM ' + quoteIdentifier(table) + ' WHERE `org_id` = ? ORDER BY `id` ASC',
+            [sourceOrgId]
+          );
+          result[table] = rows;
+        }
+        await connection.commit();
+        transactionStarted = false;
+        return { tables: result };
+      } catch (error) {
+        if (transactionStarted) {
+          try { await connection.rollback(); } catch (rollbackError) { error.rollbackError = rollbackError; }
+        }
+        throw error;
+      } finally {
+        connection.release();
       }
-      return { tables: result };
     }
   });
 
