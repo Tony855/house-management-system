@@ -265,6 +265,35 @@ async function main() {
       assert.equal(first.status, 201, appId + ' first create');
       assert.equal(replay.status, 201, appId + ' idempotent replay');
       const firstBody = await first.json();
+      if (appId === 'rental') {
+        const contractResponse = await writeBuilding(base, 'POST', '/api/contracts', {
+          contract_no: 'CI-RENTAL-BILL-0001', room_id: firstBody.id, tenant_id: tenantBody.id,
+          start_date: '2020-01-01', end_date: '2040-12-31', sign_date: '2020-01-01',
+          rent: 120, deposit: 0, pay_cycle: 1
+        }, 'ci-rental-contract-create-0001');
+        assert.equal(contractResponse.status, 201, 'rental contract create for billing integration');
+        const contract = await contractResponse.json();
+        const [generatedFirst, generatedReplay] = await Promise.all([
+          writeBuilding(base, 'POST', '/api/contracts/' + contract.id + '/generate-bill', {}, 'ci-rental-bill-generate-0001'),
+          writeBuilding(base, 'POST', '/api/contracts/' + contract.id + '/generate-bill', {}, 'ci-rental-bill-generate-0001')
+        ]);
+        assert.equal(generatedFirst.status, 201, 'rental first contract bill');
+        assert.equal(generatedReplay.status, 201, 'rental contract bill idempotent replay');
+        const firstBill = await generatedFirst.json();
+        const replayBill = await generatedReplay.json();
+        assert.equal(firstBill.id, replayBill.id, 'rental generated bill replay ID');
+        assert.equal(firstBill.period_start, '2020-01-01', 'rental first billing period start');
+        assert.equal(Number(firstBill.amount), 120, 'rental contract bill amount');
+        const [[firstBillCount]] = await pool.query('SELECT COUNT(*) AS total FROM bills WHERE contract_id = ? AND source = ?', [contract.id, 'rental']);
+        assert.equal(Number(firstBillCount.total), 1, 'concurrent idempotent generation creates one rental bill');
+        const nextBillResponse = await writeBuilding(base, 'POST', '/api/contracts/' + contract.id + '/generate-bill', {}, 'ci-rental-bill-generate-0002');
+        assert.equal(nextBillResponse.status, 201, 'rental next contract billing period');
+        const nextBill = await nextBillResponse.json();
+        assert.equal(nextBill.period_start, '2020-02-01', 'rental next period follows last bill');
+        const [[allContractBills]] = await pool.query('SELECT COUNT(*) AS total FROM bills WHERE contract_id = ? AND source = ?', [contract.id, 'rental']);
+        assert.equal(Number(allContractBills.total), 2, 'rental sequential generation creates next period only');
+      }
+
       const [billSeed] = await pool.execute("INSERT INTO bills (source, room_id, period_start, period_end, due_date, amount, paid_amount, status) VALUES (?, ?, '2030-01-01', '2030-01-31', '2030-01-31', 100, 0, 'unpaid')", [appId === 'hotel' ? 'hotel' : appId === 'property' ? 'property' : 'rental', firstBody.id]);
       const partialRequestId = 'ci-bill-partial-' + appId;
       const partialPayload = { amount: 35, pay_method: 'bank', pay_date: '2030-01-31' };
