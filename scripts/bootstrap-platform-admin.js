@@ -36,8 +36,7 @@ async function bootstrapFirstPlatformAdmin({
 }) {
   validateInput({ username, password, mfaEncryption, recoveryCodePepper });
   if (!pool || typeof pool.getConnection !== 'function' ||
-      typeof now !== 'function' || typeof randomBytes !== 'function' ||
-      typeof passwordHasher !== 'function') {
+      typeof randomBytes !== 'function' || typeof passwordHasher !== 'function') {
     throw new TypeError('PLATFORM_BOOTSTRAP_DEPENDENCIES_INVALID');
   }
   const connection = await pool.getConnection();
