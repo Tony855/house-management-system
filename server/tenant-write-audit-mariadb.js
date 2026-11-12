@@ -9,7 +9,9 @@ const REQUEST_ID_RE = /^[A-Za-z0-9._:-]{16,128}$/;
 function createMariaDbTenantWriteAuditStore() {
   return Object.freeze({
     async append(tx, event) {
-      if (!tx || typeof tx.execute !== 'function' || !event || typeof event !== 'object' ||
+      const allowedKeys = new Set(['appId', 'tenantId', 'userId', 'sessionId', 'operation', 'reason', 'requestId', 'event']);
+      if (!event || typeof event !== 'object' || Object.keys(event).some(key => !allowedKeys.has(key)) ||
+          !tx || typeof tx.execute !== 'function' || !event || typeof event !== 'object' ||
           !APP_IDS.has(event.appId) || !UUID_RE.test(event.tenantId || '') ||
           typeof event.userId !== 'string' || !event.userId || event.userId.length > 128 ||
           typeof event.sessionId !== 'string' || !/^[A-Za-z0-9._~-]{16,128}$/.test(event.sessionId) ||
