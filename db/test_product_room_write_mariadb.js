@@ -341,7 +341,7 @@ async function main() {
       const finalPayment = await hotelOrderRequest(base, 'POST', '/api/bills/' + billSeed.insertId + '/pay', { amount: 65, pay_method: 'bank', pay_date: '2030-02-01' }, 'ci-bill-final-' + appId);
       assert.equal(finalPayment.status, 200, appId + ' final bill payment');
       const [[ledgerRows]] = await pool.query('SELECT COUNT(*) AS total, SUM(amount) AS gross FROM bill_transactions WHERE bill_id = ?', [billSeed.insertId]);
-      assert.equal(Number(ledgerRows.total), 3, appId + ' receipt ledger records payment and final settlement once each');
+      assert.equal(Number(ledgerRows.total), 2, appId + ' receipt ledger records payment and final settlement once each');
       assert.equal(Number(ledgerRows.gross), 100, appId + ' gross receipt ledger total');
       const [[paidBill]] = await pool.query('SELECT paid_amount, status FROM bills WHERE id = ?', [billSeed.insertId]);
       assert.equal(Number(paidBill.paid_amount), 100, appId + ' fully paid amount');
