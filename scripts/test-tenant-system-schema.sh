@@ -35,4 +35,12 @@ fi
 "${mysql_cmd[@]}" "$DB_NAME" -e "INSERT INTO tenant_write_audit_events (app_id, tenant_uuid, user_id, session_id, operation, reason, request_id, event_type) VALUES ('rental', '12345678-1234-4123-8123-123456789abc', 'ci-user', 'ci-session-1234567890', 'create', 'CI migration smoke test', 'ci-request-1234567890', 'tenant_write_started')"
 audit_rows="$("${mysql_cmd[@]}" "$DB_NAME" -e "SELECT COUNT(*) FROM tenant_write_audit_events WHERE request_id = 'ci-request-1234567890' AND event_type = 'tenant_write_started'")"
 if [[ "$audit_rows" != "1" ]]; then echo "Tenant write audit insert/readback failed" >&2; exit 1; fi
-echo "Tenant system and property collection migrations passed."
+# Rental contract deposit ledger schema smoke test.
+"${mysql_cmd[@]}" "$DB_NAME" -e "CREATE TABLE IF NOT EXISTS contracts (id INT NOT NULL AUTO_INCREMENT PRIMARY KEY) ENGINE=InnoDB"
+"${mysql_cmd[@]}" "$DB_NAME" < db/migrations/tenant/007_rental_contract_deposit_transactions.sql
+deposit_table="$("${mysql_cmd[@]}" -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '$DB_NAME' AND table_name = 'rental_contract_deposit_transactions' AND table_type = 'BASE TABLE'")"
+if [[ "$deposit_table" != "1" ]]; then echo "Rental deposit migration is incomplete" >&2; exit 1; fi
+"${mysql_cmd[@]}" "$DB_NAME" -e "DELETE FROM rental_contract_deposit_transactions WHERE request_id = 'ci-rental-deposit-smoke-0001'; DELETE FROM contracts WHERE id = 1; INSERT INTO contracts (id) VALUES (1); INSERT INTO rental_contract_deposit_transactions (contract_id, transaction_type, amount, pay_method, request_id, transaction_date) VALUES (1, 'receipt', 25.00, 'cash', 'ci-rental-deposit-smoke-0001', '2030-01-01')"
+deposit_rows="$("${mysql_cmd[@]}" "$DB_NAME" -e "SELECT COUNT(*) FROM rental_contract_deposit_transactions WHERE contract_id = 1 AND transaction_type = 'receipt' AND amount = 25.00")"
+if [[ "$deposit_rows" != "1" ]]; then echo "Rental deposit migration insert/readback failed" >&2; exit 1; fi
+echo "Tenant system, property collection and rental deposit migrations passed."

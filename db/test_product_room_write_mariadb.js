@@ -43,6 +43,9 @@ async function createTenantDb(adminPool, config, appId, tenantId, created, creat
   if (appId === 'property') {
     await pool.query(require('node:fs').readFileSync(require('node:path').join(__dirname, 'migrations/tenant/005_property_collection_actions.sql'), 'utf8'));
   }
+  if (appId === 'rental') {
+    await pool.query(require('node:fs').readFileSync(require('node:path').join(__dirname, 'migrations/tenant/007_rental_contract_deposit_transactions.sql'), 'utf8'));
+  }
   if (appId === 'hotel') {
     await pool.query(require('node:fs').readFileSync(require('node:path').join(__dirname, 'migrations/tenant/006_hotel_order_deposit_transactions.sql'), 'utf8'));
   }
@@ -365,6 +368,14 @@ async function main() {
         }, 'ci-rental-term-contract-0001');
         assert.equal(terminationContractResponse.status, 201, 'rental termination contract create');
         const terminationContract = await terminationContractResponse.json();
+        const depositReceipt = await writeBuilding(base, 'POST', '/api/contracts/' + terminationContract.id + '/deposit/receive', {
+          amount: 25, pay_method: 'cash', transaction_date: '2030-01-02', external_reference: 'CI-RENTAL-DEPOSIT-RECEIPT'
+        }, 'ci-rental-deposit-receipt-0001');
+        assert.equal(depositReceipt.status, 201, 'rental deposit actual receipt');
+        const depositReceiptBody = await depositReceipt.json();
+        assert.equal(depositReceiptBody.received_amount, 25, 'rental deposit gross received');
+        assert.equal(depositReceiptBody.held_amount, 25, 'rental deposit held balance');
+
         const terminatedResponse = await writeBuilding(base, 'POST', '/api/contracts/' + terminationContract.id + '/terminate', {
           termination_date: new Date().toISOString().slice(0, 10)
         }, 'ci-rental-contract-terminate-0001');
@@ -372,6 +383,29 @@ async function main() {
         const terminatedBody = await terminatedResponse.json();
         assert.equal(terminatedBody.status, 'terminated', 'rental contract terminated');
         assert.equal(terminatedBody.deposit_settlement.status, 'pending', 'deposit is not falsely marked refunded');
+        const depositRefund = await writeBuilding(base, 'POST', '/api/contracts/' + terminationContract.id + '/deposit/refund', {
+          amount: 10, pay_method: 'bank', transaction_date: '2030-01-03', external_reference: 'CI-RENTAL-DEPOSIT-REFUND'
+        }, 'ci-rental-deposit-refund-0001');
+        assert.equal(depositRefund.status, 201, 'rental deposit partial refund after termination');
+        const depositDeduction = await writeBuilding(base, 'POST', '/api/contracts/' + terminationContract.id + '/deposit/deduct', {
+          amount: 5, transaction_date: '2030-01-04', note: 'Documented damage deduction'
+        }, 'ci-rental-deposit-deduct-0001');
+        assert.equal(depositDeduction.status, 201, 'rental deposit documented deduction');
+        const depositRead = await fetch(base + '/api/contracts/' + terminationContract.id + '/deposit');
+        assert.equal(depositRead.status, 200, 'rental deposit ledger read');
+        const depositLedger = await depositRead.json();
+        assert.equal(depositLedger.expected_amount, 25, 'rental deposit expected amount');
+        assert.equal(depositLedger.received_amount, 25, 'rental deposit gross received');
+        assert.equal(depositLedger.refunded_amount, 10, 'rental deposit refund amount');
+        assert.equal(depositLedger.deducted_amount, 5, 'rental deposit deductions');
+        assert.equal(depositLedger.held_amount, 10, 'rental deposit remaining held amount');
+        assert.equal(depositLedger.settlement_status, 'partially_settled', 'rental deposit settlement status');
+        assert.equal(depositLedger.transactions.length, 3, 'rental deposit ledger history');
+        const excessDepositRefund = await writeBuilding(base, 'POST', '/api/contracts/' + terminationContract.id + '/deposit/refund', {
+          amount: 11, pay_method: 'bank', transaction_date: '2030-01-05'
+        }, 'ci-rental-deposit-refund-excess-0001');
+        assert.equal(excessDepositRefund.status, 409, 'rental deposit refund cannot exceed held balance');
+
         const [[terminatedState]] = await pool.query('SELECT status, end_date FROM contracts WHERE id = ?', [terminationContract.id]);
         assert.equal(terminatedState.status, 'terminated', 'rental termination persisted');
         const [[releasedRoom]] = await pool.query('SELECT status FROM rooms WHERE id = ?', [terminationRoom.id]);

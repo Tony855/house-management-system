@@ -95,6 +95,7 @@
     "tenant_write_audit_events",
     "bill_transactions",
     "property_collection_actions",
-    "hotel_order_deposit_transactions"
+    "hotel_order_deposit_transactions",
+    "rental_contract_deposit_transactions"
   ]
 }

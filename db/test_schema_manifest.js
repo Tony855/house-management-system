@@ -51,7 +51,8 @@ test('tenant system manifest is covered by dedicated tenant-local migrations', (
       tenant_write_audit_events: '003_tenant_write_audit.sql',
       bill_transactions: '004_bill_transactions.sql',
       property_collection_actions: '005_property_collection_actions.sql',
-      hotel_order_deposit_transactions: '006_hotel_order_deposit_transactions.sql'
+      hotel_order_deposit_transactions: '006_hotel_order_deposit_transactions.sql',
+      rental_contract_deposit_transactions: '007_rental_contract_deposit_transactions.sql'
     })[table];
     assert.ok(migrationPath, 'tenant system table has a versioned migration');
     const migration = fs.readFileSync(path.join(__dirname, 'migrations/tenant', migrationPath), 'utf8');

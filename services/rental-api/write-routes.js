@@ -130,6 +130,36 @@ function buildNextRentalBill(contract, lastPeriodEnd, today) {
   });
 }
 
+const RENTAL_DEPOSIT_FIELDS = new Set(['amount', 'pay_method', 'transaction_date', 'external_reference', 'note']);
+function validateRentalDepositTransaction(input, action) {
+  if (!['receipt', 'refund', 'deduction'].includes(action) || !input || typeof input !== 'object' ||
+      Array.isArray(input) || Object.keys(input).some(key => !RENTAL_DEPOSIT_FIELDS.has(key))) {
+    throw contractError('RENTAL_DEPOSIT_INPUT_INVALID');
+  }
+  const amount = Number(input.amount);
+  const pay_method = input.pay_method === undefined ? '' : input.pay_method;
+  const transaction_date = input.transaction_date === undefined ? new Date().toISOString().slice(0, 10) : input.transaction_date;
+  const external_reference = input.external_reference === undefined ? '' : input.external_reference;
+  const note = input.note === undefined ? '' : input.note;
+  if (!Number.isFinite(amount) || amount <= 0 || amount > 10000000 || Math.round(amount * 100) !== amount * 100 ||
+      typeof pay_method !== 'string' || pay_method.length > 30 || !validDate(transaction_date) ||
+      typeof external_reference !== 'string' || external_reference.length > 100 ||
+      typeof note !== 'string' || note.trim().length > 500 ||
+      (action === 'deduction' && !note.trim()) ||
+      (action !== 'deduction' && !pay_method.trim())) throw contractError('RENTAL_DEPOSIT_INPUT_INVALID');
+  return Object.freeze({ amount, pay_method: pay_method.trim(), transaction_date, external_reference: external_reference.trim(), note: note.trim() });
+}
+async function readRentalDepositBalance(tx, contractId) {
+  const [rows] = await tx.execute(
+    "SELECT COALESCE(SUM(CASE WHEN transaction_type = 'receipt' THEN amount ELSE 0 END), 0) AS received_amount, COALESCE(SUM(CASE WHEN transaction_type = 'refund' THEN amount ELSE 0 END), 0) AS refunded_amount, COALESCE(SUM(CASE WHEN transaction_type = 'deduction' THEN amount ELSE 0 END), 0) AS deducted_amount FROM rental_contract_deposit_transactions WHERE contract_id = ?",
+    [contractId]
+  );
+  const received_amount = Math.round(Number(rows[0].received_amount || 0) * 100) / 100;
+  const refunded_amount = Math.round(Number(rows[0].refunded_amount || 0) * 100) / 100;
+  const deducted_amount = Math.round(Number(rows[0].deducted_amount || 0) * 100) / 100;
+  return { received_amount, refunded_amount, deducted_amount,
+    held_amount: Math.round((received_amount - refunded_amount - deducted_amount) * 100) / 100 };
+}
 function createRentalWriteRouter() {
   const router = express.Router();
   router.post('/rooms', async (req, res, next) => {
@@ -306,6 +336,72 @@ function createRentalWriteRouter() {
     } catch (error) { return next(error); }
   });
 
+  const depositActions = [
+    { path: 'receive', type: 'receipt', operation: 'create', activeOnly: true },
+    { path: 'refund', type: 'refund', operation: 'update', terminatedOnly: true },
+    { path: 'deduct', type: 'deduction', operation: 'update', terminatedOnly: true }
+  ];
+  for (const action of depositActions) {
+    router.post('/contracts/:id/deposit/' + action.path, async (req, res, next) => {
+      try {
+        if (typeof req.tenantWrite !== 'function') return res.status(503).json({ error: 'TENANT_WRITE_UNAVAILABLE' });
+        const id = Number(req.params.id);
+        if (!Number.isSafeInteger(id) || id < 1) throw contractError('RENTAL_DEPOSIT_CONTRACT_ID_INVALID');
+        const transaction = validateRentalDepositTransaction(req.body, action.type);
+        const requestId = req.get('idempotency-key');
+        const result = await req.tenantWrite({
+          operation: action.operation, reason: req.get('x-operation-reason'),
+          stepUpToken: req.get('x-step-up-token'), requestId,
+          payload: { contract_id: id, ...transaction, __resource: 'rental-contract-deposits-' + action.path },
+          mutate: async tx => {
+            const [rows] = await tx.execute('SELECT id, deposit, status FROM contracts WHERE id = ? LIMIT 1 FOR UPDATE', [id]);
+            if (!rows.length) throw contractError('CONTRACT_NOT_FOUND', 404);
+            const contract = rows[0], expected_amount = Number(contract.deposit);
+            if (!Number.isFinite(expected_amount) || expected_amount < 0) throw contractError('RENTAL_DEPOSIT_BALANCE_INVALID', 409);
+            if (action.activeOnly && contract.status !== 'active') throw contractError('RENTAL_DEPOSIT_RECEIPT_REQUIRES_ACTIVE_CONTRACT', 409);
+            if (action.terminatedOnly && contract.status !== 'terminated') throw contractError('RENTAL_DEPOSIT_SETTLEMENT_REQUIRES_TERMINATED_CONTRACT', 409);
+            const balance = await readRentalDepositBalance(tx, id);
+            if (action.type === 'receipt' && transaction.amount > Math.round((expected_amount - balance.received_amount) * 100) / 100) {
+              throw contractError('RENTAL_DEPOSIT_RECEIPT_EXCEEDS_EXPECTED', 409);
+            }
+            if (action.type !== 'receipt' && (balance.held_amount <= 0 || transaction.amount > balance.held_amount)) {
+              throw contractError('RENTAL_DEPOSIT_SETTLEMENT_EXCEEDS_HELD', 409);
+            }
+            await tx.execute(
+              'INSERT INTO rental_contract_deposit_transactions (contract_id, transaction_type, amount, pay_method, external_reference, note, request_id, transaction_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+              [id, action.type, transaction.amount, transaction.pay_method, transaction.external_reference, transaction.note, requestId, transaction.transaction_date]
+            );
+            const next = await readRentalDepositBalance(tx, id);
+            return { contract_id: id, expected_amount, ...next,
+              remaining_to_receive: Math.round((expected_amount - next.received_amount) * 100) / 100,
+              settlement_status: next.held_amount <= 0 && next.received_amount > 0 ? 'settled' :
+                (next.refunded_amount + next.deducted_amount > 0 ? 'partially_settled' : 'pending') };
+          }
+        });
+        return res.status(201).json(result);
+      } catch (error) { return next(error); }
+    });
+  }
+  router.get('/contracts/:id/deposit', async (req, res, next) => {
+    try {
+      if (!req.tenantDb || typeof req.tenantDb.execute !== 'function') return res.status(503).json({ error: 'TENANT_DATABASE_UNAVAILABLE' });
+      const id = Number(req.params.id);
+      if (!Number.isSafeInteger(id) || id < 1) throw contractError('RENTAL_DEPOSIT_CONTRACT_ID_INVALID');
+      const [rows] = await req.tenantDb.execute('SELECT id, deposit, status FROM contracts WHERE id = ? LIMIT 1', [id]);
+      if (!rows.length) throw contractError('CONTRACT_NOT_FOUND', 404);
+      const balance = await readRentalDepositBalance(req.tenantDb, id);
+      const [transactions] = await req.tenantDb.execute(
+        'SELECT id, transaction_type, amount, pay_method, external_reference, note, transaction_date, created_at FROM rental_contract_deposit_transactions WHERE contract_id = ? ORDER BY id DESC LIMIT 100',
+        [id]
+      );
+      const expected_amount = Number(rows[0].deposit);
+      return res.json({ contract_id: id, contract_status: rows[0].status, expected_amount, ...balance,
+        remaining_to_receive: Math.round((expected_amount - balance.received_amount) * 100) / 100,
+        settlement_status: balance.held_amount <= 0 && balance.received_amount > 0 ? 'settled' :
+          (balance.refunded_amount + balance.deducted_amount > 0 ? 'partially_settled' : 'pending'),
+        transactions });
+    } catch (error) { return next(error); }
+  });
   router.patch('/contracts/:id', async (req, res, next) => {
     try {
       if (typeof req.tenantWrite !== 'function') return res.status(503).json({ error: 'TENANT_WRITE_UNAVAILABLE' });
@@ -330,4 +426,4 @@ function createRentalWriteRouter() {
   return router;
 }
 
-module.exports = { ALLOWED_FIELDS, validateRoom, validateContract, validateContractRenewal, buildNextRentalBill, createRentalWriteRouter };
+module.exports = { ALLOWED_FIELDS, validateRoom, validateContract, validateContractRenewal, validateRentalDepositTransaction, buildNextRentalBill, createRentalWriteRouter };
