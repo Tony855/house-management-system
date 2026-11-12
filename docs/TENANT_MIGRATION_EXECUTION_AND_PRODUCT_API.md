@@ -19,3 +19,7 @@ Rental, Hotel, and Property now expose audited `PUT /api/rooms/:id` updates thro
 ## Validation
 
 The tenant-isolation test suite includes migration worker lifecycle, platform migration route authorization, and product room update tests. MariaDB migration CI installs the durable job schema. These tests do not replace real provider integration, full product CRUD, migration execution against a production-sized tenant, or cross-tenant penetration testing.
+
+## Durable worker orchestration
+
+The control-plane job store now exposes a bounded, oldest-first runnable-job query (queued jobs and jobs whose leases expired). The runner polls that queue, enforces a process-wide concurrency ceiling, suppresses duplicate local dispatch, prevents overlapping polling ticks, reports sanitized operational error codes, and drains active work on graceful shutdown. The executor remains an explicit injected dependency: deployments must still provide tenant-scoped source/target adapters and an operator-approved execution policy before enabling copy jobs.

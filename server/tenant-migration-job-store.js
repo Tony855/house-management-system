@@ -72,6 +72,16 @@ function createPlatformTenantMigrationJobStore(pool) {
       }
       return job;
     },
+    async listRunnableJobs({ limit = 10 } = {}) {
+      if (!Number.isInteger(limit) || limit < 1 || limit > 50) {
+        throw new TypeError('TENANT_MIGRATION_JOB_LIST_LIMIT_INVALID');
+      }
+      const [rows] = await pool.query(
+        "SELECT " + columns + " FROM platform_tenant_migration_jobs WHERE state = 'queued' OR (state = 'running' AND lease_expires_at <= UTC_TIMESTAMP()) ORDER BY created_at ASC, id ASC LIMIT ?",
+        [limit]
+      );
+      return rows.map(decode);
+    },
     async getJob(id) {
       if (!Number.isSafeInteger(id) || id < 1) throw new TypeError('TENANT_MIGRATION_JOB_ID_INVALID');
       return findById(id);
