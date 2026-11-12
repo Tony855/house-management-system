@@ -136,8 +136,9 @@ function validateRentalBillJobId(value) {
   if (!Number.isSafeInteger(id) || id < 1) throw contractError('RENTAL_BILL_JOB_ID_INVALID');
   return id;
 }
+function rentalDateOnly(value) { return value instanceof Date ? value.toISOString().slice(0,10) : String(value).slice(0,10); }
 function mapRentalBillJob(row) {
-  return { id:Number(row.id), as_of:String(row.as_of_date).slice(0,10), state:row.state,
+  return { id:Number(row.id), as_of:rentalDateOnly(row.as_of_date), state:row.state,
     cursor_contract_id:Number(row.cursor_contract_id||0), generated:Number(row.generated_count||0),
     skipped:Number(row.skipped_count||0), created_at:row.created_at, updated_at:row.updated_at,
     completed_at:row.completed_at||null };
@@ -338,7 +339,7 @@ function createRentalWriteRouter() {
           await tx.execute("INSERT INTO rental_bill_generation_jobs (as_of_date,request_id,state) VALUES (?,?,'queued') ON DUPLICATE KEY UPDATE id=LAST_INSERT_ID(id)",[body.as_of,requestId]);
           const [rows]=await tx.execute('SELECT id,as_of_date,request_id,state,cursor_contract_id,generated_count,skipped_count,created_at,updated_at,completed_at FROM rental_bill_generation_jobs WHERE as_of_date=? OR request_id=? ORDER BY id LIMIT 1 FOR UPDATE',[body.as_of,requestId]);
           if(!rows.length) throw contractError('RENTAL_BILL_JOB_CREATE_FAILED',500);
-          if(String(rows[0].as_of_date).slice(0,10)!==body.as_of) throw contractError('RENTAL_BILL_JOB_IDEMPOTENCY_CONFLICT',409);
+          if(rentalDateOnly(rows[0].as_of_date)!==body.as_of) throw contractError('RENTAL_BILL_JOB_IDEMPOTENCY_CONFLICT',409);
           return mapRentalBillJob(rows[0]);
         }});
       return res.status(201).json(result);
@@ -369,7 +370,7 @@ function createRentalWriteRouter() {
           for(const contract of chunk) {
             const [lastBills]=await tx.execute('SELECT period_end FROM bills WHERE contract_id=? AND source=? ORDER BY period_end DESC LIMIT 1 FOR UPDATE',[contract.id,'rental']);
             try {
-              const bill=buildNextRentalBill(contract,lastBills.length?String(lastBills[0].period_end).slice(0,10):null,String(job.as_of_date).slice(0,10));
+              const bill=buildNextRentalBill(contract,lastBills.length?String(lastBills[0].period_end).slice(0,10):null,rentalDateOnly(job.as_of_date));
               await tx.insert('bills',bill); generated++;
             } catch(error) {
               if(['RENTAL_BILL_NOT_DUE','CONTRACT_PERIOD_FINISHED'].includes(error.code)){skipped++;continue;}
