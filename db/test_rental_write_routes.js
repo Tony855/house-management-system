@@ -141,7 +141,7 @@ test('rental bill period follows contract cycle, clamps final period and rejects
   assert.equal(final.period_end, '2026-12-31');
   assert.equal(final.amount, 3600);
   assert.throws(() => buildNextRentalBill({ ...contract, start_date: '2027-01-01' }, null, '2026-12-01'), e => e.code === 'RENTAL_BILL_NOT_DUE');
-  assert.throws(() => buildNextRentalBill(contract, '2026-12-31', '2026-12-31'), e => e.code === 'CONTRACT_PERIOD_FINISHED');
+  assert.throws(() => buildNextRentalBill(contract, '2026-12-31', '2027-01-01'), e => e.code === 'CONTRACT_PERIOD_FINISHED');
   assert.throws(() => buildNextRentalBill({ ...contract, status: 'terminated' }, null, '2026-02-01'), e => e.code === 'CONTRACT_NOT_ACTIVE');
 });
 
