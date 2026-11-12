@@ -26,7 +26,7 @@ audit_table="$("${mysql_cmd[@]}" -e "SELECT COUNT(*) FROM information_schema.tab
 collection_table="$("${mysql_cmd[@]}" -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '$DB_NAME' AND table_name = 'property_collection_actions' AND table_type = 'BASE TABLE'")"
 if [[ "$collection_table" != "1" ]]; then echo "Property collection migration is incomplete" >&2; exit 1; fi
 "${mysql_cmd[@]}" "$DB_NAME" -e "DELETE FROM property_collection_actions WHERE request_id = 'ci-collection-1234567890'; DELETE FROM bills WHERE id = 1; INSERT INTO bills (id) VALUES (1); INSERT INTO property_collection_actions (bill_id, action_type, outcome, contacted_at, follow_up_date, note, request_id) VALUES (1, 'phone', 'promised', '2030-01-01', '2030-01-08', 'CI collection smoke test', 'ci-collection-1234567890')"
-collection_rows="$("${mysql_cmd[@]}" -e "SELECT COUNT(*) FROM property_collection_actions WHERE bill_id = 1 AND outcome = 'promised' AND follow_up_date = '2030-01-08'")"
+collection_rows="$("${mysql_cmd[@]}" "$DB_NAME" -e "SELECT COUNT(*) FROM property_collection_actions WHERE bill_id = 1 AND outcome = 'promised' AND follow_up_date = '2030-01-08'")"
 if [[ "$collection_rows" != "1" ]]; then echo "Property collection migration insert/readback failed" >&2; exit 1; fi
 if [[ "$idempotency_table" != "1" || "$audit_table" != "1" ]]; then
   echo "Tenant write system migrations are incomplete" >&2
