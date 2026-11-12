@@ -40,7 +40,9 @@ async function createTenantDb(adminPool, config, appId, tenantId, created, creat
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
   await pool.query(require('node:fs').readFileSync(require('node:path').join(__dirname, 'migrations/tenant/002_tenant_write_idempotency.sql'), 'utf8'));
   await pool.query(require('node:fs').readFileSync(require('node:path').join(__dirname, 'migrations/tenant/004_bill_transactions.sql'), 'utf8'));
-  await pool.query(require('node:fs').readFileSync(require('node:path').join(__dirname, 'migrations/tenant/005_property_collection_actions.sql'), 'utf8'));
+  if (appId === 'property') {
+    await pool.query(require('node:fs').readFileSync(require('node:path').join(__dirname, 'migrations/tenant/005_property_collection_actions.sql'), 'utf8'));
+  }
   await pool.execute('INSERT INTO buildings (name, address, remark) VALUES (?, ?, ?)', ['CI integration building', '', 'temporary']);
   if (appId === 'property') {
     await pool.execute('INSERT INTO tenants (name, contact, phone, license_no, remark) VALUES (?, ?, ?, ?, ?)', ['CI property owner', '', '', '', 'temporary']);
