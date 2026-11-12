@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const http = require('node:http');
 const express = require('express');
-const { createRentalWriteRouter, validateRoom } = require('../services/rental-api/write-routes');
+const { createRentalWriteRouter, validateRoom, validateContract } = require('../services/rental-api/write-routes');
 
 const valid = Object.freeze({ building_id: 7, room_no: '  A-101 ', rent: '1200.00', deposit: 1000 });
 
@@ -96,4 +96,31 @@ test('POST /rooms rejects invalid DTO before invoking the write service', async 
   const response = await request(async () => { invoked = true; }, { ...valid, org_id: 999 });
   assert.equal(response.status, 400);
   assert.equal(invoked, false);
+});
+
+test('rental contract validation rejects invalid dates, amounts and tenant-controlled columns', () => {
+  const input = { contract_no: 'R-31', room_id: 3, tenant_id: 8, start_date: '2026-11-01', end_date: '2027-10-31', sign_date: '2026-10-30', rent: 1200, deposit: 1200 };
+  assert.equal(validateContract(input).pay_cycle, 1);
+  for (const bad of [{ ...input, org_id: 5 }, { ...input, end_date: '2026-10-01' }, { ...input, start_date: '2026-02-30' }, { ...input, rent: -1 }]) {
+    assert.throws(() => validateContract(bad), error => error.code === 'CONTRACT_INPUT_INVALID');
+  }
+});
+
+test('POST /contracts uses transaction boundary and marks its vacant room rented', async () => {
+  const calls = [];
+  const app = express(); app.use(express.json());
+  app.use((req, _res, next) => { req.tenantWrite = async input => { calls.push(input); return input.mutate({
+    execute: async sql => sql.includes('FROM rooms') ? [[{ id: 3, status: 'vacant' }]] : sql.includes('FROM tenants') ? [[{ id: 8 }]] : [[]],
+    insert: async (table, fields) => { calls.push({ table, fields }); return { insertId: 31 }; },
+    updateById: async (table, id, fields) => { calls.push({ table, id, fields }); return { affectedRows: 1 }; }
+  }); }; next(); });
+  app.use('/api', createRentalWriteRouter());
+  app.use((e,_q,res,_n)=>res.status(e.status||500).json({error:e.code||'ERROR'}));
+  const server=http.createServer(app); await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  try {
+    const response=await fetch('http://127.0.0.1:'+server.address().port+'/api/contracts',{method:'POST',headers:{'content-type':'application/json','x-operation-reason':'Sign rental agreement','x-step-up-token':'step-up-token-123456789','idempotency-key':'contract-create-0001'},body:JSON.stringify({contract_no:'R-31',room_id:3,tenant_id:8,start_date:'2026-11-01',end_date:'2027-10-31',sign_date:'2026-10-30',rent:1200,deposit:1200})});
+    assert.equal(response.status,201); assert.equal((await response.json()).id,31);
+    assert.equal(calls[0].payload.__resource,'contracts');
+    assert.ok(calls.some(x=>x.table==='rooms'&&x.fields.status==='rented'));
+  } finally { await new Promise(resolve=>server.close(resolve)); }
 });
