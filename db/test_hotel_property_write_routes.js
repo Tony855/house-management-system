@@ -415,3 +415,26 @@ test('hotel deposit receipt and refund enforce expected and held balances transa
 });
 
 test('property fee job id validation rejects malformed identifiers',()=>{assert.equal(validatePropertyFeeJobId('12'),12);for(const value of ['0','-1','1.2','abc','9007199254740992'])assert.throws(()=>validatePropertyFeeJobId(value),e=>e.code==='PROPERTY_FEE_JOB_ID_INVALID');});
+
+test('GET hotel deposit ledger paginates transaction history and retains full balance totals', async () => {
+  const http=require('node:http');const express=require('express');const calls=[];const app=express();
+  app.use((req,_res,next)=>{req.tenantDb={execute:async(sql,params)=>{
+    calls.push({sql,params});
+    if(sql.includes('SELECT id, deposit FROM orders'))return [[{id:8,deposit:'30.00'}]];
+    if(sql.includes('SUM(CASE WHEN transaction_type'))return [[{held_amount:15,received_amount:20,refunded_amount:5}]];
+    if(sql.includes('COUNT(*) AS total_count'))return [[{total_count:125}]];
+    if(sql.includes('ORDER BY id DESC LIMIT'))return [[{id:76,transaction_type:'receipt',amount:'1.00'}]];
+    throw new Error('UNEXPECTED_SQL');
+  }};next();});
+  app.use('/api',createHotelOrderRouter());app.use((e,_q,res,_n)=>res.status(e.status||500).json({error:e.code||'ERROR'}));
+  const server=http.createServer(app);await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  try{
+    const response=await fetch('http://127.0.0.1:'+server.address().port+'/api/orders/8/deposit?page=2&page_size=25');
+    assert.equal(response.status,200);const body=await response.json();
+    assert.equal(body.page,2);assert.equal(body.page_size,25);assert.equal(body.total_count,125);
+    assert.equal(body.held_amount,15);assert.equal(body.remaining_to_receive,10);assert.equal(body.transactions[0].id,76);
+    assert.deepEqual(calls.find(x=>x.sql.includes('ORDER BY id DESC LIMIT')).params,[8,25,25]);
+    const invalid=await fetch('http://127.0.0.1:'+server.address().port+'/api/orders/8/deposit?page=0');
+    assert.equal(invalid.status,400);assert.deepEqual(await invalid.json(),{error:'HOTEL_DEPOSIT_PAGINATION_INVALID'});
+  }finally{await new Promise(resolve=>server.close(resolve));}
+});

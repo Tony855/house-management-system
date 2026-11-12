@@ -202,14 +202,25 @@ function createHotelOrderRouter() {
       if (!Number.isSafeInteger(id) || id < 1) throw hotelError('HOTEL_ORDER_ID_INVALID');
       const [orders] = await req.tenantDb.execute('SELECT id, deposit FROM orders WHERE id = ? LIMIT 1', [id]);
       if (!orders.length) throw hotelError('ORDER_NOT_FOUND', 404);
+      const page = req.query.page === undefined ? 1 : Number(req.query.page);
+      const pageSize = req.query.page_size === undefined ? 50 : Number(req.query.page_size);
+      if (!Number.isSafeInteger(page) || page < 1 || page > 100000 ||
+          !Number.isSafeInteger(pageSize) || pageSize < 1 || pageSize > 100) {
+        throw hotelError('HOTEL_DEPOSIT_PAGINATION_INVALID');
+      }
+      const offset = (page - 1) * pageSize;
       const balance = await readHotelDepositBalance(req.tenantDb, id);
-      const [transactions] = await req.tenantDb.execute(
-        'SELECT id, transaction_type, amount, pay_method, external_reference, note, transaction_date, created_at FROM hotel_order_deposit_transactions WHERE order_id = ? ORDER BY id DESC LIMIT 100',
-        [id]
-      );
+      const [[countRows], [transactions]] = await Promise.all([
+        req.tenantDb.execute('SELECT COUNT(*) AS total_count FROM hotel_order_deposit_transactions WHERE order_id = ?', [id]),
+        req.tenantDb.execute(
+          'SELECT id, transaction_type, amount, pay_method, external_reference, note, transaction_date, created_at FROM hotel_order_deposit_transactions WHERE order_id = ? ORDER BY id DESC LIMIT ? OFFSET ?',
+          [id, pageSize, offset]
+        )
+      ]);
       const expected = Number(orders[0].deposit);
       return res.json({ order_id: id, expected_amount: expected, ...balance,
-        remaining_to_receive: Math.round((expected - balance.received_amount) * 100) / 100, transactions });
+        remaining_to_receive: Math.round((expected - balance.received_amount) * 100) / 100,
+        page, page_size: pageSize, total_count: Number(countRows[0].total_count || 0), transactions });
     } catch (error) { return next(error); }
   });
   return router;
