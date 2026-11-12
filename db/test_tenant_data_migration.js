@@ -39,6 +39,7 @@ test('copy strips legacy org_id and verifies every product table by count and SH
     appId: 'hotel', tenantId, sourceOrgId: 23, mode: 'copy', ...a
   });
   assert.equal(result.copied, true);
+  assert.equal(result.alreadyImported, false);
   assert.equal(result.cutover, false);
   assert.ok(a.calls.some(call => call[0] === 'write'));
   assert.ok(Object.values(result.manifest).every(item => item.rowCount === 1 && /^[a-f0-9]{64}$/.test(item.sha256)));
@@ -146,6 +147,7 @@ test('copy retry reconciles an already committed target after final audit acknow
     appId: 'hotel', tenantId, sourceOrgId: 91, mode: 'copy', ...a
   });
   assert.equal(retry.copied, true);
+  assert.equal(retry.alreadyImported, true);
   assert.equal(a.calls.filter(call => call[0] === 'write').length, 1);
   assert.ok(a.calls.some(call => call[0] === 'audit' && call[1] === 'tenant_data_migration_copy_verified'));
 });
