@@ -40,6 +40,7 @@ async function createTenantDb(adminPool, config, appId, tenantId, created, creat
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
   await pool.query(require('node:fs').readFileSync(require('node:path').join(__dirname, 'migrations/tenant/002_tenant_write_idempotency.sql'), 'utf8'));
   await pool.query(require('node:fs').readFileSync(require('node:path').join(__dirname, 'migrations/tenant/004_bill_transactions.sql'), 'utf8'));
+  await pool.query(require('node:fs').readFileSync(require('node:path').join(__dirname, 'migrations/tenant/005_property_collection_actions.sql'), 'utf8'));
   await pool.execute('INSERT INTO buildings (name, address, remark) VALUES (?, ?, ?)', ['CI integration building', '', 'temporary']);
   if (appId === 'property') {
     await pool.execute('INSERT INTO tenants (name, contact, phone, license_no, remark) VALUES (?, ?, ?, ?, ?)', ['CI property owner', '', '', '', 'temporary']);
@@ -422,6 +423,15 @@ async function main() {
           assert.equal(arrears.total_count, 1, 'property arrears complete count');
           assert.equal(Number(arrears.total_outstanding), 109.5, 'property arrears complete total');
           assert.equal(Number(arrears.aging.days_1_30), 109.5, 'property arrears aging bucket');
+          const collectionAction = await writeBuilding(base, 'POST', '/api/property-fees/' + generatedBody.bills[0].id + '/collection-actions', {
+            action_type: 'phone', outcome: 'promised', contacted_at: '2030-02-01', follow_up_date: '2030-02-08', note: 'CI owner promised payment'
+          }, 'ci-property-collection-0001');
+          assert.equal(collectionAction.status, 201, 'property collection action');
+          const collectionBody = await collectionAction.json();
+          assert.equal(collectionBody.bill_id, generatedBody.bills[0].id, 'collection action linked to property bill');
+          const [[collectionRows]] = await pool.query('SELECT action_type, outcome, follow_up_date, note FROM property_collection_actions WHERE id = ?', [collectionBody.id]);
+          assert.deepEqual(collectionRows, { action_type: 'phone', outcome: 'promised', follow_up_date: new Date('2030-02-08T00:00:00.000Z'), note: 'CI owner promised payment' }, 'collection action persisted');
+
           const arrearsPage = await fetch(base + '/api/property-fees/arrears?as_of=2030-02-01&page=1&page_size=1');
           assert.equal(arrearsPage.status, 200, 'property arrears pagination');
           const pageBody = await arrearsPage.json();

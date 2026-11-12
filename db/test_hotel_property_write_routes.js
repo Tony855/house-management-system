@@ -6,7 +6,7 @@ const { validateHotelOrder, createHotelOrderRouter } = require('../services/hote
 const { validateMeter, createMeterWriteRouter } = require('../services/shared/meter-write-routes');
 const { validateBillPayment, createBillPaymentRouter } = require('../services/shared/bill-payment-routes');
 const { validateReconciliationRange, createFinanceReconciliationRouter } = require('../services/shared/finance-reconciliation-routes');
-const { validatePropertyFeeGeneration, monthDates, createPropertyFeeRouter } = require('../services/shared/property-fee-routes');
+const { validatePropertyFeeGeneration, validatePropertyCollectionAction, monthDates, createPropertyFeeRouter } = require('../services/shared/property-fee-routes');
 const http = require('node:http');
 const express = require('express');
 
@@ -266,5 +266,44 @@ test('property arrears report is property-scoped, paginated and returns complete
     assert.equal(invalid.status,400);assert.deepEqual(await invalid.json(),{error:'PROPERTY_ARREARS_PAGINATION_INVALID'});
     const invalidDate=await fetch('http://127.0.0.1:'+server.address().port+'/api/property-fees/arrears?as_of=2030-02-30');
     assert.equal(invalidDate.status,400);assert.deepEqual(await invalidDate.json(),{error:'PROPERTY_ARREARS_DATE_INVALID'});
+  } finally {await new Promise(resolve=>server.close(resolve));}
+});
+
+test('property collection action DTO validates channels, outcomes, dates and promised follow-up', () => {
+  assert.deepEqual(validatePropertyCollectionAction({ action_type: 'phone', outcome: 'promised', contacted_at: '2030-02-01', follow_up_date: '2030-02-08', note: 'Call next week' }),
+    { action_type: 'phone', outcome: 'promised', contacted_at: '2030-02-01', follow_up_date: '2030-02-08', note: 'Call next week' });
+  for (const bad of [
+    { action_type: 'fax', outcome: 'sent', contacted_at: '2030-02-01' },
+    { action_type: 'phone', outcome: 'unknown', contacted_at: '2030-02-01' },
+    { action_type: 'phone', outcome: 'promised', contacted_at: '2030-02-01' },
+    { action_type: 'phone', outcome: 'reached', contacted_at: '2030-02-30' },
+    { action_type: 'phone', outcome: 'reached', contacted_at: '2030-02-02', follow_up_date: '2030-02-01' },
+    { action_type: 'phone', outcome: 'sent', contacted_at: '2030-02-01', extra: true }
+  ]) assert.throws(() => validatePropertyCollectionAction(bad), e => e.code === 'PROPERTY_COLLECTION_INPUT_INVALID');
+});
+test('property collection action records only an overdue unsettled property bill under tenantWrite', async () => {
+  const calls=[]; const app=express(); app.use(express.json());
+  app.use((req,_res,next)=>{req.tenantWrite=async input=>{calls.push(input);return input.mutate({
+    execute:async(sql,params)=>{calls.push({sql,params});return sql.includes('FROM bills')?[[{id:41,source:'property',due_date:'2030-01-10',amount:'100.00',paid_amount:'20.00'}]]:[{insertId:88}];}
+  });};next();});
+  app.use('/api',createPropertyFeeRouter());app.use((e,_q,res,_n)=>res.status(e.status||500).json({error:e.code||'ERROR'}));
+  const server=http.createServer(app);await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  try {
+    const response=await fetch('http://127.0.0.1:'+server.address().port+'/api/property-fees/41/collection-actions',{method:'POST',
+      headers:{'content-type':'application/json','x-operation-reason':'Record owner collection follow-up','x-step-up-token':'step-up-token-123456789','idempotency-key':'property-collection-0001'},
+      body:JSON.stringify({action_type:'phone',outcome:'promised',contacted_at:'2030-02-01',follow_up_date:'2030-02-08',note:'Owner promises payment'})});
+    assert.equal(response.status,201);const body=await response.json();assert.equal(body.id,88);assert.equal(body.bill_id,41);
+    assert.equal(calls[0].payload.__resource,'property-collection-actions');
+    assert.match(calls[1].sql,/FOR UPDATE/);
+    assert.match(calls[2].sql,/INSERT INTO property_collection_actions/);
+    const settledApp=express();settledApp.use(express.json());
+    settledApp.use((req,_res,next)=>{req.tenantWrite=input=>input.mutate({execute:async()=>[[{id:41,source:'property',due_date:'2030-01-10',amount:'100.00',paid_amount:'100.00'}]]});next();});
+    settledApp.use('/api',createPropertyFeeRouter());settledApp.use((e,_q,res,_n)=>res.status(e.status||500).json({error:e.code||'ERROR'}));
+    const settledServer=http.createServer(settledApp);await new Promise(resolve=>settledServer.listen(0,'127.0.0.1',resolve));
+    try {const denied=await fetch('http://127.0.0.1:'+settledServer.address().port+'/api/property-fees/41/collection-actions',{method:'POST',
+      headers:{'content-type':'application/json','x-operation-reason':'Record owner collection follow-up','x-step-up-token':'step-up-token-123456789','idempotency-key':'property-collection-0002'},
+      body:JSON.stringify({action_type:'phone',outcome:'reached',contacted_at:'2030-02-01'})});
+      assert.equal(denied.status,409);assert.deepEqual(await denied.json(),{error:'PROPERTY_COLLECTION_BILL_SETTLED'});
+    } finally {await new Promise(resolve=>settledServer.close(resolve));}
   } finally {await new Promise(resolve=>server.close(resolve));}
 });

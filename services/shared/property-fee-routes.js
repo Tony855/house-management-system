@@ -26,6 +26,33 @@ function monthDates(month) {
   return { start, end, due: month + '-10' };
 }
 
+const COLLECTION_ACTIONS = new Set(['phone', 'sms', 'email', 'onsite', 'formal_notice']);
+const COLLECTION_OUTCOMES = new Set(['reached', 'no_answer', 'promised', 'disputed', 'refused', 'sent']);
+function validDate(value) {
+  return typeof value === 'string' && /^\\d{4}-\\d{2}-\\d{2}$/.test(value) &&
+    Number.isFinite(Date.parse(value + 'T00:00:00Z')) &&
+    new Date(value + 'T00:00:00Z').toISOString().slice(0, 10) === value;
+}
+function validatePropertyCollectionAction(input) {
+  const allowed = new Set(['action_type', 'outcome', 'contacted_at', 'follow_up_date', 'note']);
+  if (!input || typeof input !== 'object' || Array.isArray(input) ||
+      Object.keys(input).some(key => !allowed.has(key))) {
+    throw propertyFeeError('PROPERTY_COLLECTION_INPUT_INVALID');
+  }
+  const action_type = input.action_type;
+  const outcome = input.outcome;
+  const contacted_at = input.contacted_at === undefined ? new Date().toISOString().slice(0, 10) : input.contacted_at;
+  const follow_up_date = input.follow_up_date === undefined || input.follow_up_date === null ? null : input.follow_up_date;
+  const note = input.note === undefined ? '' : input.note;
+  if (!COLLECTION_ACTIONS.has(action_type) || !COLLECTION_OUTCOMES.has(outcome) ||
+      !validDate(contacted_at) || (follow_up_date !== null && (!validDate(follow_up_date) || follow_up_date < contacted_at)) ||
+      (outcome === 'promised' && follow_up_date === null) ||
+      typeof note !== 'string' || note.trim().length > 500) {
+    throw propertyFeeError('PROPERTY_COLLECTION_INPUT_INVALID');
+  }
+  return Object.freeze({ action_type, outcome, contacted_at, follow_up_date, note: note.trim() });
+}
+
 function createPropertyFeeRouter() {
   const router = express.Router();
   router.post('/property-fees/generate', async (req, res, next) => {
@@ -105,6 +132,38 @@ function createPropertyFeeRouter() {
       return next(error);
     }
   });
+  router.post('/property-fees/:billId/collection-actions', async (req, res, next) => {
+    try {
+      if (typeof req.tenantWrite !== 'function') return res.status(503).json({ error: 'TENANT_WRITE_UNAVAILABLE' });
+      const billId = Number(req.params.billId);
+      if (!Number.isSafeInteger(billId) || billId < 1) throw propertyFeeError('PROPERTY_COLLECTION_BILL_ID_INVALID');
+      const action = validatePropertyCollectionAction(req.body);
+      const requestId = req.get('idempotency-key');
+      const result = await req.tenantWrite({
+        operation: 'create',
+        reason: req.get('x-operation-reason'),
+        stepUpToken: req.get('x-step-up-token'),
+        requestId,
+        payload: { bill_id: billId, ...action, __resource: 'property-collection-actions' },
+        mutate: async tx => {
+          const [rows] = await tx.execute(
+            "SELECT id, source, due_date, amount, paid_amount FROM bills WHERE id = ? LIMIT 1 FOR UPDATE",
+            [billId]
+          );
+          if (!rows.length || rows[0].source !== 'property') throw propertyFeeError('PROPERTY_COLLECTION_BILL_NOT_FOUND', 404);
+          const bill = rows[0];
+          if (dateOnly(bill.due_date) >= action.contacted_at) throw propertyFeeError('PROPERTY_COLLECTION_BILL_NOT_OVERDUE', 409);
+          if (Number(bill.amount) <= Number(bill.paid_amount)) throw propertyFeeError('PROPERTY_COLLECTION_BILL_SETTLED', 409);
+          const [inserted] = await tx.execute(
+            'INSERT INTO property_collection_actions (bill_id, action_type, outcome, contacted_at, follow_up_date, note, request_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
+            [billId, action.action_type, action.outcome, action.contacted_at, action.follow_up_date, action.note, requestId]
+          );
+          return { id: Number(inserted.insertId), bill_id: billId, ...action };
+        }
+      });
+      return res.status(201).json(result);
+    } catch (error) { return next(error); }
+  });
   router.get('/property-fees/arrears', async (req, res, next) => {
     try {
       if (!req.tenantDb || typeof req.tenantDb.execute !== 'function') {
@@ -177,4 +236,4 @@ function createPropertyFeeRouter() {
   return router;
 }
 
-module.exports = { validatePropertyFeeGeneration, monthDates, createPropertyFeeRouter };
+module.exports = { validatePropertyFeeGeneration, validatePropertyCollectionAction, monthDates, createPropertyFeeRouter };
