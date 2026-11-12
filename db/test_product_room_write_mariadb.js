@@ -294,7 +294,7 @@ async function main() {
         assert.equal(Number(allContractBills.total), 2, 'rental sequential generation creates next period only');
       }
 
-      const [billSeed] = await pool.execute("INSERT INTO bills (source, room_id, period_start, period_end, due_date, amount, paid_amount, status) VALUES (?, ?, '2030-01-01', '2030-01-31', '2030-01-31', 100, 0, 'unpaid')", [appId === 'hotel' ? 'hotel' : appId === 'property' ? 'property' : 'rental', firstBody.id]);
+      const [billSeed] = await pool.execute("INSERT INTO bills (source, room_id, period_start, period_end, due_date, amount, paid_amount, status) VALUES (?, ?, '2030-03-01', '2030-03-31', '2030-03-31', 100, 0, 'unpaid')", [appId === 'hotel' ? 'hotel' : appId === 'property' ? 'property' : 'rental', firstBody.id]);
       const partialRequestId = 'ci-bill-partial-' + appId;
       const partialPayload = { amount: 35, pay_method: 'bank', pay_date: '2030-01-31' };
       const [partialPayment, partialReplay] = await Promise.all([
@@ -338,13 +338,12 @@ async function main() {
           assert.equal(Number(generatedBody.bills[0].amount), 109.5, 'property fee plus meter charges');
           assert.equal(generatedBody.bills[0].tenant_id, tenantBody.id, 'property fee billed to owner');
           const [[propertyBill]] = await pool.query(
-            "SELECT source, tenant_id, period_start, period_end, due_date, amount, status FROM bills WHERE source = 'property' AND room_id = ? AND period_start = '2030-01-01'",
+            "SELECT source, tenant_id, DATE_FORMAT(period_start, '%Y-%m-%d') AS period_start, DATE_FORMAT(period_end, '%Y-%m-%d') AS period_end, DATE_FORMAT(due_date, '%Y-%m-%d') AS due_date, amount, status FROM bills WHERE source = 'property' AND room_id = ? AND period_start = '2030-01-01'",
             [firstBody.id]
           );
           assert.deepEqual(propertyBill, {
-            source: 'property', tenant_id: tenantBody.id, period_start: new Date('2030-01-01T00:00:00.000Z'),
-            period_end: new Date('2030-01-31T00:00:00.000Z'), due_date: new Date('2030-01-10T00:00:00.000Z'),
-            amount: '109.50', status: 'unpaid'
+            source: 'property', tenant_id: tenantBody.id, period_start: '2030-01-01',
+            period_end: '2030-01-31', due_date: '2030-01-10', amount: '109.50', status: 'unpaid'
           }, 'property receivable persisted with legacy billing dates');
           const feeReplay = await writeBuilding(base, 'POST', '/api/property-fees/generate', {
             month: '2030-01'
