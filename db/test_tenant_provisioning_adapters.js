@@ -25,7 +25,7 @@ test('MariaDB tenant database admin scopes grants to one generated database and 
   await admin.dropPrincipal('t_123456781234123412341234');
   await admin.dropDatabase('rental_123456781234123412341234');
   assert.match(calls.find(x => x.sql?.startsWith('GRANT')).sql, /ON `rental_123456781234123412341234`\.\*/);
-  assert.equal(calls.filter(x => x.end).length, 5);
+  assert.equal(calls.filter(x => x.end).length, 6);
   await assert.rejects(admin.createDatabase('db`; DROP DATABASE mysql;--'), /TENANT_DATABASE_NAME_INVALID/);
 });
 
