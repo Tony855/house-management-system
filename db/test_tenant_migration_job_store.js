@@ -82,3 +82,15 @@ test('migration job store rejects unsafe identifiers, leases and checkpoint payl
   await assert.rejects(store.createJob({ idempotencyKey: 'migration-request-0001', tenantId, appId: 'platform', sourceOrgId: 1 }), /TENANT_MIGRATION_JOB_TENANT_INVALID/);
   await assert.rejects(store.claimJob({ id: 7, workerId: 'bad worker', leaseSeconds: 10 }), /TENANT_MIGRATION_JOB_WORKER_INVALID/);
 });
+
+test('failed jobs require an expected attempt count to retry and queued jobs can be cancelled', async () => {
+  const calls = [];
+  const store = createPlatformTenantMigrationJobStore({ query: async (sql, params) => {
+    calls.push([sql, params]); return [{ affectedRows: 1 }, []];
+  }});
+  assert.equal(await store.retryFailedJob({ id: 7, expectedAttemptCount: 2 }), true);
+  assert.equal(await store.cancelQueuedJob({ id: 7 }), true);
+  assert.match(calls[0][0], /state = 'failed' AND attempt_count = \?/);
+  assert.match(calls[1][0], /state = 'queued'/);
+  await assert.rejects(store.retryFailedJob({ id: 7, expectedAttemptCount: 0 }), /TENANT_MIGRATION_JOB_RETRY_INPUT_INVALID/);
+});

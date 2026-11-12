@@ -1,0 +1,68 @@
+'use strict';
+
+const assert = require('node:assert/strict');
+const test = require('node:test');
+const { createPlatformTenantMigrationWorker } = require('../server/tenant-migration-worker');
+
+const baseJob = Object.freeze({ id: 8, tenantId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', appId: 'rental', sourceOrgId: 9, mode: 'copy', state: 'queued', checkpoint: { table: 'rooms', lastId: 4 } });
+
+function fakeStore(overrides = {}) {
+  const calls = [];
+  return {
+    calls,
+    async getJob() { return baseJob; },
+    async claimJob(input) { calls.push(['claim', input]); return { ...baseJob, state: 'running' }; },
+    async renewLease(input) { calls.push(['heartbeat', input]); return true; },
+    async saveCheckpoint(input) { calls.push(['checkpoint', input]); return true; },
+    async completeJob(input) { calls.push(['complete', input]); return true; },
+    async failJob(input) { calls.push(['fail', input]); return true; },
+    ...overrides
+  };
+}
+
+test('worker claims, resumes from checkpoint, heartbeats, checkpoints and completes', async () => {
+  const store = fakeStore();
+  const worker = createPlatformTenantMigrationWorker({
+    store, workerId: 'worker-a', leaseSeconds: 90,
+    executeJob: async ({ job, checkpoint, heartbeat, saveCheckpoint }) => {
+      assert.equal(job.id, 8);
+      assert.deepEqual(checkpoint, baseJob.checkpoint);
+      await heartbeat();
+      await saveCheckpoint({ table: 'bills', lastId: 22 });
+      return { copied: 10 };
+    }
+  });
+  const result = await worker.runJob(8);
+  assert.equal(result.state, 'completed');
+  assert.deepEqual(store.calls.map(call => call[0]), ['claim', 'heartbeat', 'checkpoint', 'complete']);
+});
+
+test('worker fails closed and records only a sanitized error code', async () => {
+  const store = fakeStore();
+  const worker = createPlatformTenantMigrationWorker({
+    store, workerId: 'worker-a',
+    executeJob: async () => { throw Object.assign(new Error('database password leaked'), { code: 'SOURCE_UNAVAILABLE' }); }
+  });
+  const result = await worker.runJob(8);
+  assert.equal(result.state, 'failed');
+  assert.equal(result.errorCode, 'SOURCE_UNAVAILABLE');
+  assert.equal(store.calls.at(-1)[0], 'fail');
+  assert.equal(store.calls.at(-1)[1].errorCode, 'SOURCE_UNAVAILABLE');
+});
+
+test('worker never completes after lease loss', async () => {
+  const store = fakeStore({ async renewLease() { return false; } });
+  const worker = createPlatformTenantMigrationWorker({
+    store, workerId: 'worker-a',
+    executeJob: async ({ heartbeat }) => { await heartbeat(); }
+  });
+  const result = await worker.runJob(8);
+  assert.equal(result.state, 'lease_lost');
+  assert.equal(store.calls.some(call => call[0] === 'complete'), false);
+});
+
+test('worker does not execute missing or terminal jobs', async () => {
+  const store = fakeStore({ async getJob() { return null; } });
+  const worker = createPlatformTenantMigrationWorker({ store, workerId: 'worker-a', executeJob: async () => { throw new Error('must not run'); } });
+  assert.equal((await worker.runJob(8)).state, 'not_found');
+});

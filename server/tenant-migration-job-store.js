@@ -116,6 +116,24 @@ function createPlatformTenantMigrationJobStore(pool) {
       );
       return Number(result.affectedRows) === 1;
     },
+    async retryFailedJob({ id, expectedAttemptCount }) {
+      if (!Number.isSafeInteger(id) || id < 1 || !Number.isSafeInteger(expectedAttemptCount) || expectedAttemptCount < 1) {
+        throw new TypeError('TENANT_MIGRATION_JOB_RETRY_INPUT_INVALID');
+      }
+      const [result] = await pool.query(
+        "UPDATE platform_tenant_migration_jobs SET state = 'queued', error_code = NULL, lease_owner = NULL, lease_expires_at = NULL, updated_at = UTC_TIMESTAMP() WHERE id = ? AND state = 'failed' AND attempt_count = ?",
+        [id, expectedAttemptCount]
+      );
+      return Number(result.affectedRows) === 1;
+    },
+    async cancelQueuedJob({ id }) {
+      if (!Number.isSafeInteger(id) || id < 1) throw new TypeError('TENANT_MIGRATION_JOB_ID_INVALID');
+      const [result] = await pool.query(
+        "UPDATE platform_tenant_migration_jobs SET state = 'cancelled', updated_at = UTC_TIMESTAMP() WHERE id = ? AND state = 'queued'",
+        [id]
+      );
+      return Number(result.affectedRows) === 1;
+    },
     async failJob({ id, workerId, errorCode }) {
       if (!Number.isSafeInteger(id) || id < 1) throw new TypeError('TENANT_MIGRATION_JOB_ID_INVALID');
       assertWorker(workerId);
