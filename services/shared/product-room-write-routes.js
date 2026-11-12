@@ -65,7 +65,7 @@ function createProductRoomWriteRouter(appId) {
       const result = await req.tenantWrite({
         operation: 'create', reason: req.get('x-operation-reason'),
         stepUpToken: req.get('x-step-up-token'), requestId: req.get('idempotency-key'),
-        payload: room,
+        payload: { ...room, __resource: 'rooms' },
         mutate: async tx => {
           const [buildings] = await tx.execute('SELECT id FROM buildings WHERE id = ? LIMIT 1 FOR UPDATE', [room.building_id]);
           if (!buildings.length) throw fail('BUILDING_NOT_FOUND', 404);

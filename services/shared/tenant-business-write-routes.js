@@ -83,7 +83,7 @@ function createTenantBusinessWriteRouter(appId) {
       const result = await req.tenantWrite({
         operation: 'create', reason: req.get('x-operation-reason'),
         stepUpToken: req.get('x-step-up-token'), requestId: req.get('idempotency-key'),
-        payload: tenant,
+        payload: { ...tenant, __resource: 'tenants' },
         mutate: async tx => {
           const inserted = await tx.insert('tenants', tenant);
           return { id: Number(inserted.insertId), ...tenant };
@@ -101,7 +101,7 @@ function createTenantBusinessWriteRouter(appId) {
       const result = await req.tenantWrite({
         operation: 'update', reason: req.get('x-operation-reason'),
         stepUpToken: req.get('x-step-up-token'), requestId: req.get('idempotency-key'),
-        payload: { id, patch },
+        payload: { id, patch, __resource: 'tenants' },
         mutate: async tx => {
           const [rows] = await tx.execute('SELECT id FROM tenants WHERE id = ? LIMIT 1 FOR UPDATE', [id]);
           if (!rows.length) throw fail('TENANT_NOT_FOUND', 404);
@@ -122,7 +122,7 @@ function createTenantBusinessWriteRouter(appId) {
       const result = await req.tenantWrite({
         operation: 'create', reason: req.get('x-operation-reason'),
         stepUpToken: req.get('x-step-up-token'), requestId: req.get('idempotency-key'),
-        payload: repair,
+        payload: { ...repair, __resource: 'repairs' },
         mutate: async tx => {
           const [rooms] = await tx.execute('SELECT id FROM rooms WHERE id = ? LIMIT 1 FOR UPDATE', [repair.room_id]);
           if (!rooms.length) throw fail('ROOM_NOT_FOUND', 404);
@@ -142,7 +142,7 @@ function createTenantBusinessWriteRouter(appId) {
       const result = await req.tenantWrite({
         operation: 'update', reason: req.get('x-operation-reason'),
         stepUpToken: req.get('x-step-up-token'), requestId: req.get('idempotency-key'),
-        payload: { id, patch },
+        payload: { id, patch, __resource: 'repairs' },
         mutate: async tx => {
           const [rows] = await tx.execute('SELECT id, status FROM repairs WHERE id = ? LIMIT 1 FOR UPDATE', [id]);
           if (!rows.length) throw fail('REPAIR_NOT_FOUND', 404);

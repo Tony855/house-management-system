@@ -30,7 +30,7 @@ function createBuildingWriteRouter() {
       const result = await req.tenantWrite({
         operation: 'create', reason: req.get('x-operation-reason'),
         stepUpToken: req.get('x-step-up-token'), requestId: req.get('idempotency-key'),
-        payload: building,
+        payload: { ...building, __resource: 'buildings' },
         mutate: async tx => {
           const [existing] = await tx.execute('SELECT id FROM buildings WHERE name = ? LIMIT 1 FOR UPDATE', [building.name]);
           if (existing.length) throw fail('BUILDING_ALREADY_EXISTS', 409);
@@ -50,7 +50,7 @@ function createBuildingWriteRouter() {
       const result = await req.tenantWrite({
         operation: 'update', reason: req.get('x-operation-reason'),
         stepUpToken: req.get('x-step-up-token'), requestId: req.get('idempotency-key'),
-        payload: { id, patch },
+        payload: { id, patch, __resource: 'buildings' },
         mutate: async tx => {
           const [rows] = await tx.execute('SELECT id, name, address, remark FROM buildings WHERE id = ? LIMIT 1 FOR UPDATE', [id]);
           if (!rows.length) throw fail('BUILDING_NOT_FOUND', 404);

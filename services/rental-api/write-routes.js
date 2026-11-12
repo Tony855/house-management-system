@@ -66,7 +66,7 @@ function createRentalWriteRouter() {
         reason,
         stepUpToken,
         requestId,
-        payload: room,
+        payload: { ...room, __resource: 'rooms' },
         mutate: async tx => {
           // Lock the parent building before checking duplicates. This serializes
           // room creation for the same building even before a unique index exists.

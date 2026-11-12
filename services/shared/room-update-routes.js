@@ -28,7 +28,7 @@ function createRoomUpdateRouter(appId) {
       const result = await req.tenantWrite({
         operation: 'update', reason: req.get('x-operation-reason'),
         stepUpToken: req.get('x-step-up-token'), requestId: req.get('idempotency-key'),
-        payload: { id, patch: req.body },
+        payload: { id, patch: req.body, __resource: 'rooms' },
         mutate: async tx => {
           const [rows] = await tx.execute('SELECT * FROM rooms WHERE id = ? LIMIT 1 FOR UPDATE', [id]);
           if (!rows.length) throw fail('ROOM_NOT_FOUND', 404);

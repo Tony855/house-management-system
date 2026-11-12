@@ -2,7 +2,7 @@
 
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { createTenantWriteService } = require('../server/tenant-write-service');
+const { createTenantWriteService, fingerprintPayload } = require('../server/tenant-write-service');
 
 const auth = Object.freeze({
   authenticated: true, appId: 'rental',
@@ -149,4 +149,13 @@ test('tenant write rejects reuse of an idempotency key with a different payload 
     f.service.execute({ ...request, repository: f.repository, payload: { amount: 200, note: 'approved' } }),
     error => error.code === 'TENANT_WRITE_IDEMPOTENCY_CONFLICT' && error.status === 409
   );
+});
+
+
+test('server-defined resource scope separates otherwise identical idempotency payloads', () => {
+  const shared = { name: 'Tower A', remark: '' };
+  const building = fingerprintPayload({ ...shared, __resource: 'buildings' });
+  const tenant = fingerprintPayload({ ...shared, __resource: 'tenants' });
+  assert.notEqual(building, tenant);
+  assert.equal(building, fingerprintPayload({ ...shared, __resource: 'buildings' }));
 });
