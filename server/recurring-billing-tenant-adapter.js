@@ -23,6 +23,16 @@ function createRecurringBillingTenantAdapter({ registry, secretProvider, tenantP
           typeof input.requestId !== 'string' || input.requestId.length > 128) {
         throw Object.assign(new Error('BILLING_TENANT_JOB_INPUT_INVALID'), { code: 'BILLING_TENANT_JOB_INPUT_INVALID' });
       }
+      if (input.appId === 'rental') {
+        const [year, month, day] = input.periodKey.split('-').map(Number);
+        const periodDate = new Date(Date.UTC(year, month - 1, day));
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(input.periodKey) ||
+            periodDate.toISOString().slice(0, 10) !== input.periodKey) {
+          throw Object.assign(new Error('RECURRING_BILLING_PERIOD_INVALID'), { code: 'RECURRING_BILLING_PERIOD_INVALID' });
+        }
+      } else if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(input.periodKey)) {
+        throw Object.assign(new Error('RECURRING_BILLING_PERIOD_INVALID'), { code: 'RECURRING_BILLING_PERIOD_INVALID' });
+      }
       const context = await resolveTenantContext({
         auth: { authenticated: true, tenantId: input.tenantId, appId: input.appId },
         appId: input.appId, registry, secretProvider
