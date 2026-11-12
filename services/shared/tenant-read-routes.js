@@ -4,9 +4,9 @@ const express = require('express');
 const { COLUMNS, TABLES } = require('../../server/tenant-repository');
 
 const PATHS = Object.freeze({
-  rental: { buildings: 'buildings', rooms: 'rooms', tenants: 'tenants', contracts: 'contracts', meters: 'meters', room_net_lines: 'network-lines', net_changes: 'network-changes', net_requests: 'network-requests', bills: 'bills', repairs: 'repairs' },
+  rental: { buildings: 'buildings', rooms: 'rooms', tenants: 'tenants', contracts: 'contracts', meters: 'meters', room_net_lines: 'network-lines', net_changes: 'network-changes', net_requests: 'network-requests', bills: 'bills', bill_transactions: 'bill-transactions', repairs: 'repairs' },
   hotel: { buildings: 'buildings', rooms: 'rooms', tenants: 'tenants', orders: 'orders', bills: 'bills', repairs: 'repairs' },
-  property: { buildings: 'buildings', rooms: 'rooms', tenants: 'tenants', org_employees: 'employees', meters: 'meters', room_net_lines: 'network-lines', net_changes: 'network-changes', net_requests: 'network-requests', bills: 'bills', repairs: 'repairs', complaints: 'complaints' }
+  property: { buildings: 'buildings', rooms: 'rooms', tenants: 'tenants', org_employees: 'employees', meters: 'meters', room_net_lines: 'network-lines', net_changes: 'network-changes', net_requests: 'network-requests', bills: 'bills', bill_transactions: 'bill-transactions', repairs: 'repairs', complaints: 'complaints' }
 });
 
 function createTenantReadRouter({ appId }) {

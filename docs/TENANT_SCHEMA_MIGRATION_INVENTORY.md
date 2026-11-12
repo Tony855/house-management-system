@@ -46,3 +46,8 @@ Every product table above currently has org_id. A destination tenant database mu
 - No production data has been copied or changed by this PR.
 - Never activate a tenant before its DB principal, migrations, secret reference and isolation verifier succeed.
 - Keep PR draft until product APIs, all four production frontends, tenant schema migrations, legacy data migration and cross-tenant E2E tests are complete.
+
+
+## Tenant-local bill transaction ledger
+
+Migration `db/migrations/tenant/003_bill_transactions.sql` adds an append-only `bill_transactions` table to each product tenant database. Receipt and refund rows are written in the same transaction as the bill balance update. Request IDs are unique within the tenant database. Refunds are capped at the current paid balance and are blocked when the historical ledger net does not reconcile with the bill's stored paid_amount; legacy balances must be reconciled before refunding. The `/bill-transactions` read projection is tenant-local. Existing tenant databases must apply this additive migration before enabling the new payment/refund routes.

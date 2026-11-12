@@ -1,7 +1,7 @@
 'use strict';
 
 const TABLES = Object.freeze({
-  rental: new Set(['buildings', 'rooms', 'tenants', 'contracts', 'meters', 'room_net_lines', 'net_changes', 'net_requests', 'bills', 'repairs']),
+  rental: new Set(['buildings', 'rooms', 'tenants', 'contracts', 'meters', 'room_net_lines', 'net_changes', 'net_requests', 'bills', 'bill_transactions', 'repairs']),
   hotel: new Set(['buildings', 'rooms', 'tenants', 'orders', 'bills', 'repairs']),
   property: new Set(['buildings', 'rooms', 'tenants', 'org_employees', 'meters', 'room_net_lines', 'net_changes', 'net_requests', 'bills', 'repairs', 'complaints'])
 });
@@ -20,6 +20,7 @@ const COLUMNS = Object.freeze({
     net_changes: ['id', 'room_id', 'line_id', 'change_date', 'change_type', 'old_bandwidth', 'new_bandwidth', 'remark', 'created_at'],
     net_requests: ['id', 'company_id', 'room_id', 'type', 'bandwidth', 'delta', 'line_id', 'reason', 'status', 'created_by', 'created_at', 'handled_by', 'handle_note', 'handled_at'],
     bills: ['id', 'source', 'room_id', 'tenant_id', 'contract_id', 'order_id', 'period_start', 'period_end', 'due_date', 'amount', 'paid_amount', 'status', 'pay_method', 'pay_date', 'remark', 'created_at'],
+    bill_transactions: ['id', 'bill_id', 'transaction_type', 'amount', 'pay_method', 'external_reference', 'note', 'request_id', 'transaction_date', 'created_at'],
     repairs: ['id', 'room_id', 'title', 'content', 'status', 'handler', 'handle_note', 'created_at']
   }),
   hotel: Object.freeze({

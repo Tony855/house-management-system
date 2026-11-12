@@ -39,6 +39,7 @@ async function createTenantDb(adminPool, config, appId, tenantId, created, creat
     KEY idx_tenant_write_audit_request (request_id)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
   await pool.query(require('node:fs').readFileSync(require('node:path').join(__dirname, 'migrations/tenant/002_tenant_write_idempotency.sql'), 'utf8'));
+  await pool.query(require('node:fs').readFileSync(require('node:path').join(__dirname, 'migrations/tenant/003_bill_transactions.sql'), 'utf8'));
   await pool.execute('INSERT INTO buildings (name, address, remark) VALUES (?, ?, ?)', ['CI integration building', '', 'temporary']);
   if (appId === 'property') {
     await pool.execute('INSERT INTO tenants (name, contact, phone, license_no, remark) VALUES (?, ?, ?, ?, ?)', ['CI property owner', '', '', '', 'temporary']);
@@ -339,9 +340,21 @@ async function main() {
       assert.equal(partialBody.status, 'partial', appId + ' partial bill status');
       const finalPayment = await hotelOrderRequest(base, 'POST', '/api/bills/' + billSeed.insertId + '/pay', { amount: 65, pay_method: 'bank', pay_date: '2030-02-01' }, 'ci-bill-final-' + appId);
       assert.equal(finalPayment.status, 200, appId + ' final bill payment');
+      const [[ledgerRows]] = await pool.query('SELECT COUNT(*) AS total, SUM(amount) AS gross FROM bill_transactions WHERE bill_id = ?', [billSeed.insertId]);
+      assert.equal(Number(ledgerRows.total), 3, appId + ' receipt ledger records payment and final settlement once each');
+      assert.equal(Number(ledgerRows.gross), 100, appId + ' gross receipt ledger total');
       const [[paidBill]] = await pool.query('SELECT paid_amount, status FROM bills WHERE id = ?', [billSeed.insertId]);
       assert.equal(Number(paidBill.paid_amount), 100, appId + ' fully paid amount');
       assert.equal(paidBill.status, 'paid', appId + ' fully paid status');
+      const refund = await hotelOrderRequest(base, 'POST', '/api/bills/' + billSeed.insertId + '/refund', { amount: 20, pay_method: 'bank', pay_date: '2030-02-02', external_reference: 'CI-REFUND-' + appId }, 'ci-bill-refund-' + appId);
+      assert.equal(refund.status, 200, appId + ' bill refund');
+      const refundBody = await refund.json();
+      assert.equal(Number(refundBody.paid_amount), 80, appId + ' refund reduces paid balance');
+      assert.equal(refundBody.status, 'partial', appId + ' refunded bill becomes partial');
+      const [[refundLedger]] = await pool.query("SELECT transaction_type, amount, external_reference FROM bill_transactions WHERE bill_id = ? AND transaction_type = 'refund'", [billSeed.insertId]);
+      assert.deepEqual(refundLedger, { transaction_type: 'refund', amount: '20.00', external_reference: 'CI-REFUND-' + appId }, appId + ' refund audit ledger');
+      const excessiveRefund = await hotelOrderRequest(base, 'POST', '/api/bills/' + billSeed.insertId + '/refund', { amount: 81 }, 'ci-bill-refund-excess-' + appId);
+      assert.equal(excessiveRefund.status, 409, appId + ' refund cannot exceed net received amount');
       const overpayment = await hotelOrderRequest(base, 'POST', '/api/bills/' + billSeed.insertId + '/pay', { amount: 1 }, 'ci-bill-overpay-' + appId);
       assert.equal(overpayment.status, 409, appId + ' overpayment rejected');
 
