@@ -27,22 +27,14 @@ function createProductApiRuntime({
   if (!factory) throw new TypeError('PRODUCT_RUNTIME_APP_INVALID');
   const platformPool = createPlatformPool({ env, createPool });
   let dependencies;
-  let closed = false;
   try {
     dependencies = createProductControlPlaneDependencies({
       appId, issuer, platformPool, secretManager, keyProvider,
       signingKeyProvider, loginRateLimitHmacKey, writeSecurity,
       authOptions, poolManager, createPool
     });
-    dependencies = Object.freeze({
-      ...dependencies,
-      readinessCheck: async () => {
-        if (closed || typeof platformPool.query !== 'function') return false;
-        await platformPool.query('SELECT 1');
-        return true;
-      }
-    });
     const app = factory(dependencies);
+    let closed = false;
     return Object.freeze({
       app, pool: platformPool, dependencies,
       async close() {

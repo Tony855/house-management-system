@@ -19,7 +19,7 @@ function validatePatch(appId, body) {
 function createRoomUpdateRouter(appId) {
   if (!FIELDS[appId]) throw new TypeError('ROOM_UPDATE_PRODUCT_INVALID');
   const router = express.Router();
-  const updateRoom = async (req, res, next) => {
+  router.put('/rooms/:id', async (req, res, next) => {
     try {
       if (typeof req.tenantWrite !== 'function') return res.status(503).json({ error: 'TENANT_WRITE_UNAVAILABLE' });
       const id = Number(req.params.id);
@@ -52,9 +52,7 @@ function createRoomUpdateRouter(appId) {
       });
       return res.json(result);
     } catch (error) { return next(error); }
-  };
-  router.put('/rooms/:id', updateRoom);
-  router.patch('/rooms/:id', updateRoom);
+  });
   return router;
 }
 module.exports = { createRoomUpdateRouter, validatePatch };

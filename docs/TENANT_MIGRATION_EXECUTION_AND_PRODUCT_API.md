@@ -23,3 +23,8 @@ The tenant-isolation test suite includes migration worker lifecycle, platform mi
 ## Durable worker orchestration
 
 The control-plane job store now exposes a bounded, oldest-first runnable-job query (queued jobs and jobs whose leases expired). The runner polls that queue, enforces a process-wide concurrency ceiling, suppresses duplicate local dispatch, prevents overlapping polling ticks, reports sanitized operational error codes, and drains active work on graceful shutdown. The executor remains an explicit injected dependency: deployments must still provide tenant-scoped source/target adapters and an operator-approved execution policy before enabling copy jobs.
+
+
+## Executor and platform worker wiring
+
+The platform API can now be given an explicit `migrationExecutor` dependency. When supplied, it creates the durable job store, worker and bounded polling runner, and exposes `app.locals.stopTenantMigrationRunner()` for graceful shutdown. When omitted, no worker starts. The concrete `createTenantDataMigrationExecutor` resolves source/target connections through an injected resolver, uses the MariaDB adapters and snapshot verifier, checkpoints phases, heartbeats long-running work, and closes resolved resources. The resolver must enforce a read-only legacy source principal and tenant-database-only target principal; no connection credentials are accepted from a job or API request. Production deployments must inject a real Secret Manager-backed resolver and durable audit sink. This remains a copy/dry-run mechanism, not a cutover or source deletion mechanism.
