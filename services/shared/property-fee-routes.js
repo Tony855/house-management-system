@@ -9,7 +9,7 @@ function propertyFeeError(code, status = 400) {
 function validatePropertyFeeGeneration(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input) ||
       Object.keys(input).some(key => key !== 'month') ||
-      typeof input.month !== 'string' || !/^\\d{4}-(0[1-9]|1[0-2])$/.test(input.month)) {
+      typeof input.month !== 'string' || !/^\d{4}-(0[1-9]|1[0-2])$/.test(input.month)) {
     throw propertyFeeError('PROPERTY_FEE_INPUT_INVALID');
   }
   return Object.freeze({ month: input.month });
