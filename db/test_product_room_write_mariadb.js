@@ -265,7 +265,7 @@ async function main() {
       assert.equal(first.status, 201, appId + ' first create');
       assert.equal(replay.status, 201, appId + ' idempotent replay');
       const firstBody = await first.json();
-      const [[billSeed]] = await pool.execute("INSERT INTO bills (source, room_id, period_start, period_end, due_date, amount, paid_amount, status) VALUES (?, ?, '2030-01-01', '2030-01-31', '2030-01-31', 100, 0, 'unpaid')", [appId === 'hotel' ? 'hotel' : appId === 'property' ? 'property' : 'rental', firstBody.id]);
+      const [billSeed] = await pool.execute("INSERT INTO bills (source, room_id, period_start, period_end, due_date, amount, paid_amount, status) VALUES (?, ?, '2030-01-01', '2030-01-31', '2030-01-31', 100, 0, 'unpaid')", [appId === 'hotel' ? 'hotel' : appId === 'property' ? 'property' : 'rental', firstBody.id]);
       const partialPayment = await hotelOrderRequest(base, 'POST', '/api/bills/' + billSeed.insertId + '/pay', { amount: 35, pay_method: 'bank', pay_date: '2030-01-31' }, 'ci-bill-partial-' + appId);
       assert.equal(partialPayment.status, 200, appId + ' partial bill payment');
       const partialBody = await partialPayment.json();
