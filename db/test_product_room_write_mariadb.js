@@ -424,6 +424,15 @@ async function main() {
           assert.equal(arrears.page_size, 50, 'property arrears default page size');
           assert.equal(arrears.total_count, 1, 'property arrears complete count');
           assert.equal(Number(arrears.total_outstanding), 109.5, 'property arrears complete total');
+          const ownerStatementResponse = await fetch(base + '/api/property-fees/owner-statements?from_date=2030-01-01&to_date=2030-01-31');
+          assert.equal(ownerStatementResponse.status, 200, 'property owner statement');
+          const ownerStatement = await ownerStatementResponse.json();
+          assert.equal(ownerStatement.items.length, 1, 'property owner statement owner count');
+          assert.equal(ownerStatement.items[0].owner_id, Number(definition.room.owner_id), 'property owner statement owner binding');
+          assert.equal(ownerStatement.items[0].bills_count, 1, 'property owner statement bill count');
+          assert.equal(Number(ownerStatement.items[0].billed_amount), 109.5, 'property owner statement billed amount');
+          assert.equal(Number(ownerStatement.items[0].outstanding_amount), 109.5, 'property owner statement outstanding');
+
           assert.equal(Number(arrears.aging.days_1_30), 109.5, 'property arrears aging bucket');
           const collectionAction = await writeBuilding(base, 'POST', '/api/property-fees/' + generatedBody.bills[0].id + '/collection-actions', {
             action_type: 'phone', outcome: 'promised', contacted_at: '2030-02-01', follow_up_date: '2030-02-08', note: 'CI owner promised payment'

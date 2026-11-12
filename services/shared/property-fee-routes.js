@@ -235,6 +235,58 @@ function createPropertyFeeRouter() {
       })) });
     } catch (error) { return next(error); }
   });
+  router.get('/property-fees/owner-statements', async (req, res, next) => {
+    try {
+      if (!req.tenantDb || typeof req.tenantDb.execute !== 'function') {
+        return res.status(503).json({ error: 'TENANT_DATABASE_UNAVAILABLE' });
+      }
+      const fromDate = req.query.from_date, toDate = req.query.to_date;
+      if (!validDate(fromDate) || !validDate(toDate) || fromDate > toDate) {
+        throw propertyFeeError('PROPERTY_OWNER_STATEMENT_RANGE_INVALID');
+      }
+      const span = (Date.parse(toDate + 'T00:00:00Z') - Date.parse(fromDate + 'T00:00:00Z')) / 86400000;
+      if (span > 366) throw propertyFeeError('PROPERTY_OWNER_STATEMENT_RANGE_TOO_LARGE');
+      const [rows] = await req.tenantDb.execute(
+        `SELECT b.tenant_id AS owner_id, COALESCE(t.name, '') AS owner_name,
+                COUNT(DISTINCT b.id) AS bills_count, COUNT(DISTINCT b.room_id) AS rooms_count,
+                ROUND(SUM(b.amount), 2) AS billed_amount,
+                ROUND(SUM(b.paid_amount), 2) AS current_paid_amount,
+                ROUND(SUM(b.amount - b.paid_amount), 2) AS outstanding_amount,
+                ROUND(SUM(COALESCE(tx.receipts, 0)), 2) AS period_receipts,
+                ROUND(SUM(COALESCE(tx.refunds, 0)), 2) AS period_refunds
+           FROM bills b
+           LEFT JOIN tenants t ON t.id = b.tenant_id
+           LEFT JOIN (
+             SELECT bill_id,
+               SUM(CASE WHEN transaction_type = 'receipt' THEN amount ELSE 0 END) AS receipts,
+               SUM(CASE WHEN transaction_type = 'refund' THEN amount ELSE 0 END) AS refunds
+             FROM bill_transactions WHERE transaction_date BETWEEN ? AND ? GROUP BY bill_id
+           ) tx ON tx.bill_id = b.id
+          WHERE b.source = 'property' AND b.period_start BETWEEN ? AND ?
+          GROUP BY b.tenant_id, t.name ORDER BY t.name ASC, b.tenant_id ASC LIMIT 500`,
+        [fromDate, toDate, fromDate, toDate]
+      );
+      const items = rows.map(row => ({
+        owner_id: Number(row.owner_id), owner_name: row.owner_name,
+        bills_count: Number(row.bills_count), rooms_count: Number(row.rooms_count),
+        billed_amount: Number(row.billed_amount), current_paid_amount: Number(row.current_paid_amount),
+        outstanding_amount: Number(row.outstanding_amount), period_receipts: Number(row.period_receipts),
+        period_refunds: Number(row.period_refunds)
+      }));
+      return res.json({
+        from_date: fromDate, to_date: toDate, items,
+        totals: items.reduce((total, item) => ({
+          owners_count: total.owners_count + 1, bills_count: total.bills_count + item.bills_count,
+          billed_amount: Math.round((total.billed_amount + item.billed_amount) * 100) / 100,
+          current_paid_amount: Math.round((total.current_paid_amount + item.current_paid_amount) * 100) / 100,
+          outstanding_amount: Math.round((total.outstanding_amount + item.outstanding_amount) * 100) / 100,
+          period_receipts: Math.round((total.period_receipts + item.period_receipts) * 100) / 100,
+          period_refunds: Math.round((total.period_refunds + item.period_refunds) * 100) / 100
+        }), { owners_count: 0, bills_count: 0, billed_amount: 0, current_paid_amount: 0,
+          outstanding_amount: 0, period_receipts: 0, period_refunds: 0 })
+      });
+    } catch (error) { return next(error); }
+  });
   router.get('/property-fees/arrears', async (req, res, next) => {
     try {
       if (!req.tenantDb || typeof req.tenantDb.execute !== 'function') {
