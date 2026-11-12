@@ -417,6 +417,18 @@ async function main() {
           const arrears = await arrearsResponse.json();
           assert.ok(arrears.items.some(item => item.room_id === firstBody.id && Number(item.outstanding_amount) === 109.5),
             'property arrears includes generated monthly owner fee');
+          assert.equal(arrears.page, 1, 'property arrears default page');
+          assert.equal(arrears.page_size, 50, 'property arrears default page size');
+          assert.equal(arrears.total_count, 1, 'property arrears complete count');
+          assert.equal(Number(arrears.total_outstanding), 109.5, 'property arrears complete total');
+          assert.equal(Number(arrears.aging.days_1_30), 109.5, 'property arrears aging bucket');
+          const arrearsPage = await fetch(base + '/api/property-fees/arrears?as_of=2030-02-01&page=1&page_size=1');
+          assert.equal(arrearsPage.status, 200, 'property arrears pagination');
+          const pageBody = await arrearsPage.json();
+          assert.equal(pageBody.items.length, 1, 'property arrears bounded page');
+          assert.equal(pageBody.total_count, 1, 'property arrears count independent of page');
+          const invalidArrearsPage = await fetch(base + '/api/property-fees/arrears?page_size=101');
+          assert.equal(invalidArrearsPage.status, 400, 'property arrears rejects oversized page');
 
           assert.equal(generatedBody.generated, 1, 'property monthly fee generated once');
           assert.equal(generatedBody.bills.length, 1, 'property monthly fee bill count');
