@@ -72,7 +72,6 @@ function createRecurringBillingDispatchStore(pool) {
     async claim({ id, workerId, leaseSeconds = 180 }) {
       if (!Number.isSafeInteger(id) || id < 1) throw new TypeError('RECURRING_BILLING_JOB_ID_INVALID');
       assertWorker(workerId);
-      assertLeaseToken(leaseToken);
       if (!Number.isInteger(leaseSeconds) || leaseSeconds < 30 || leaseSeconds > 1800) throw new TypeError('RECURRING_BILLING_LEASE_INVALID');
       const leaseToken = crypto.randomUUID();
       const [result] = await pool.query(
@@ -86,6 +85,7 @@ function createRecurringBillingDispatchStore(pool) {
     async renewLease({ id, workerId, leaseToken, leaseSeconds = 180 }) {
       if (!Number.isSafeInteger(id) || id < 1) throw new TypeError('RECURRING_BILLING_JOB_ID_INVALID');
       assertWorker(workerId);
+      assertLeaseToken(leaseToken);
       if (!Number.isInteger(leaseSeconds) || leaseSeconds < 30 || leaseSeconds > 1800) throw new TypeError('RECURRING_BILLING_LEASE_INVALID');
       const [result] = await pool.query(
         "UPDATE platform_recurring_billing_dispatch SET lease_expires_at = DATE_ADD(UTC_TIMESTAMP(), INTERVAL ? SECOND) WHERE id = ? AND state = 'dispatching' AND lease_owner = ? AND lease_token = ? AND lease_expires_at > UTC_TIMESTAMP()",
