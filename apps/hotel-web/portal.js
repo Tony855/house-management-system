@@ -22,6 +22,59 @@ async function jsonRequest(path, options = {}) {
   if (!response.ok) throw new Error(typeof body.error === 'string' ? body.error : 'REQUEST_FAILED');
   return body;
 }
+async function renderWorkspace() {
+  const panel = document.createElement('section');
+  panel.className = 'workspace-panel';
+  panel.setAttribute('aria-live', 'polite');
+  const heading = document.createElement('h3');
+  heading.textContent = appId === 'platform' ? '平台运营概览' : '业务数据概览';
+  const intro = document.createElement('p');
+  intro.textContent = appId === 'platform'
+    ? '以下数据来自已授权的平台管理接口。'
+    : '统计仅来自当前产品 API 和当前租户数据库。';
+  const grid = document.createElement('div');
+  grid.className = 'workspace-stats';
+  panel.append(heading, intro, grid);
+  empty.append(panel);
+
+  const resources = appId === 'platform'
+    ? [{ label: '租户', path: '/api/platform/tenants?limit=100' },
+       { label: '产品', path: '/api/platform/products' },
+       { label: '套餐', path: '/api/platform/plans' }]
+    : [{ label: '楼栋', path: '/api/buildings?limit=1' },
+       { label: '房间', path: '/api/rooms?limit=1' },
+       { label: '客户/住户', path: '/api/tenants?limit=1' },
+       { label: appId === 'rental' ? '合同' : appId === 'hotel' ? '订单' : '账单',
+         path: appId === 'rental' ? '/api/contracts?limit=1' : appId === 'hotel' ? '/api/orders?limit=1' : '/api/bills?limit=1' }];
+  const results = await Promise.allSettled(resources.map(item => jsonRequest(item.path)));
+  for (let index = 0; index < resources.length; index++) {
+    const card = document.createElement('article');
+    card.className = 'workspace-stat';
+    const label = document.createElement('span');
+    label.textContent = resources[index].label;
+    const value = document.createElement('strong');
+    const result = results[index];
+    if (result.status !== 'fulfilled') value.textContent = '暂不可用';
+    else {
+      const data = result.value;
+      const count = Array.isArray(data) ? data.length :
+        Number.isFinite(Number(data.total)) ? Number(data.total) :
+        Array.isArray(data.items) ? data.items.length : '已连接';
+      value.textContent = String(count);
+    }
+    card.append(label, value);
+    grid.append(card);
+  }
+  const refresh = document.createElement('button');
+  refresh.type = 'button';
+  refresh.className = 'auth-secondary';
+  refresh.textContent = '刷新数据概览';
+  refresh.addEventListener('click', () => {
+    panel.remove();
+    void renderWorkspace();
+  });
+  panel.append(refresh);
+}
 function field(labelText, type, autocomplete) {
   const label = document.createElement('label');
   label.className = 'auth-field';
@@ -110,6 +163,7 @@ function createAuthPanel() {
       feedback.textContent = '登录成功。会话令牌只保存在页面内存中，不写入浏览器持久存储。';
       message.textContent = '身份认证通过；工作台只开放已接入并通过权限验证的业务接口。';
       setStatus('已登录 · ' + appId, true);
+      await renderWorkspace();
     } catch (error) {
       accessToken = null;
       feedback.textContent = error.message === 'INVALID_CREDENTIALS' ? '账号或密码错误。' :
@@ -129,6 +183,7 @@ function createAuthPanel() {
     finally {
       accessToken = null;
       challenge = null;
+      empty.querySelector('.workspace-panel')?.remove();
       form.reset();
       username.label.hidden = false;
       password.label.hidden = false;

@@ -10,6 +10,7 @@ test('executor resolves credentials outside job payload, uses adapters and check
   const tenantId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
   const tables = require('../server/tenant-repository').TABLES[appId];
   const sourcePool = {
+    async execute() { return [[]]; },
     async getConnection() {
       return {
         async execute(sql) {

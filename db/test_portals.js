@@ -17,6 +17,9 @@ test('four independent portal entrypoints have distinct app and session boundari
     assert.ok(fs.existsSync('apps/' + dir + '-web/portal.css'));
     assert.ok(js.includes("credentials: 'omit'"));
     assert.ok(js.includes('login-form'));
+    assert.ok(js.includes('renderWorkspace'));
+    assert.ok(js.includes('workspace-stats'));
+    if (app !== 'platform') assert.ok(js.includes('/api/buildings?limit=1'));
     assert.ok(js.includes("authorization = 'Bearer '"));
     assert.equal(js.includes('localStorage'), false);
     assert.equal(js.includes('sessionStorage'), false);

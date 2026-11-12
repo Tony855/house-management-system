@@ -28,3 +28,8 @@ The control-plane job store now exposes a bounded, oldest-first runnable-job que
 ## Executor and platform worker wiring
 
 The platform API can now be given an explicit `migrationExecutor` dependency. When supplied, it creates the durable job store, worker and bounded polling runner, and exposes `app.locals.stopTenantMigrationRunner()` for graceful shutdown. When omitted, no worker starts. The concrete `createTenantDataMigrationExecutor` resolves source/target connections through an injected resolver, uses the MariaDB adapters and snapshot verifier, checkpoints phases, heartbeats long-running work, and closes resolved resources. The resolver must enforce a read-only legacy source principal and tenant-database-only target principal; no connection credentials are accepted from a job or API request. Production deployments must inject a real Secret Manager-backed resolver and durable audit sink. This remains a copy/dry-run mechanism, not a cutover or source deletion mechanism.
+
+
+## Product API and portal increment
+
+Rental, Hotel and Property APIs now mount a shared tenant-scoped building writer: create and partial/full update use the existing audited/idempotent tenant write service, lock rows, reject duplicate names and accept only name/address/remark fields. Room update supports both PUT and PATCH through one validation/transaction handler. Portal entrypoints now render a data overview after authentication, querying only the current product's permitted read APIs; platform portal uses platform-only list endpoints. The overview is a read-only operational summary, not a substitute for complete business management screens.
