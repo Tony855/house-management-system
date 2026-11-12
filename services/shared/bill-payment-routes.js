@@ -27,6 +27,10 @@ async function insertBillTransaction(tx, { billId, type, transaction, requestId 
     [billId, type, transaction.amount, transaction.pay_method, transaction.external_reference, transaction.note, requestId, transaction.pay_date]
   );
 }
+function validateBillPayment(input) {
+  try { return validateBillTransaction(input); }
+  catch (_) { throw paymentError('BILL_PAYMENT_INPUT_INVALID'); }
+}
 function createBillPaymentRouter(appId) {
   if (!['rental','hotel','property'].includes(appId)) throw new TypeError('BILL_PAYMENT_APP_INVALID');
   const router = express.Router();
@@ -91,4 +95,4 @@ function createBillPaymentRouter(appId) {
   });
   return router;
 }
-module.exports = { validateBillTransaction, createBillPaymentRouter };
+module.exports = { validateBillTransaction, validateBillPayment, createBillPaymentRouter };
