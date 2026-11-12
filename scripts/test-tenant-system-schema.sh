@@ -20,6 +20,14 @@ export MYSQL_PWD="$DB_PASSWORD"
 
 idempotency_table="$("${mysql_cmd[@]}" -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '$DB_NAME' AND table_name = 'tenant_write_idempotency' AND table_type = 'BASE TABLE'")"
 audit_table="$("${mysql_cmd[@]}" -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '$DB_NAME' AND table_name = 'tenant_write_audit_events' AND table_type = 'BASE TABLE'")"
+# Property-only collection schema smoke test, including the bill foreign key.
+"${mysql_cmd[@]}" "$DB_NAME" -e "CREATE TABLE IF NOT EXISTS bills (id INT NOT NULL AUTO_INCREMENT PRIMARY KEY) ENGINE=InnoDB"
+"${mysql_cmd[@]}" "$DB_NAME" < db/migrations/tenant/005_property_collection_actions.sql
+collection_table="$("${mysql_cmd[@]}" -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '$DB_NAME' AND table_name = 'property_collection_actions' AND table_type = 'BASE TABLE'")"
+if [[ "$collection_table" != "1" ]]; then echo "Property collection migration is incomplete" >&2; exit 1; fi
+"${mysql_cmd[@]}" "$DB_NAME" -e "INSERT INTO bills (id) VALUES (1); INSERT INTO property_collection_actions (bill_id, action_type, outcome, contacted_at, follow_up_date, note, request_id) VALUES (1, 'phone', 'promised', '2030-01-01', '2030-01-08', 'CI collection smoke test', 'ci-collection-1234567890')"
+collection_rows="$("${mysql_cmd[@]}" -e "SELECT COUNT(*) FROM property_collection_actions WHERE bill_id = 1 AND outcome = 'promised' AND follow_up_date = '2030-01-08'")"
+if [[ "$collection_rows" != "1" ]]; then echo "Property collection migration insert/readback failed" >&2; exit 1; fi
 if [[ "$idempotency_table" != "1" || "$audit_table" != "1" ]]; then
   echo "Tenant write system migrations are incomplete" >&2
   exit 1
@@ -27,4 +35,4 @@ fi
 "${mysql_cmd[@]}" "$DB_NAME" -e "INSERT INTO tenant_write_audit_events (app_id, tenant_uuid, user_id, session_id, operation, reason, request_id, event_type) VALUES ('rental', '12345678-1234-4123-8123-123456789abc', 'ci-user', 'ci-session-1234567890', 'create', 'CI migration smoke test', 'ci-request-1234567890', 'tenant_write_started')"
 audit_rows="$("${mysql_cmd[@]}" "$DB_NAME" -e "SELECT COUNT(*) FROM tenant_write_audit_events WHERE request_id = 'ci-request-1234567890' AND event_type = 'tenant_write_started'")"
 if [[ "$audit_rows" != "1" ]]; then echo "Tenant write audit insert/readback failed" >&2; exit 1; fi
-echo "Tenant write idempotency and audit migrations passed."
+echo "Tenant system and property collection migrations passed."
