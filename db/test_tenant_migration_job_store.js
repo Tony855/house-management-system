@@ -1,0 +1,84 @@
+'use strict';
+
+const assert = require('node:assert/strict');
+const test = require('node:test');
+const { createPlatformTenantMigrationJobStore } = require('../server/tenant-migration-job-store');
+
+const tenantId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+const row = {
+  id: 7, idempotency_key: 'migration-request-0001', tenant_uuid: tenantId,
+  app_id: 'rental', source_org_id: 12, mode: 'copy', state: 'queued',
+  attempt_count: 0, lease_owner: null, lease_expires_at: null,
+  checkpoint_json: '{"table":"rooms","lastId":42}', error_code: null,
+  created_at: '2026-11-12 00:00:00', updated_at: '2026-11-12 00:00:00'
+};
+
+test('migration job creation is idempotent and rejects key reuse for another tenant payload', async () => {
+  const calls = [];
+  const store = createPlatformTenantMigrationJobStore({ query: async (sql, params) => {
+    calls.push([sql, params]);
+    if (sql.startsWith('INSERT')) return [{ insertId: 7 }, []];
+    return [[row], []];
+  }});
+  const job = await store.createJob({ idempotencyKey: row.idempotency_key, tenantId, appId: 'rental', sourceOrgId: 12, mode: 'copy' });
+  assert.equal(job.id, 7);
+  assert.deepEqual(job.checkpoint, { table: 'rooms', lastId: 42 });
+  await assert.rejects(store.createJob({ idempotencyKey: row.idempotency_key, tenantId, appId: 'rental', sourceOrgId: 13, mode: 'copy' }),
+    error => error.code === 'TENANT_MIGRATION_JOB_IDEMPOTENCY_CONFLICT' && error.status === 409);
+  assert.match(calls[0][0], /ON DUPLICATE KEY UPDATE/);
+});
+
+test('only one worker can claim a queued or expired job and attempts increment atomically', async () => {
+  const calls = [];
+  const store = createPlatformTenantMigrationJobStore({ query: async (sql, params) => {
+    calls.push([sql, params]);
+    if (sql.startsWith('UPDATE')) return [{ affectedRows: 1 }, []];
+    return [[{ ...row, state: 'running', lease_owner: 'worker-a', attempt_count: 1 }], []];
+  }});
+  const job = await store.claimJob({ id: 7, workerId: 'worker-a', leaseSeconds: 60 });
+  assert.equal(job.state, 'running');
+  assert.equal(job.workerId, 'worker-a');
+  assert.equal(job.attemptCount, 1);
+  assert.match(calls[0][0], /state = 'queued'.*lease_expires_at <= UTC_TIMESTAMP\(\)/);
+  assert.match(calls[0][0], /attempt_count = attempt_count \+ 1/);
+});
+
+test('active leases reject a second claimant and stale owners cannot checkpoint or complete', async () => {
+  const store = createPlatformTenantMigrationJobStore({ query: async sql => {
+    if (sql.startsWith('UPDATE')) return [{ affectedRows: 0 }, []];
+    throw new Error('unexpected query');
+  }});
+  assert.equal(await store.claimJob({ id: 7, workerId: 'worker-b' }), null);
+  assert.equal(await store.saveCheckpoint({ id: 7, workerId: 'worker-b', checkpoint: { table: 'rooms' } }), false);
+  assert.equal(await store.completeJob({ id: 7, workerId: 'worker-b' }), false);
+});
+
+test('checkpoint writes are bounded and lease-owner scoped', async () => {
+  let captured;
+  const store = createPlatformTenantMigrationJobStore({ query: async (sql, params) => {
+    captured = [sql, params]; return [{ affectedRows: 1 }, []];
+  }});
+  assert.equal(await store.saveCheckpoint({ id: 7, workerId: 'worker-a', checkpoint: { table: 'rooms', lastId: 99 } }), true);
+  assert.deepEqual(JSON.parse(captured[1][0]), { table: 'rooms', lastId: 99 });
+  assert.match(captured[0], /lease_owner = \?/);
+  await assert.rejects(store.saveCheckpoint({ id: 7, workerId: 'worker-a', checkpoint: 'x'.repeat(70000) }), /TENANT_MIGRATION_JOB_CHECKPOINT_INVALID/);
+});
+
+test('lease renewal, completion and failure are conditional on the current unexpired owner', async () => {
+  const calls = [];
+  const store = createPlatformTenantMigrationJobStore({ query: async (sql, params) => {
+    calls.push([sql, params]); return [{ affectedRows: 1 }, []];
+  }});
+  assert.equal(await store.renewLease({ id: 7, workerId: 'worker-a', leaseSeconds: 120 }), true);
+  assert.equal(await store.completeJob({ id: 7, workerId: 'worker-a' }), true);
+  assert.equal(await store.failJob({ id: 7, workerId: 'worker-a', errorCode: 'SOURCE_UNAVAILABLE' }), true);
+  assert.match(calls[0][0], /lease_expires_at > UTC_TIMESTAMP\(\)/);
+  assert.equal(calls[2][1][0], 'SOURCE_UNAVAILABLE');
+});
+
+test('migration job store rejects unsafe identifiers, leases and checkpoint payloads', async () => {
+  const store = createPlatformTenantMigrationJobStore({ query: async () => [[], []] });
+  await assert.rejects(store.createJob({ idempotencyKey: 'short', tenantId, appId: 'rental', sourceOrgId: 1 }), /TENANT_MIGRATION_JOB_INPUT_INVALID/);
+  await assert.rejects(store.createJob({ idempotencyKey: 'migration-request-0001', tenantId, appId: 'platform', sourceOrgId: 1 }), /TENANT_MIGRATION_JOB_TENANT_INVALID/);
+  await assert.rejects(store.claimJob({ id: 7, workerId: 'bad worker', leaseSeconds: 10 }), /TENANT_MIGRATION_JOB_WORKER_INVALID/);
+});
