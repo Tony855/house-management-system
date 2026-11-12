@@ -96,7 +96,7 @@ test('platform runtime refuses to start recurring billing scheduler without syst
     billingPollIntervalMs: 60000
   });
   assert.throws(() => createPlatformApiRuntime(config), /PLATFORM_BILLING_SYSTEM_AUTHORIZER_REQUIRED/);
-  assert.equal(config.pool.ended, 1);
+  assert.equal(config.pool.ended, 0, 'authorization is validated before allocating the platform pool');
 });
 
 test('platform runtime enables recurring billing scheduler only with secret manager and system authorization, then drains it on shutdown', async () => {
@@ -125,7 +125,7 @@ test('platform runtime refuses an injected tenant billing worker without system 
     billingJobWorker: { start() {}, stop: async () => {} }
   });
   assert.throws(() => createPlatformApiRuntime(config), /PLATFORM_BILLING_SYSTEM_AUTHORIZER_REQUIRED/);
-  assert.equal(config.pool.ended, 1);
+  assert.equal(config.pool.ended, 0, 'authorization is validated before allocating the platform pool');
 });
 
 test('platform runtime starts an injected tenant billing worker and drains it before DB close', async () => {
@@ -164,11 +164,10 @@ test('platform runtime composes an automatic billing processor only with explici
   assert.equal(config.pool.ended, 1);
 });
 
-test('platform runtime leaves automatic tenant bill processing disabled without explicit system authorization', async () => {
+test('platform runtime rejects tenant secret manager without system authorization before allocating resources', () => {
   const config = options({
     tenantSecretManager: { getSecret: async () => ({ user: 'tenant-user', password: 'tenant-password', version: 'v1' }) }
   });
-  const runtime = createPlatformApiRuntime(config);
-  assert.equal(runtime.app.locals.tenantBillingJobWorker, undefined);
-  await runtime.close();
+  assert.throws(() => createPlatformApiRuntime(config), /PLATFORM_BILLING_SYSTEM_AUTHORIZER_REQUIRED/);
+  assert.equal(config.pool.ended, 0);
 });
