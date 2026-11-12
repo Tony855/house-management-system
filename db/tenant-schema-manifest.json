@@ -16,7 +16,8 @@
     "platform_ledger_entries",
     "platform_billing_audit",
     "platform_product_sessions",
-    "platform_tenant_login_hosts"
+    "platform_tenant_login_hosts",
+    "platform_tenant_migration_jobs"
   ],
   "legacySharedDatabase": {
     "house_sys": {

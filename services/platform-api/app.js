@@ -4,6 +4,8 @@ const express = require('express');
 const { createPlatformBillingRouter } = require('./routes');
 const { createPlatformRepository } = require('./repository');
 const { createPlatformAuthRouter } = require('./auth-routes');
+const { createPlatformTenantMigrationJobStore } = require('../../server/tenant-migration-job-store');
+const { createPlatformTenantMigrationRouter } = require('./tenant-migration-routes');
 
 function createPlatformApi({ pool, authenticate, adminAuthService, mfaService, auditStore, adminStore }) {
   if (!pool) throw new TypeError('PLATFORM_DB_POOL_REQUIRED');
@@ -16,6 +18,10 @@ function createPlatformApi({ pool, authenticate, adminAuthService, mfaService, a
   if (adminAuthService) app.use('/api/platform/auth', createPlatformAuthRouter({ authService: adminAuthService, mfaService, auditStore, adminStore }));
   app.use('/api/platform', createPlatformBillingRouter({
     repository: createPlatformRepository(pool),
+    authenticate: resolvedAuthenticate
+  }));
+  app.use('/api/platform', createPlatformTenantMigrationRouter({
+    store: createPlatformTenantMigrationJobStore(pool),
     authenticate: resolvedAuthenticate
   }));
   app.use((err, _req, res, _next) => {
