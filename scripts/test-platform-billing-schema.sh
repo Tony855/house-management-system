@@ -24,6 +24,7 @@ export MYSQL_PWD="$DB_PASSWORD"
 "${mysql_cmd[@]}" "$DB_NAME" < "$ROOT_DIR/db/migrations/platform/010_platform_admin_step_up_mfa.sql"
 "${mysql_cmd[@]}" "$DB_NAME" < "$ROOT_DIR/db/migrations/platform/011_platform_admin_audit.sql"
 "${mysql_cmd[@]}" "$DB_NAME" < "$ROOT_DIR/db/migrations/platform/012_platform_admin_reenable_approval.sql"
+"${mysql_cmd[@]}" "$DB_NAME" < "$ROOT_DIR/db/migrations/platform/013_platform_tenant_migration_jobs.sql"
 
 expected_tables=11
 actual_tables="$("${mysql_cmd[@]}" -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '$DB_NAME' AND table_type = 'BASE TABLE' AND table_name IN ('platform_billing_accounts','platform_products','platform_plans','platform_subscriptions','platform_invoices','platform_invoice_lines','platform_payment_transactions','platform_payment_webhook_events','platform_refunds','platform_ledger_entries','platform_billing_audit')")"
@@ -127,3 +128,8 @@ if [[ "$reenable_table" != "1" ]]; then echo "Platform administrator re-enable a
 reenable_guard="$( "${mysql_cmd[@]}" -e "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = '$DB_NAME' AND table_name = 'platform_admin_reenable_requests' AND column_name = 'pending_target_id' AND extra LIKE '%STORED GENERATED%'" )"
 if [[ "$reenable_guard" != "1" ]]; then echo "Unique pending administrator re-enable guard was not installed" >&2; exit 1; fi
 echo "Platform administrator two-person re-enable approval schema verified."
+migration_jobs_table="$("${mysql_cmd[@]}" -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '$DB_NAME' AND table_name = 'platform_tenant_migration_jobs' AND table_type = 'BASE TABLE'")"
+if [[ "$migration_jobs_table" != "1" ]]; then echo "Tenant migration job queue schema was not installed" >&2; exit 1; fi
+migration_jobs_fk="$("${mysql_cmd[@]}" -e "SELECT COUNT(*) FROM information_schema.referential_constraints WHERE constraint_schema = '$DB_NAME' AND table_name = 'platform_tenant_migration_jobs'")"
+if [[ "$migration_jobs_fk" != "1" ]]; then echo "Tenant migration job tenant foreign key was not installed" >&2; exit 1; fi
+echo "Tenant migration job queue schema verified."
