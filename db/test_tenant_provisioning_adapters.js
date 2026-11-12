@@ -91,3 +91,42 @@ test('platform tenant registry provisioning adapter persists state transitions a
   assert.equal(calls.filter(x => x.tx === 'rollback').length, 0);
   assert.equal(calls.filter(x => x.tx === 'release').length, 2);
 });
+
+
+test('tenant registry activation rolls back lifecycle state when activation event persistence fails', async () => {
+  const calls = [];
+  const platformPool = {
+    query: async () => [[], []],
+    getConnection: async () => ({
+      beginTransaction: async () => calls.push('begin'),
+      query: async (sql) => {
+        calls.push(sql);
+        if (sql.startsWith('INSERT INTO platform_provisioning_events')) {
+          throw Object.assign(new Error('event storage unavailable'), { code: 'DB_WRITE_FAILED' });
+        }
+        return [{ affectedRows: 1 }, []];
+      },
+      commit: async () => calls.push('commit'),
+      rollback: async () => calls.push('rollback'),
+      release: () => calls.push('release')
+    })
+  };
+  const adapters = createPlatformTenantProvisioningAdapters({
+    platformPool,
+    databaseAdmin: {
+      host: 'db.internal', port: 3306,
+      createDatabase: async () => {}, createPrincipal: async () => {},
+      grantDatabaseOnly: async () => {}, dropPrincipal: async () => {}, dropDatabase: async () => {}
+    },
+    secretManager: { putSecret: async () => {}, deleteSecret: async () => {} },
+    runMigrations: async () => ({ schemaVersion: 'tenant-v1' }),
+    verifyIsolation: async () => ({ passed: true, schemaVersion: 'tenant-v1' })
+  });
+  await assert.rejects(
+    adapters.registry.activateTenant('12345678-1234-4123-8123-123456789abc', { schemaVersion: 'tenant-v1' }),
+    /event storage unavailable/
+  );
+  assert.equal(calls.includes('rollback'), true);
+  assert.equal(calls.includes('commit'), false);
+  assert.equal(calls.at(-1), 'release');
+});
