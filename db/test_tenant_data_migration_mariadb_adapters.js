@@ -26,6 +26,19 @@ function createPools(appId, sourceOrgId, { lockAcquired = true, releaseLockSucce
       if (sql === 'SELECT DATABASE() AS databaseName') return [[{ databaseName: 'house_sys_' + appId }]];
       const table = sql.match(/FROM `([a-z_]+)`/i)?.[1];
       return [sourceTables[table].filter(row => row.org_id === params[0]).map(row => ({ ...row }))];
+    },
+    async getConnection() {
+      return {
+        async execute(sql, params) {
+          sourceCalls.push({ sql, params });
+          if (sql === 'SELECT DATABASE() AS databaseName') return [[{ databaseName: 'house_sys_' + appId }]];
+          const table = sql.match(/FROM `([a-z_]+)`/i)?.[1];
+          return [sourceTables[table].filter(row => row.org_id === params[0]).map(row => ({ ...row }))];
+        },
+        async commit() { sourceCalls.push({ sql: 'COMMIT' }); },
+        async rollback() { sourceCalls.push({ sql: 'ROLLBACK' }); },
+        release() { sourceCalls.push({ sql: 'RELEASE_SOURCE' }); }
+      };
     }
   };
   const targetPool = {
@@ -78,7 +91,10 @@ test('MariaDB source adapter scopes every query to the selected org with bound p
   const adapters = createMariaDbTenantMigrationAdapters({ appId: 'rental', ...f });
   const snapshot = await adapters.sourceReader.exportOrgSnapshot({ appId: 'rental', sourceOrgId: 17 });
   assert.deepEqual(Object.keys(snapshot.tables).sort(), [...TABLES.rental].sort());
-  assert.equal(f.sourceCalls.length, TABLES.rental.size + 1);
+  assert.equal(f.sourceCalls.filter(call => call.sql.startsWith('SELECT *')).length, TABLES.rental.size);
+  assert.ok(f.sourceCalls.some(call => call.sql === 'START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY'));
+  assert.ok(f.sourceCalls.some(call => call.sql === 'COMMIT'));
+  assert.ok(f.sourceCalls.some(call => call.sql === 'RELEASE_SOURCE'));
   assert.ok(snapshot.tables.buildings.every(row => row.org_id === 17));
   assert.equal(snapshot.tables.buildings.length, 1);
   assert.ok(f.sourceCalls.filter(call => call.sql.startsWith('SELECT *')).every(call => call.sql.includes('WHERE `org_id` = ? ORDER BY `id` ASC') && call.params[0] === 17));
@@ -157,9 +173,13 @@ test('MariaDB target adapter destroys a pooled connection if advisory lock relea
 
 test('MariaDB adapters reject a source pool connected to the wrong product database', async () => {
   const f = createPools('rental', 71);
-  f.sourcePool.execute = async sql => sql === 'SELECT DATABASE() AS databaseName'
-    ? [[{ databaseName: 'house_sys_property' }]]
-    : [[]];
+  f.sourcePool.getConnection = async () => ({
+    async execute(sql) {
+      if (sql === 'SELECT DATABASE() AS databaseName') return [[{ databaseName: 'house_sys_property' }]];
+      return [[]];
+    },
+    async rollback() {}, release() {}
+  });
   const adapters = createMariaDbTenantMigrationAdapters({ appId: 'rental', ...f });
   await assert.rejects(
     adapters.sourceReader.exportOrgSnapshot({ appId: 'rental', sourceOrgId: 71 }),
