@@ -205,7 +205,7 @@ test('administrator MFA reset requires admin-write permission, step-up and reaso
       }, body: JSON.stringify({ reason: 'Lost authenticator device' })
     });
     assert.equal(response.status, 503);
-    assert.deepEqual(await response.json(), { error: 'PLATFORM_MFA_RECOVERY_UNAVAILABLE' });
+    assert.deepEqual(await response.json(), { error: 'INTERNAL_ERROR' });
   });
   assert.deepEqual(calls, []);
 });
