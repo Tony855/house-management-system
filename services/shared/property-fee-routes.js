@@ -53,6 +53,9 @@ function validatePropertyCollectionAction(input) {
   return Object.freeze({ action_type, outcome, contacted_at, follow_up_date, note: note.trim() });
 }
 
+const PROPERTY_FEE_JOB_CHUNK_SIZE = 50;
+function validatePropertyFeeJobId(value) { const id=Number(value); if(!Number.isSafeInteger(id)||id<1) throw propertyFeeError('PROPERTY_FEE_JOB_ID_INVALID'); return id; }
+function mapPropertyFeeJob(row) { return { id:Number(row.id), month:row.billing_month, state:row.state, cursor_room_id:Number(row.cursor_room_id||0), generated:Number(row.generated_count||0), skipped:Number(row.skipped_count||0), last_error:row.last_error||null, created_at:row.created_at, updated_at:row.updated_at, completed_at:row.completed_at||null }; }
 function createPropertyFeeRouter() {
   const router = express.Router();
   router.post('/property-fees/generate', async (req, res, next) => {
@@ -131,6 +134,61 @@ function createPropertyFeeRouter() {
     } catch (error) {
       return next(error);
     }
+  });
+  router.post('/property-fees/generation-jobs', async (req,res,next) => {
+    try {
+      if(typeof req.tenantWrite!=='function') return res.status(503).json({error:'TENANT_WRITE_UNAVAILABLE'});
+      const {month}=validatePropertyFeeGeneration(req.body);
+      const result=await req.tenantWrite({operation:'create',reason:req.get('x-operation-reason'),stepUpToken:req.get('x-step-up-token'),requestId:req.get('idempotency-key'),payload:{month,__resource:'property-fee-generation-jobs'},mutate:async tx => {
+        await tx.execute("INSERT INTO property_fee_generation_jobs (billing_month,request_id,state) VALUES (?,?,'queued') ON DUPLICATE KEY UPDATE id=LAST_INSERT_ID(id)",[month,req.get('idempotency-key')]);
+        const [rows]=await tx.execute('SELECT id,billing_month,state,cursor_room_id,generated_count,skipped_count,last_error,created_at,updated_at,completed_at FROM property_fee_generation_jobs WHERE billing_month=? LIMIT 1 FOR UPDATE',[month]);
+        if(!rows.length) throw propertyFeeError('PROPERTY_FEE_JOB_CREATE_FAILED',500);
+        return mapPropertyFeeJob(rows[0]);
+      }});
+      return res.status(201).json(result);
+    } catch(error) { return next(error); }
+  });
+  router.get('/property-fees/generation-jobs/:jobId', async (req,res,next) => {
+    try {
+      if(!req.tenantDb||typeof req.tenantDb.execute!=='function') return res.status(503).json({error:'TENANT_DATABASE_UNAVAILABLE'});
+      const id=validatePropertyFeeJobId(req.params.jobId);
+      const [rows]=await req.tenantDb.execute('SELECT id,billing_month,state,cursor_room_id,generated_count,skipped_count,last_error,created_at,updated_at,completed_at FROM property_fee_generation_jobs WHERE id=? LIMIT 1',[id]);
+      if(!rows.length) throw propertyFeeError('PROPERTY_FEE_JOB_NOT_FOUND',404);
+      return res.json(mapPropertyFeeJob(rows[0]));
+    } catch(error) { return next(error); }
+  });
+  router.post('/property-fees/generation-jobs/:jobId/process', async (req,res,next) => {
+    try {
+      if(typeof req.tenantWrite!=='function') return res.status(503).json({error:'TENANT_WRITE_UNAVAILABLE'});
+      if(!req.body||typeof req.body!=='object'||Array.isArray(req.body)||Object.keys(req.body).length) throw propertyFeeError('PROPERTY_FEE_JOB_PROCESS_INPUT_INVALID');
+      const id=validatePropertyFeeJobId(req.params.jobId);
+      const result=await req.tenantWrite({operation:'update',reason:req.get('x-operation-reason'),stepUpToken:req.get('x-step-up-token'),requestId:req.get('idempotency-key'),payload:{job_id:id,__resource:'property-fee-generation-job-process'},mutate:async tx => {
+        const [jobs]=await tx.execute('SELECT id,billing_month,state,cursor_room_id,generated_count,skipped_count FROM property_fee_generation_jobs WHERE id=? LIMIT 1 FOR UPDATE',[id]);
+        if(!jobs.length) throw propertyFeeError('PROPERTY_FEE_JOB_NOT_FOUND',404);
+        const job=jobs[0];
+        if(job.state==='completed') return mapPropertyFeeJob(job);
+        const dates=monthDates(job.billing_month);
+        const [rooms]=await tx.execute("SELECT r.id AS room_id,r.owner_id,r.property_fee,COALESCE(m.water_fee,0) AS water_fee,COALESCE(m.elec_fee,0) AS elec_fee FROM rooms r LEFT JOIN meters m ON m.room_id=r.id AND m.month=? WHERE r.owner_id IS NOT NULL AND r.id>? ORDER BY r.id LIMIT ? FOR UPDATE",[job.billing_month,Number(job.cursor_room_id||0),PROPERTY_FEE_JOB_CHUNK_SIZE+1]);
+        const chunk=rooms.slice(0,PROPERTY_FEE_JOB_CHUNK_SIZE);
+        let generated=0; let skipped=0;
+        for(const room of chunk) {
+          const pf=Number(room.property_fee); const wf=Number(room.water_fee); const ef=Number(room.elec_fee);
+          if(![pf,wf,ef].every(value=>Number.isFinite(value)&&value>=0)) throw propertyFeeError('PROPERTY_FEE_AMOUNT_INVALID',409);
+          const amount=Math.round((pf+wf+ef)*100)/100;
+          if(amount<=0) { skipped++; continue; }
+          const [existing]=await tx.execute("SELECT id FROM bills WHERE source='property' AND room_id=? AND period_start=? LIMIT 1 FOR UPDATE",[room.room_id,dates.start]);
+          if(existing.length) { skipped++; continue; }
+          const detail=[pf>0?'物业费 '+pf.toFixed(2):'',wf>0?'水费 '+wf.toFixed(2):'',ef>0?'电费 '+ef.toFixed(2):''].filter(Boolean).join(' + ');
+          await tx.insert('bills',{source:'property',room_id:Number(room.room_id),tenant_id:Number(room.owner_id),period_start:dates.start,period_end:dates.end,due_date:dates.due,amount,paid_amount:0,status:'unpaid',remark:'明细：'+detail});
+          generated++;
+        }
+        const cursor=chunk.length?Number(chunk[chunk.length-1].room_id):Number(job.cursor_room_id||0);
+        const complete=rooms.length<=PROPERTY_FEE_JOB_CHUNK_SIZE;
+        await tx.execute("UPDATE property_fee_generation_jobs SET state=?,cursor_room_id=?,generated_count=generated_count+?,skipped_count=skipped_count+?,last_error=NULL,completed_at=CASE WHEN ?='completed' THEN UTC_TIMESTAMP() ELSE NULL END,updated_at=UTC_TIMESTAMP() WHERE id=?",[complete?'completed':'running',cursor,generated,skipped,complete?'completed':'running',id]);
+        return {id,month:job.billing_month,state:complete?'completed':'running',cursor_room_id:cursor,generated:Number(job.generated_count||0)+generated,skipped:Number(job.skipped_count||0)+skipped,processed_this_run:chunk.length,chunk_size:PROPERTY_FEE_JOB_CHUNK_SIZE,has_more:!complete};
+      }});
+      return res.json(result);
+    } catch(error) { return next(error); }
   });
   router.post('/property-fees/:billId/collection-actions', async (req, res, next) => {
     try {
@@ -359,4 +417,4 @@ function createPropertyFeeRouter() {
   return router;
 }
 
-module.exports = { validatePropertyFeeGeneration, validatePropertyCollectionAction, monthDates, createPropertyFeeRouter };
+module.exports = { validatePropertyFeeGeneration, validatePropertyCollectionAction, validatePropertyFeeJobId, monthDates, createPropertyFeeRouter };

@@ -41,6 +41,7 @@ async function createTenantDb(adminPool, config, appId, tenantId, created, creat
   await pool.query(require('node:fs').readFileSync(require('node:path').join(__dirname, 'migrations/tenant/002_tenant_write_idempotency.sql'), 'utf8'));
   await pool.query(require('node:fs').readFileSync(require('node:path').join(__dirname, 'migrations/tenant/004_bill_transactions.sql'), 'utf8'));
   if (appId === 'property') {
+    await pool.query(require('node:fs').readFileSync(require('node:path').join(__dirname, 'migrations/tenant/008_property_fee_generation_jobs.sql'), 'utf8'));
     await pool.query(require('node:fs').readFileSync(require('node:path').join(__dirname, 'migrations/tenant/005_property_collection_actions.sql'), 'utf8'));
   }
   if (appId === 'rental') {
@@ -477,6 +478,12 @@ async function main() {
         const [[meterRows]] = await pool.query('SELECT water_fee, elec_fee FROM meters WHERE id = ?', [meter.id]);
         assert.equal(Number(meterRows.water_fee), 5, appId + ' persisted water fee');
         if (appId === 'property') {
+          const queuedFeeJob = await writeBuilding(base, 'POST', '/api/property-fees/generation-jobs', { month: '2030-02' }, 'ci-property-fee-job-create-0001');
+          assert.equal(queuedFeeJob.status, 201, 'durable property fee job enqueue');
+          const queuedFeeJobBody = await queuedFeeJob.json(); assert.equal(queuedFeeJobBody.state, 'queued');
+          const feeJobRun = await writeBuilding(base, 'POST', '/api/property-fees/generation-jobs/' + queuedFeeJobBody.id + '/process', {}, 'ci-property-fee-job-process-0001');
+          assert.equal(feeJobRun.status, 200); const feeJobRunBody = await feeJobRun.json(); assert.equal(feeJobRunBody.state, 'completed'); assert.equal(feeJobRunBody.generated, 1);
+          const feeJobStatus = await fetch(base + '/api/property-fees/generation-jobs/' + queuedFeeJobBody.id); assert.equal(feeJobStatus.status, 200); assert.equal((await feeJobStatus.json()).state, 'completed');
           const generatedFees = await writeBuilding(base, 'POST', '/api/property-fees/generate', {
             month: '2030-01'
           }, 'ci-property-fees-generate-0001');

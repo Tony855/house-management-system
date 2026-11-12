@@ -81,7 +81,8 @@
     "userIdentity": "copy users for source org and product; include referenced tenant roles and global defaults; merge effective role permissions; never globally deduplicate",
     "platformIdentity": "extract only verified super-admin accounts to platform_admins",
     "files": "copy each org upload tree into tenant-specific storage and verify checksums",
-    "legacyCutover": "expand-copy-verify-switch-contract; no uncontrolled dual writes"
+    "legacyCutover": "expand-copy-verify-switch-contract; no uncontrolled dual writes",
+    "propertyFeeGenerationJobs": "tenant-local durable monthly jobs; ordered room-id checkpoints; bounded chunks; transaction-scoped row lock; retries resume from committed cursor; no process-local timer dependency"
   },
   "tenantIdentityTables": [
     "users",
@@ -96,6 +97,7 @@
     "bill_transactions",
     "property_collection_actions",
     "hotel_order_deposit_transactions",
-    "rental_contract_deposit_transactions"
+    "rental_contract_deposit_transactions",
+    "property_fee_generation_jobs"
   ]
 }

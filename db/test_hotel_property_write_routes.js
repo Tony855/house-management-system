@@ -6,7 +6,7 @@ const { validateHotelOrder, createHotelOrderRouter } = require('../services/hote
 const { validateMeter, createMeterWriteRouter } = require('../services/shared/meter-write-routes');
 const { validateBillPayment, createBillPaymentRouter } = require('../services/shared/bill-payment-routes');
 const { validateReconciliationRange, createFinanceReconciliationRouter } = require('../services/shared/finance-reconciliation-routes');
-const { validatePropertyFeeGeneration, validatePropertyCollectionAction, monthDates, createPropertyFeeRouter } = require('../services/shared/property-fee-routes');
+const { validatePropertyFeeGeneration, validatePropertyCollectionAction, validatePropertyFeeJobId, monthDates, createPropertyFeeRouter } = require('../services/shared/property-fee-routes');
 const http = require('node:http');
 const express = require('express');
 
@@ -401,3 +401,5 @@ test('hotel deposit receipt and refund enforce expected and held balances transa
     assert.equal(excess.status,409);assert.equal(calls.length,3);
   } finally {await new Promise(resolve=>server.close(resolve));}
 });
+
+test('property fee job id validation rejects malformed identifiers',()=>{assert.equal(validatePropertyFeeJobId('12'),12);for(const value of ['0','-1','1.2','abc','9007199254740992'])assert.throws(()=>validatePropertyFeeJobId(value),e=>e.code==='PROPERTY_FEE_JOB_ID_INVALID');});

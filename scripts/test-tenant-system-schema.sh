@@ -43,4 +43,11 @@ if [[ "$deposit_table" != "1" ]]; then echo "Rental deposit migration is incompl
 "${mysql_cmd[@]}" "$DB_NAME" -e "DELETE FROM rental_contract_deposit_transactions WHERE request_id = 'ci-rental-deposit-smoke-0001'; DELETE FROM contracts WHERE id = 1; INSERT INTO contracts (id) VALUES (1); INSERT INTO rental_contract_deposit_transactions (contract_id, transaction_type, amount, pay_method, request_id, transaction_date) VALUES (1, 'receipt', 25.00, 'cash', 'ci-rental-deposit-smoke-0001', '2030-01-01')"
 deposit_rows="$("${mysql_cmd[@]}" "$DB_NAME" -e "SELECT COUNT(*) FROM rental_contract_deposit_transactions WHERE contract_id = 1 AND transaction_type = 'receipt' AND amount = 25.00")"
 if [[ "$deposit_rows" != "1" ]]; then echo "Rental deposit migration insert/readback failed" >&2; exit 1; fi
-echo "Tenant system, property collection and rental deposit migrations passed."
+# Durable property fee generation queue smoke test.
+"${mysql_cmd[@]}" "$DB_NAME" < db/migrations/tenant/008_property_fee_generation_jobs.sql
+fee_job_table="$("${mysql_cmd[@]}" -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '$DB_NAME' AND table_name = 'property_fee_generation_jobs' AND table_type = 'BASE TABLE'")"
+if [[ "$fee_job_table" != "1" ]]; then echo "Property fee job migration is incomplete" >&2; exit 1; fi
+"${mysql_cmd[@]}" "$DB_NAME" -e "INSERT INTO property_fee_generation_jobs (billing_month,request_id,state) VALUES ('2030-01','ci-property-fee-job-0001','queued')"
+fee_job_rows="$("${mysql_cmd[@]}" "$DB_NAME" -e "SELECT COUNT(*) FROM property_fee_generation_jobs WHERE billing_month = '2030-01' AND state = 'queued'")"
+if [[ "$fee_job_rows" != "1" ]]; then echo "Property fee job migration insert/readback failed" >&2; exit 1; fi
+echo "Tenant system, collection, deposit and property fee job migrations passed."
