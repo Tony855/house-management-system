@@ -4,12 +4,20 @@ const { createPlatformPool } = require('../../server/platform-db');
 const { createPlatformApi } = require('./app');
 const { createPlatformAdminAuthDependencies } = require('./admin-auth-dependencies');
 const { createTenantDataMigrationExecutor } = require('../../server/tenant-data-migration-executor');
+const mysql = require('mysql2/promise');
+const { TenantPoolManager } = require('../../server/tenant-db');
+const { createPlatformTenantRegistry, createTenantDatabaseSecretProvider } = require('../../server/platform-adapters');
+const { createRecurringBillingDispatchStore } = require('../../server/recurring-billing-dispatch-store');
+const { createRecurringBillingDispatcher } = require('../../server/recurring-billing-dispatcher');
+const { createRecurringBillingTenantAdapter } = require('../../server/recurring-billing-tenant-adapter');
+const { createRecurringBillingRunner } = require('../../server/recurring-billing-runner');
 
 /** Production composition boundary; KMS/HSM and key providers are injected by deployment. */
 function createPlatformApiRuntime({
   env = process.env, createPool, mfaEncryption, recoveryCodePepper, loginRateLimitHmacKey,
   signingKeyProvider, verificationKeyProvider, issuer, authOptions,
-  migrationConnectionResolver, migrationWorkerId, migrationConcurrency
+  migrationConnectionResolver, migrationWorkerId, migrationConcurrency,
+  tenantSecretManager, tenantPoolCreatePool = mysql.createPool, billingWorkerId, billingPollIntervalMs
 } = {}) {
   if (!mfaEncryption || !signingKeyProvider || !verificationKeyProvider) throw new TypeError('PLATFORM_SECURITY_DEPENDENCIES_REQUIRED');
   const platformPool = createPlatformPool({ env, ...(createPool ? { createPool } : {}) });
@@ -27,12 +35,41 @@ function createPlatformApiRuntime({
       ...(migrationWorkerId ? { migrationWorkerId } : {}),
       ...(migrationConcurrency ? { migrationConcurrency } : {})
     });
+    let tenantPoolManager = null;
+    let recurringBillingRunner = null;
+    if (tenantSecretManager !== undefined) {
+      const registry = createPlatformTenantRegistry(platformPool);
+      const secretProvider = createTenantDatabaseSecretProvider(tenantSecretManager);
+      tenantPoolManager = new TenantPoolManager({ createPool: tenantPoolCreatePool, maxPools: 100, idleTtlMs: 300000 });
+      const tenantAdapter = createRecurringBillingTenantAdapter({ registry, secretProvider, tenantPoolManager });
+      const dispatchStore = createRecurringBillingDispatchStore(platformPool);
+      const dispatcher = createRecurringBillingDispatcher({
+        store: dispatchStore,
+        workerId: billingWorkerId || env.BILLING_WORKER_ID || 'platform-billing-worker',
+        enqueueTenantJob: input => tenantAdapter.enqueueTenantJob(input)
+      });
+      recurringBillingRunner = createRecurringBillingRunner({
+        store: dispatchStore, dispatcher,
+        workerId: billingWorkerId || env.BILLING_WORKER_ID || 'platform-billing-worker',
+        pollIntervalMs: billingPollIntervalMs || Number(env.BILLING_POLL_INTERVAL_MS || 60000),
+        onError: event => {
+          if (typeof env.BILLING_RUNNER_ON_ERROR === 'function') env.BILLING_RUNNER_ON_ERROR(event);
+        }
+      });
+      recurringBillingRunner.start();
+      app.locals.recurringBillingRunner = recurringBillingRunner;
+      app.locals.stopRecurringBillingRunner = () => recurringBillingRunner.stop();
+    } else {
+      app.locals.stopRecurringBillingRunner = async () => {};
+    }
     let closed = false;
     return Object.freeze({
       app, pool: platformPool, auth,
       async close() {
         if (closed) return;
         closed = true;
+        if (typeof app.locals.stopRecurringBillingRunner === 'function') await app.locals.stopRecurringBillingRunner();
+        if (tenantPoolManager) await tenantPoolManager.closeAll();
         if (typeof app.locals.stopTenantMigrationRunner === 'function') await app.locals.stopTenantMigrationRunner();
         if (typeof platformPool.end === 'function') await platformPool.end();
       }

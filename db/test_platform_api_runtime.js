@@ -88,3 +88,22 @@ test('platform runtime leaves migration worker disabled when no secure resolver 
   await runtime.close();
   assert.equal(config.pool.ended, 1);
 });
+
+test('platform runtime enables recurring billing scheduler only with secret manager and drains it on shutdown', async () => {
+  const config = options({
+    tenantSecretManager: { getSecret: async () => ({ user: 'tenant-user', password: 'tenant-password', version: 'v1' }) },
+    billingWorkerId: 'billing-runtime-worker',
+    billingPollIntervalMs: 60000
+  });
+  const runtime = createPlatformApiRuntime(config);
+  assert.equal(runtime.app.locals.recurringBillingRunner.isRunning(), true);
+  await runtime.close();
+  assert.equal(runtime.app.locals.recurringBillingRunner.isRunning(), false);
+  assert.equal(config.pool.ended, 1);
+});
+
+test('platform runtime keeps recurring billing scheduler disabled without a secret manager', async () => {
+  const runtime = createPlatformApiRuntime(options());
+  assert.equal(runtime.app.locals.recurringBillingRunner, undefined);
+  await runtime.close();
+});
