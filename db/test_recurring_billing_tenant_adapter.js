@@ -88,3 +88,65 @@ test('tenant adapter normalizes mysql2 DATE values returned as JavaScript Date o
   });
   assert.deepEqual(result, { tenantId, appId: 'rental', jobId: 17 });
 });
+
+
+test('runner rejects overlapping ticks while a previous tenant scan is still running', async () => {
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  let scanCalls = 0, dispatchCalls = 0;
+  const runner = createRecurringBillingRunner({
+    store: { enqueueActiveTenants: async () => { scanCalls++; await gate; return { scanned: 0, enqueued: 0, nextCursor: null }; }},
+    dispatcher: { tick: async () => { dispatchCalls++; return { scanned: 0, results: [] }; }},
+    workerId: 'billing-overlap-test'
+  });
+  const first = runner.tick();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(await runner.tick(), { skipped: true });
+  assert.equal(scanCalls, 2);
+  release();
+  await first;
+  assert.equal(dispatchCalls, 1);
+  await runner.stop();
+});
+
+test('runner stop drains the active tick and prevents subsequent work', async () => {
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  let scanCalls = 0;
+  const runner = createRecurringBillingRunner({
+    store: { enqueueActiveTenants: async () => { scanCalls++; await gate; return { scanned: 0, enqueued: 0, nextCursor: null }; }},
+    dispatcher: { tick: async () => ({ scanned: 0, results: [] }) },
+    workerId: 'billing-shutdown-test', pollIntervalMs: 3600000
+  });
+  runner.start();
+  await new Promise(resolve => setImmediate(resolve));
+  const stopping = runner.stop();
+  release();
+  await stopping;
+  assert.deepEqual(await runner.tick(), { skipped: true });
+  assert.equal(scanCalls, 2);
+  assert.equal(runner.isRunning(), false);
+});
+
+test('tenant adapter rejects conflicting idempotency rows', async () => {
+  const { adapter } = adapterFixture('rental', [{ id: 19, as_of_date: '2030-02-02', request_id: 'different-request' }]);
+  await assert.rejects(adapter.enqueueTenantJob({
+    tenantId, appId: 'rental', jobType: 'rental_bill', periodKey: '2030-02-01', requestId: 'request-conflict'
+  }), error => error.code === 'BILLING_TENANT_JOB_IDEMPOTENCY_CONFLICT');
+});
+
+test('tenant adapter rejects malformed rental period before opening tenant pool', async () => {
+  let opened = false;
+  const adapter = createRecurringBillingTenantAdapter({
+    registry: { findTenantById: async id => ({
+      tenant_uuid: id, app_id: 'rental', lifecycle_state: 'active',
+      db_host: '127.0.0.1', db_port: 3306, db_name: 'tenant_db', db_secret_ref: 'secret'
+    }) },
+    secretProvider: { getDatabaseCredentials: async () => ({ user: 'u', password: 'p' }) },
+    tenantPoolManager: { getPool: async () => { opened = true; return { query: async () => { throw new Error('must not query'); } }; } }
+  });
+  await assert.rejects(adapter.enqueueTenantJob({
+    tenantId, appId: 'rental', jobType: 'rental_bill', periodKey: '2030-02-31', requestId: 'request-invalid-period'
+  }), error => error.code === 'RECURRING_BILLING_PERIOD_INVALID');
+  assert.equal(opened, false);
+});
