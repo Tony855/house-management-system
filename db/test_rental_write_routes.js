@@ -375,3 +375,11 @@ test('tenant-wide rental bill batch rejects unbounded limits and invalid cursors
     await new Promise(resolve => server.close(resolve));
   }
 });
+
+test('durable rental bill job ID validation rejects invalid identifiers', () => {
+  const { validateRentalBillJobId } = require('../services/rental-api/write-routes');
+  assert.equal(validateRentalBillJobId('12'), 12);
+  for (const value of ['0', '-1', '1.2', 'abc', '9007199254740992']) {
+    assert.throws(() => validateRentalBillJobId(value), error => error.code === 'RENTAL_BILL_JOB_ID_INVALID');
+  }
+});

@@ -46,6 +46,7 @@ async function createTenantDb(adminPool, config, appId, tenantId, created, creat
   }
   if (appId === 'rental') {
     await pool.query(require('node:fs').readFileSync(require('node:path').join(__dirname, 'migrations/tenant/007_rental_contract_deposit_transactions.sql'), 'utf8'));
+    await pool.query(require('node:fs').readFileSync(require('node:path').join(__dirname, 'migrations/tenant/009_rental_bill_generation_jobs.sql'), 'utf8'));
   }
   if (appId === 'hotel') {
     await pool.query(require('node:fs').readFileSync(require('node:path').join(__dirname, 'migrations/tenant/006_hotel_order_deposit_transactions.sql'), 'utf8'));
@@ -371,6 +372,21 @@ async function main() {
         assert.equal(generatedBatch.bills[0].period_start, '2020-03-01', 'rental batch advances from prior period');
         const [[rentalBatchCount]] = await pool.query('SELECT COUNT(*) AS total FROM bills WHERE contract_id = ? AND source = ?', [contract.id, 'rental']);
         assert.equal(Number(rentalBatchCount.total), 3, 'concurrent rental batch does not duplicate prior periods');
+        const rentalJobCreate = await writeBuilding(base, 'POST', '/api/rental-bills/generation-jobs', { as_of: '2020-04-01' }, 'ci-rental-bill-job-create-0001');
+        assert.equal(rentalJobCreate.status, 201, 'durable rental bill job enqueue');
+        const rentalJob = await rentalJobCreate.json();
+        assert.equal(rentalJob.state, 'queued');
+        const rentalJobProcess = await writeBuilding(base, 'POST', '/api/rental-bills/generation-jobs/' + rentalJob.id + '/process', {}, 'ci-rental-bill-job-process-0001');
+        assert.equal(rentalJobProcess.status, 200, 'durable rental bill job process');
+        const rentalJobResult = await rentalJobProcess.json();
+        assert.equal(rentalJobResult.state, 'completed');
+        assert.equal(rentalJobResult.generated, 1);
+        assert.equal(rentalJobResult.as_of, '2020-04-01');
+        const rentalJobStatus = await fetch(base + '/api/rental-bills/generation-jobs/' + rentalJob.id);
+        assert.equal(rentalJobStatus.status, 200);
+        assert.equal((await rentalJobStatus.json()).state, 'completed');
+        const [[rentalJobBillCount]] = await pool.query('SELECT COUNT(*) AS total FROM bills WHERE contract_id = ? AND source = ?', [contract.id, 'rental']);
+        assert.equal(Number(rentalJobBillCount.total), 4, 'durable rental job adds only the next billing period');
         const renewalResponse = await writeBuilding(base, 'POST', '/api/contracts/' + contract.id + '/renew', {
           end_date: '2041-12-31', rent: 130, deposit: 25, pay_cycle: 1
         }, 'ci-rental-contract-renew-0001');
@@ -432,7 +448,7 @@ async function main() {
         const [[releasedRoom]] = await pool.query('SELECT status FROM rooms WHERE id = ?', [terminationRoom.id]);
         assert.equal(releasedRoom.status, 'vacant', 'rental termination releases room');
         const [[allContractBills]] = await pool.query('SELECT COUNT(*) AS total FROM bills WHERE contract_id = ? AND source = ?', [contract.id, 'rental']);
-        assert.equal(Number(allContractBills.total), 3, 'rental sequential and batch generation create one bill per period');
+        assert.equal(Number(allContractBills.total), 4, 'rental sequential, batch and durable job generation create one bill per period');
       }
 
       const [billSeed] = await pool.execute("INSERT INTO bills (source, room_id, period_start, period_end, due_date, amount, paid_amount, status) VALUES (?, ?, '2030-03-01', '2030-03-31', '2030-03-31', 100, 0, 'unpaid')", [appId === 'hotel' ? 'hotel' : appId === 'property' ? 'property' : 'rental', firstBody.id]);

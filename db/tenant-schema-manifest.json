@@ -98,6 +98,7 @@
     "property_collection_actions",
     "hotel_order_deposit_transactions",
     "rental_contract_deposit_transactions",
-    "property_fee_generation_jobs"
+    "property_fee_generation_jobs",
+    "rental_bill_generation_jobs"
   ]
 }

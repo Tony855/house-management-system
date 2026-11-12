@@ -130,6 +130,18 @@ function buildNextRentalBill(contract, lastPeriodEnd, today) {
   });
 }
 
+const RENTAL_BILL_JOB_CHUNK_SIZE = 50;
+function validateRentalBillJobId(value) {
+  const id = Number(value);
+  if (!Number.isSafeInteger(id) || id < 1) throw contractError('RENTAL_BILL_JOB_ID_INVALID');
+  return id;
+}
+function mapRentalBillJob(row) {
+  return { id:Number(row.id), as_of:String(row.as_of_date).slice(0,10), state:row.state,
+    cursor_contract_id:Number(row.cursor_contract_id||0), generated:Number(row.generated_count||0),
+    skipped:Number(row.skipped_count||0), created_at:row.created_at, updated_at:row.updated_at,
+    completed_at:row.completed_at||null };
+}
 const RENTAL_DEPOSIT_FIELDS = new Set(['amount', 'pay_method', 'transaction_date', 'external_reference', 'note']);
 function validateRentalDepositTransaction(input, action) {
   if (!['receipt', 'refund', 'deduction'].includes(action) || !input || typeof input !== 'object' ||
@@ -314,6 +326,68 @@ function createRentalWriteRouter() {
     } catch (error) { return next(error); }
   });
 
+  router.post('/rental-bills/generation-jobs', async (req,res,next) => {
+    try {
+      if(typeof req.tenantWrite!=='function') return res.status(503).json({error:'TENANT_WRITE_UNAVAILABLE'});
+      const body=req.body;
+      if(!body||typeof body!=='object'||Array.isArray(body)||Object.keys(body).some(key=>key!=='as_of')||!validDate(body.as_of)) throw contractError('RENTAL_BILL_JOB_INPUT_INVALID');
+      const requestId=req.get('idempotency-key');
+      const result=await req.tenantWrite({operation:'create',reason:req.get('x-operation-reason'),stepUpToken:req.get('x-step-up-token'),requestId,
+        payload:{as_of:body.as_of,__resource:'rental-bill-generation-jobs'},
+        mutate:async tx=>{
+          await tx.execute("INSERT INTO rental_bill_generation_jobs (as_of_date,request_id,state) VALUES (?,?,'queued') ON DUPLICATE KEY UPDATE id=LAST_INSERT_ID(id)",[body.as_of,requestId]);
+          const [rows]=await tx.execute('SELECT id,as_of_date,request_id,state,cursor_contract_id,generated_count,skipped_count,created_at,updated_at,completed_at FROM rental_bill_generation_jobs WHERE as_of_date=? OR request_id=? ORDER BY id LIMIT 1 FOR UPDATE',[body.as_of,requestId]);
+          if(!rows.length) throw contractError('RENTAL_BILL_JOB_CREATE_FAILED',500);
+          if(String(rows[0].as_of_date).slice(0,10)!==body.as_of) throw contractError('RENTAL_BILL_JOB_IDEMPOTENCY_CONFLICT',409);
+          return mapRentalBillJob(rows[0]);
+        }});
+      return res.status(201).json(result);
+    } catch(error) { return next(error); }
+  });
+  router.get('/rental-bills/generation-jobs/:jobId', async (req,res,next) => {
+    try {
+      if(!req.tenantDb||typeof req.tenantDb.execute!=='function') return res.status(503).json({error:'TENANT_DATABASE_UNAVAILABLE'});
+      const id=validateRentalBillJobId(req.params.jobId);
+      const [rows]=await req.tenantDb.execute('SELECT id,as_of_date,state,cursor_contract_id,generated_count,skipped_count,created_at,updated_at,completed_at FROM rental_bill_generation_jobs WHERE id=? LIMIT 1',[id]);
+      if(!rows.length) throw contractError('RENTAL_BILL_JOB_NOT_FOUND',404);
+      return res.json(mapRentalBillJob(rows[0]));
+    } catch(error) { return next(error); }
+  });
+  router.post('/rental-bills/generation-jobs/:jobId/process', async (req,res,next) => {
+    try {
+      if(typeof req.tenantWrite!=='function') return res.status(503).json({error:'TENANT_WRITE_UNAVAILABLE'});
+      if(!req.body||typeof req.body!=='object'||Array.isArray(req.body)||Object.keys(req.body).length) throw contractError('RENTAL_BILL_JOB_PROCESS_INPUT_INVALID');
+      const id=validateRentalBillJobId(req.params.jobId);
+      const result=await req.tenantWrite({operation:'update',reason:req.get('x-operation-reason'),stepUpToken:req.get('x-step-up-token'),requestId:req.get('idempotency-key'),
+        payload:{job_id:id,__resource:'rental-bill-generation-job-process'},
+        mutate:async tx=>{
+          const [jobs]=await tx.execute('SELECT id,as_of_date,state,cursor_contract_id,generated_count,skipped_count,created_at,updated_at,completed_at FROM rental_bill_generation_jobs WHERE id=? LIMIT 1 FOR UPDATE',[id]);
+          if(!jobs.length) throw contractError('RENTAL_BILL_JOB_NOT_FOUND',404);
+          const job=jobs[0]; if(job.state==='completed') return mapRentalBillJob(job);
+          const [contracts]=await tx.execute("SELECT * FROM contracts WHERE status='active' AND id>? ORDER BY id ASC LIMIT ? FOR UPDATE",[Number(job.cursor_contract_id||0),RENTAL_BILL_JOB_CHUNK_SIZE+1]);
+          const chunk=contracts.slice(0,RENTAL_BILL_JOB_CHUNK_SIZE); let generated=0,skipped=0;
+          for(const contract of chunk) {
+            const [lastBills]=await tx.execute('SELECT period_end FROM bills WHERE contract_id=? AND source=? ORDER BY period_end DESC LIMIT 1 FOR UPDATE',[contract.id,'rental']);
+            try {
+              const bill=buildNextRentalBill(contract,lastBills.length?String(lastBills[0].period_end).slice(0,10):null,String(job.as_of_date).slice(0,10));
+              await tx.insert('bills',bill); generated++;
+            } catch(error) {
+              if(['RENTAL_BILL_NOT_DUE','CONTRACT_PERIOD_FINISHED'].includes(error.code)){skipped++;continue;}
+              throw error;
+            }
+          }
+          const cursor=chunk.length?Number(chunk[chunk.length-1].id):Number(job.cursor_contract_id||0);
+          const complete=contracts.length<=RENTAL_BILL_JOB_CHUNK_SIZE;
+          await tx.execute("UPDATE rental_bill_generation_jobs SET state=?,cursor_contract_id=?,generated_count=generated_count+?,skipped_count=skipped_count+?,completed_at=CASE WHEN ?='completed' THEN UTC_TIMESTAMP() ELSE NULL END,updated_at=UTC_TIMESTAMP() WHERE id=?",
+            [complete?'completed':'running',cursor,generated,skipped,complete?'completed':'running',id]);
+          return {id,as_of:String(job.as_of_date).slice(0,10),state:complete?'completed':'running',cursor_contract_id:cursor,
+            generated:Number(job.generated_count||0)+generated,skipped:Number(job.skipped_count||0)+skipped,
+            processed_this_run:chunk.length,chunk_size:RENTAL_BILL_JOB_CHUNK_SIZE,has_more:!complete};
+        }});
+      return res.json(result);
+    } catch(error) { return next(error); }
+  });
+
   router.post('/contracts/:id/renew', async (req, res, next) => {
     try {
       if (typeof req.tenantWrite !== 'function') return res.status(503).json({ error: 'TENANT_WRITE_UNAVAILABLE' });
@@ -489,4 +563,4 @@ function createRentalWriteRouter() {
   return router;
 }
 
-module.exports = { ALLOWED_FIELDS, validateRoom, validateContract, validateContractRenewal, validateRentalDepositTransaction, buildNextRentalBill, createRentalWriteRouter };
+module.exports = { ALLOWED_FIELDS, validateRoom, validateContract, validateContractRenewal, validateRentalDepositTransaction, validateRentalBillJobId, buildNextRentalBill, createRentalWriteRouter };
