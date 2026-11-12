@@ -101,6 +101,45 @@ function createPropertyFeeRouter() {
       return next(error);
     }
   });
+  router.get('/property-fees/arrears', async (req, res, next) => {
+    try {
+      if (!req.tenantDb || typeof req.tenantDb.execute !== 'function') {
+        return res.status(503).json({ error: 'TENANT_DATABASE_UNAVAILABLE' });
+      }
+      const asOf = req.query.as_of === undefined ? new Date().toISOString().slice(0, 10) : req.query.as_of;
+      if (typeof asOf !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(asOf) ||
+          !Number.isFinite(Date.parse(asOf + 'T00:00:00Z')) ||
+          new Date(asOf + 'T00:00:00Z').toISOString().slice(0, 10) !== asOf) {
+        throw propertyFeeError('PROPERTY_ARREARS_DATE_INVALID');
+      }
+      const [rows] = await req.tenantDb.execute(
+        `SELECT b.id, b.source, b.room_id, r.room_no, r.owner_id,
+                b.tenant_id, t.name AS tenant_name, b.due_date, b.amount, b.paid_amount,
+                ROUND(b.amount - b.paid_amount, 2) AS outstanding_amount,
+                DATEDIFF(?, b.due_date) AS days_overdue
+           FROM bills b
+           INNER JOIN rooms r ON r.id = b.room_id
+           LEFT JOIN tenants t ON t.id = b.tenant_id
+          WHERE b.due_date < ? AND b.amount > b.paid_amount
+          ORDER BY b.due_date ASC, b.id ASC
+          LIMIT 1000`,
+        [asOf, asOf]
+      );
+      const items = rows.map(row => ({
+        id: Number(row.id), source: row.source, room_id: Number(row.room_id),
+        room_no: row.room_no, owner_id: row.owner_id === null ? null : Number(row.owner_id),
+        tenant_id: row.tenant_id === null ? null : Number(row.tenant_id),
+        tenant_name: row.tenant_name || '', due_date: String(row.due_date).slice(0, 10),
+        amount: Number(row.amount), paid_amount: Number(row.paid_amount),
+        outstanding_amount: Number(row.outstanding_amount), days_overdue: Number(row.days_overdue)
+      }));
+      return res.json({
+        as_of: asOf, items,
+        total_outstanding: Math.round(items.reduce((sum, item) => sum + item.outstanding_amount, 0) * 100) / 100,
+        overdue_count: items.length
+      });
+    } catch (error) { return next(error); }
+  });
   return router;
 }
 

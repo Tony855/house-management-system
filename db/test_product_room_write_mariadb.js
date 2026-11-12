@@ -412,6 +412,12 @@ async function main() {
           }, 'ci-property-fees-generate-0001');
           assert.equal(generatedFees.status, 201, 'property monthly fee generation');
           const generatedBody = await generatedFees.json();
+          const arrearsResponse = await fetch(base + '/api/property-fees/arrears?as_of=2030-02-01');
+          assert.equal(arrearsResponse.status, 200, 'property arrears report');
+          const arrears = await arrearsResponse.json();
+          assert.ok(arrears.items.some(item => item.room_id === firstBody.id && Number(item.outstanding_amount) === 109.5),
+            'property arrears includes generated monthly owner fee');
+
           assert.equal(generatedBody.generated, 1, 'property monthly fee generated once');
           assert.equal(generatedBody.bills.length, 1, 'property monthly fee bill count');
           assert.equal(Number(generatedBody.bills[0].amount), 109.5, 'property fee plus meter charges');
