@@ -428,7 +428,7 @@ async function main() {
         const [[releasedRoom]] = await pool.query('SELECT status FROM rooms WHERE id = ?', [terminationRoom.id]);
         assert.equal(releasedRoom.status, 'vacant', 'rental termination releases room');
         const [[allContractBills]] = await pool.query('SELECT COUNT(*) AS total FROM bills WHERE contract_id = ? AND source = ?', [contract.id, 'rental']);
-        assert.equal(Number(allContractBills.total), 2, 'rental sequential generation creates next period only');
+        assert.equal(Number(allContractBills.total), 3, 'rental sequential and batch generation create one bill per period');
       }
 
       const [billSeed] = await pool.execute("INSERT INTO bills (source, room_id, period_start, period_end, due_date, amount, paid_amount, status) VALUES (?, ?, '2030-03-01', '2030-03-31', '2030-03-31', 100, 0, 'unpaid')", [appId === 'hotel' ? 'hotel' : appId === 'property' ? 'property' : 'rental', firstBody.id]);
