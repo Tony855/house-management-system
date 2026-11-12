@@ -336,13 +336,13 @@ async function main() {
           assert.equal(generatedBody.generated, 1, 'property monthly fee generated once');
           assert.equal(generatedBody.bills.length, 1, 'property monthly fee bill count');
           assert.equal(Number(generatedBody.bills[0].amount), 109.5, 'property fee plus meter charges');
-          assert.equal(generatedBody.bills[0].tenant_id, tenantBody.id, 'property fee billed to owner');
+          assert.equal(generatedBody.bills[0].tenant_id, Number(definition.room.owner_id), 'property fee billed to room owner');
           const [[propertyBill]] = await pool.query(
             "SELECT source, tenant_id, DATE_FORMAT(period_start, '%Y-%m-%d') AS period_start, DATE_FORMAT(period_end, '%Y-%m-%d') AS period_end, DATE_FORMAT(due_date, '%Y-%m-%d') AS due_date, amount, status FROM bills WHERE source = 'property' AND room_id = ? AND period_start = '2030-01-01'",
             [firstBody.id]
           );
           assert.deepEqual(propertyBill, {
-            source: 'property', tenant_id: tenantBody.id, period_start: '2030-01-01',
+            source: 'property', tenant_id: Number(definition.room.owner_id), period_start: '2030-01-01',
             period_end: '2030-01-31', due_date: '2030-01-10', amount: '109.50', status: 'unpaid'
           }, 'property receivable persisted with legacy billing dates');
           const feeReplay = await writeBuilding(base, 'POST', '/api/property-fees/generate', {
