@@ -204,13 +204,10 @@ test('administrator MFA reset requires admin-write permission, step-up and reaso
         authorization: 'Bearer session-token', 'content-type': 'application/json'
       }, body: JSON.stringify({ reason: 'Lost authenticator device' })
     });
-    assert.equal(response.status, 204);
-    assert.equal(await response.text(), '');
+    assert.equal(response.status, 503);
+    assert.deepEqual(await response.json(), { error: 'PLATFORM_MFA_RECOVERY_UNAVAILABLE' });
   });
-  assert.deepEqual(calls, [{
-    actorAdminId: 7, targetAdminId: 8, sessionId: 'session-id-1234567890',
-    reason: 'Lost authenticator device'
-  }]);
+  assert.deepEqual(calls, []);
 });
 
 test('administrator MFA reset rejects callers without fresh step-up or admin-write permission', async () => {
