@@ -2,6 +2,7 @@
 
 const assert = require('node:assert/strict');
 const test = require('node:test');
+const http = require('node:http');
 const { createProductApiRuntime } = require('../server/product-runtime');
 
 function makePool() {
@@ -42,4 +43,23 @@ test('product runtime composes a product-specific API and closes its dedicated p
 test('product runtime rejects unknown app and incomplete security providers', () => {
   assert.throws(() => createProductApiRuntime({ appId: 'platform', env, ...providers() }), /PRODUCT_RUNTIME_APP_INVALID/);
   assert.throws(() => createProductApiRuntime({ appId: 'hotel', env, createPool: makePool, issuer: 'issuer' }), /TENANT_SECRET_MANAGER_REQUIRED/);
+});
+
+
+test('product runtime exposes dependency-backed readiness and fails closed after shutdown', async () => {
+  const pool = makePool();
+  const runtime = createProductApiRuntime({ appId: 'hotel', env, createPool: () => pool, ...providers() });
+  const server = http.createServer(runtime.app);
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  try {
+    let response = await fetch('http://127.0.0.1:' + server.address().port + '/health/ready');
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { ok: true, service: 'hotel-api' });
+    await runtime.close();
+    response = await fetch('http://127.0.0.1:' + server.address().port + '/health/ready');
+    assert.equal(response.status, 503);
+    assert.deepEqual(await response.json(), { ok: false, error: 'DEPENDENCY_UNAVAILABLE' });
+  } finally {
+    await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+  }
 });

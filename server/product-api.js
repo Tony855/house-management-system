@@ -17,7 +17,7 @@ function asyncBoundary(fn) {
  * that validates signature, issuer, expiry, audience and appId before setting
  * req.auth. No tenant identifier from request input is trusted.
  */
-function createProductApi({ appId, authenticate, registry, secretProvider, poolManager, routes, writeService, loginService }) {
+function createProductApi({ appId, authenticate, registry, secretProvider, poolManager, routes, writeService, loginService, readinessCheck }) {
   if (!PRODUCT_IDS.has(appId)) throw new TypeError('PRODUCT_API_ID_INVALID');
   if (typeof authenticate !== 'function') throw new TypeError('PRODUCT_AUTHENTICATOR_REQUIRED');
   if (!registry || typeof registry.findTenantById !== 'function') throw new TypeError('PRODUCT_TENANT_REGISTRY_REQUIRED');
@@ -30,6 +30,18 @@ function createProductApi({ appId, authenticate, registry, secretProvider, poolM
   app.disable('x-powered-by');
   app.use(express.json({ limit: '256kb', strict: true }));
   app.get('/health/live', (_req, res) => res.json({ ok: true, service: appId + '-api' }));
+  app.get('/health/ready', asyncBoundary(async (_req, res) => {
+    if (typeof readinessCheck !== 'function') {
+      res.set('cache-control', 'no-store');
+      return res.status(503).json({ ok: false, error: 'READINESS_CHECK_UNAVAILABLE' });
+    }
+    let ready = false;
+    try { ready = await readinessCheck() === true; } catch (_) { ready = false; }
+    res.set('cache-control', 'no-store');
+    return res.status(ready ? 200 : 503).json(ready
+      ? { ok: true, service: appId + '-api' }
+      : { ok: false, error: 'DEPENDENCY_UNAVAILABLE' });
+  }));
 
   app.post('/api/auth/login', asyncBoundary(async (req, res) => {
     if (!loginService) return res.status(503).json({ error: 'LOGIN_UNAVAILABLE' });
