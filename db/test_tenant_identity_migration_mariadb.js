@@ -85,19 +85,32 @@ async function main() {
     const targetB = mysql.createPool({ ...config, database: tenantDatabaseName(appId, tenantB) });
     targets.push(targetA, targetB);
 
-    const run = async (tenantId, orgId, targetPool) => {
+    const run = async (tenantId, orgId, targetPool, audit = async () => {}) => {
       const adapters = createMariaDbTenantIdentityAdapters({ sourcePool: source, targetPool, tenantId });
       return copyTenantIdentity({
-        appId, tenantId, sourceOrgId: orgId, mode: 'copy', ...adapters,
-        audit: async () => {}
+        appId, tenantId, sourceOrgId: orgId, mode: 'copy', ...adapters, audit
       });
     };
-    const [resultA, resultB] = await Promise.all([
-      run(tenantA, orgA, targetA),
-      run(tenantB, orgB, targetB)
-    ]);
-    if (!resultA.copied || !resultB.copied || resultA.revokedLegacySessions !== 1 || resultB.revokedLegacySessions !== 1) {
-      throw new Error('TENANT_IDENTITY_MARIADB_COPY_INVALID');
+    const resultA = await run(tenantA, orgA, targetA);
+    let lostAuditAcknowledgement = true;
+    let firstAttemptError;
+    try {
+      await run(tenantB, orgB, targetB, async event => {
+        if (event.event === 'tenant_identity_migration_copy_verified' && lostAuditAcknowledgement) {
+          lostAuditAcknowledgement = false;
+          throw new Error('SIMULATED_FINAL_AUDIT_ACKNOWLEDGEMENT_LOST');
+        }
+      });
+    } catch (error) {
+      firstAttemptError = error;
+    }
+    if (firstAttemptError?.message !== 'SIMULATED_FINAL_AUDIT_ACKNOWLEDGEMENT_LOST') {
+      throw new Error('TENANT_IDENTITY_MARIADB_AUDIT_LOSS_FIXTURE_FAILED');
+    }
+    const resultB = await run(tenantB, orgB, targetB);
+    if (!resultA.copied || !resultB.copied || !resultB.alreadyImported ||
+        resultA.revokedLegacySessions !== 1 || resultB.revokedLegacySessions !== 1) {
+      throw new Error('TENANT_IDENTITY_MARIADB_COPY_OR_RETRY_INVALID');
     }
     const [[usersA], [usersB], [rolesA], [rolesB], [permsA], [permsB], [sessionsA], [sessionsB]] = await Promise.all([
       targetA.execute('SELECT id, username, password, role FROM users'),
