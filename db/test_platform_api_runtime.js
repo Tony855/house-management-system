@@ -177,7 +177,7 @@ test('platform runtime rejects an explicitly enabled billing scheduler without s
 });
 
 test('platform runtime exposes configured billing lease and chunk bounds to the processor', async () => {
-  const config = options({ env: { ...options().env, BILLING_JOB_LEASE_SECONDS: '900', BILLING_JOB_CHUNK_SIZE: '25' }, tenantSecretManager: { getSecret: async () => ({ user: 'tenant-user', password: 'tenant-password', version: 'v1' }) }, billingSystemWriteAuthorizer: async () => true, billingWorkerId: 'billing-runtime-worker' });
+  const config = options({ env: { ...options().env, BILLING_JOB_LEASE_SECONDS: '900', BILLING_JOB_CHUNK_SIZE: '25' }, tenantSecretManager: { getSecret: async () => ({ user: 'tenant-user', password: 'tenant-password', version: 'v1' }) }, billingSystemWriteAuthorizer: async () => true, billingJobWorkerEnabled: true, billingWorkerId: 'billing-runtime-worker' });
   const runtime = createPlatformApiRuntime(config);
   assert.equal(runtime.app.locals.tenantBillingJobProcessor.leaseSeconds, 900);
   assert.equal(runtime.app.locals.tenantBillingJobProcessor.chunkSize, 25);
