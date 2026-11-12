@@ -4,6 +4,7 @@ const test = require('node:test');
 const { validateProductRoom } = require('../services/shared/product-room-write-routes');
 const { validateHotelOrder, createHotelOrderRouter } = require('../services/hotel-api/order-routes');
 const { validateMeter, createMeterWriteRouter } = require('../services/shared/meter-write-routes');
+const { validateBillPayment, createBillPaymentRouter } = require('../services/shared/bill-payment-routes');
 const http = require('node:http');
 const express = require('express');
 
@@ -91,5 +92,26 @@ test('meter creation derives fees from locked room rates and previous reading', 
     const response=await fetch('http://127.0.0.1:'+server.address().port+'/api/meters',{method:'POST',headers:{'content-type':'application/json','x-operation-reason':'Record monthly meter','x-step-up-token':'step-up-token-123456789','idempotency-key':'meter-create-0001'},body:JSON.stringify({room_id:4,month:'2030-01',water_prev:10,water_curr:12.5,elec_prev:20,elec_curr:23})});
     assert.equal(response.status,201);const body=await response.json();assert.equal(body.water_fee,5);assert.equal(body.elec_fee,4.5);
     assert.equal(calls[0].payload.__resource,'meters');assert.ok(calls.some(x=>x.table==='meters'&&x.fields.water_usage===2.5));
+  } finally {await new Promise(resolve=>server.close(resolve));}
+});
+
+test('bill payment DTO rejects invalid amounts and client-controlled balance fields', () => {
+  assert.equal(validateBillPayment({ amount: 12.5, pay_method: 'cash', pay_date: '2030-01-31' }).amount, 12.5);
+  for (const bad of [{ amount: 0 }, { amount: -1 }, { amount: 1.001 }, { amount: 20, paid_amount: 100 }, { amount: 20, status: 'paid' }, { amount: 20, pay_date: '2030-02-30' }]) {
+    assert.throws(() => validateBillPayment(bad), e => e.code === 'BILL_PAYMENT_INPUT_INVALID');
+  }
+});
+test('bill payment applies partial and final settlement under a locked balance', async () => {
+  const calls=[];const app=express();app.use(express.json());
+  app.use((req,_res,next)=>{req.tenantWrite=async input=>{calls.push(input);return input.mutate({
+    execute:async()=>[[{id:8,amount:'100.00',paid_amount:'25.00',status:'partial',room_id:4,pay_method:'cash'}]],
+    updateById:async(table,id,fields)=>{calls.push({table,id,fields});return {affectedRows:1};}
+  });};next();});
+  app.use('/api',createBillPaymentRouter('rental'));app.use((e,_q,res,_n)=>res.status(e.status||500).json({error:e.code||'ERROR'}));
+  const server=http.createServer(app);await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  try {
+    const response=await fetch('http://127.0.0.1:'+server.address().port+'/api/bills/8/pay',{method:'POST',headers:{'content-type':'application/json','x-operation-reason':'Record partial bill payment','x-step-up-token':'step-up-token-123456789','idempotency-key':'bill-payment-0001'},body:JSON.stringify({amount:30,pay_method:'bank',pay_date:'2030-01-31'})});
+    assert.equal(response.status,200);const body=await response.json();assert.equal(body.paid_amount,55);assert.equal(body.remaining,45);assert.equal(body.status,'partial');
+    assert.equal(calls[0].payload.__resource,'bill-payments');assert.ok(calls.some(x=>x.table==='bills'&&x.fields.paid_amount===55));
   } finally {await new Promise(resolve=>server.close(resolve));}
 });

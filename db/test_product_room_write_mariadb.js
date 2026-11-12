@@ -253,6 +253,21 @@ async function main() {
 
 
 
+
+      const [[billSeed]] = await pool.execute("INSERT INTO bills (source, room_id, period_start, period_end, due_date, amount, paid_amount, status) VALUES (?, ?, '2030-01-01', '2030-01-31', '2030-01-31', 100, 0, 'unpaid')", [appId === 'hotel' ? 'hotel' : appId === 'property' ? 'property' : 'rental', firstBody.id]);
+      const partialPayment = await hotelOrderRequest(base, 'POST', '/api/bills/' + billSeed.insertId + '/pay', { amount: 35, pay_method: 'bank', pay_date: '2030-01-31' }, 'ci-bill-partial-' + appId);
+      assert.equal(partialPayment.status, 200, appId + ' partial bill payment');
+      const partialBody = await partialPayment.json();
+      assert.equal(Number(partialBody.paid_amount), 35, appId + ' partial paid amount');
+      assert.equal(partialBody.status, 'partial', appId + ' partial bill status');
+      const finalPayment = await hotelOrderRequest(base, 'POST', '/api/bills/' + billSeed.insertId + '/pay', { amount: 65, pay_method: 'bank', pay_date: '2030-02-01' }, 'ci-bill-final-' + appId);
+      assert.equal(finalPayment.status, 200, appId + ' final bill payment');
+      const [[paidBill]] = await pool.query('SELECT paid_amount, status FROM bills WHERE id = ?', [billSeed.insertId]);
+      assert.equal(Number(paidBill.paid_amount), 100, appId + ' fully paid amount');
+      assert.equal(paidBill.status, 'paid', appId + ' fully paid status');
+      const overpayment = await hotelOrderRequest(base, 'POST', '/api/bills/' + billSeed.insertId + '/pay', { amount: 1 }, 'ci-bill-overpay-' + appId);
+      assert.equal(overpayment.status, 409, appId + ' overpayment rejected');
+
       const room = { ...definition.room };
       const requestId = 'ci-room-create-' + appId + '-000001';
 
