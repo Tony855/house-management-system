@@ -65,4 +65,6 @@ if [[ "$lease_columns" != "8" ]]; then echo "Tenant billing job lease migration 
 "${mysql_cmd[@]}" "$DB_NAME" -e "UPDATE property_fee_generation_jobs SET state='running', lease_owner='ci-worker', lease_token='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', lease_expires_at=DATE_ADD(UTC_TIMESTAMP(), INTERVAL 120 SECOND), attempt_count=attempt_count+1 WHERE billing_month='2030-01' AND state='queued'"
 lease_rows="$("${mysql_cmd[@]}" "$DB_NAME" -e "SELECT COUNT(*) FROM property_fee_generation_jobs WHERE billing_month='2030-01' AND lease_owner='ci-worker' AND lease_token='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' AND lease_expires_at>UTC_TIMESTAMP() AND attempt_count=1")"
 if [[ "$lease_rows" != "1" ]]; then echo "Tenant billing job lease write/readback failed" >&2; exit 1; fi
+retry_columns="$("${mysql_cmd[@]}" -e "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = '$DB_NAME' AND ((table_name = 'property_fee_generation_jobs' AND column_name = 'next_attempt_at') OR (table_name = 'rental_bill_generation_jobs' AND column_name IN ('next_attempt_at','last_error')))")"
+if [[ "$retry_columns" != "3" ]]; then echo "Tenant billing retry migration is incomplete" >&2; exit 1; fi
 echo "Tenant system, collection, deposit, property and rental bill job migrations and lease migrations passed."

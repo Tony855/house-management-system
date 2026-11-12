@@ -43,3 +43,21 @@ test('product runtime rejects unknown app and incomplete security providers', ()
   assert.throws(() => createProductApiRuntime({ appId: 'platform', env, ...providers() }), /PRODUCT_RUNTIME_APP_INVALID/);
   assert.throws(() => createProductApiRuntime({ appId: 'hotel', env, createPool: makePool, issuer: 'issuer' }), /TENANT_SECRET_MANAGER_REQUIRED/);
 });
+
+test('product runtime keeps billing worker disabled unless explicitly enabled', async () => {
+ const pool=makePool();
+ const runtime=createProductApiRuntime({appId:'rental',env,createPool:()=>pool,...providers()});
+ assert.equal(runtime.billingWorker,null);
+ await runtime.close();
+});
+test('product runtime requires explicit system authorization for an enabled billing worker', () => {
+ assert.throws(()=>createProductApiRuntime({appId:'rental',env,createPool:makePool,...providers(),billingWorker:{enabled:true,workerId:'rental-worker'}}),/PRODUCT_BILLING_WORKER_SECURITY_REQUIRED/);
+});
+test('product runtime starts a product-scoped billing worker and drains it before pool shutdown', async () => {
+ const pool=makePool();
+ const runtime=createProductApiRuntime({appId:'rental',env,createPool:()=>pool,...providers(),billingWorker:{enabled:true,workerId:'rental-worker',authorizeSystem:async()=>true,pollIntervalMs:60000,concurrency:1}});
+ assert.equal(runtime.billingWorker.isRunning(),true);
+ await runtime.close();
+ assert.equal(runtime.billingWorker.isRunning(),false);
+ assert.equal(pool.ended,1);
+});

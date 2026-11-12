@@ -10,7 +10,7 @@ const {monthDates}=require('../services/shared/property-fee-routes');
 const JOBS={rental:'rental_bill',property:'property_fee'},CHUNK_SIZE=50,LEASE_SECONDS=120;
 const dateOnly=v=>v instanceof Date?v.toISOString().slice(0,10):String(v).slice(0,10);
 function fail(code,status=409){return Object.assign(new Error(code),{code,status});}
-function createTenantBillingJobProcessor({registry,secretProvider,tenantPoolManager,authorizeSystem,leaseSeconds=LEASE_SECONDS,createToken=crypto.randomUUID}={}){
+function createTenantBillingJobProcessor({registry,secretProvider,tenantPoolManager,authorizeSystem,appIds=['rental','property'],leaseSeconds=LEASE_SECONDS,createToken=crypto.randomUUID}={}){
  if(!registry||typeof registry.findTenantById!=='function'||typeof registry.listActiveTenants!=='function')throw new TypeError('BILLING_PROCESSOR_REGISTRY_REQUIRED');
  if(!secretProvider||typeof secretProvider.getDatabaseCredentials!=='function')throw new TypeError('BILLING_PROCESSOR_SECRET_PROVIDER_REQUIRED');
  if(!tenantPoolManager||typeof tenantPoolManager.getPool!=='function')throw new TypeError('BILLING_PROCESSOR_POOL_MANAGER_REQUIRED');
