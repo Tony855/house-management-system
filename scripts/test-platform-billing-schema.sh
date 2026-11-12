@@ -26,7 +26,7 @@ export MYSQL_PWD="$DB_PASSWORD"
 "${mysql_cmd[@]}" "$DB_NAME" < "$ROOT_DIR/db/migrations/platform/012_platform_admin_reenable_approval.sql"
 "${mysql_cmd[@]}" "$DB_NAME" < "$ROOT_DIR/db/migrations/platform/013_platform_tenant_migration_jobs.sql"
 "${mysql_cmd[@]}" "$DB_NAME" < "$ROOT_DIR/db/migrations/platform/014_recurring_billing_dispatch.sql"
-"${mysql_cmd[@]}" "$DB_NAME" < "$ROOT_DIR/db/migrations/platform/015_recurring_billing_dispatch_lease_token.sql"
+"${mysql_cmd[@]}" "$DB_NAME" < "$ROOT_DIR/db/migrations/platform/015_recurring_billing_dispatch_lease_token.sql"\n"$ROOT_DIR/db/migrations/platform/016_platform_billing_worker_registry.sql"
 
 expected_tables=11
 actual_tables="$("${mysql_cmd[@]}" -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '$DB_NAME' AND table_type = 'BASE TABLE' AND table_name IN ('platform_billing_accounts','platform_products','platform_plans','platform_subscriptions','platform_invoices','platform_invoice_lines','platform_payment_transactions','platform_payment_webhook_events','platform_refunds','platform_ledger_entries','platform_billing_audit')")"
@@ -145,3 +145,9 @@ if [[ "$dispatch_lease_token_column" != "1" ]]; then echo "Recurring billing dis
 dispatch_lease_token_index="$( "${mysql_cmd[@]}" -e "SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema = '$DB_NAME' AND table_name = 'platform_recurring_billing_dispatch' AND index_name = 'uk_recurring_billing_lease_token' AND non_unique = 0" )"
 if [[ "$dispatch_lease_token_index" != "1" ]]; then echo "Recurring billing dispatch fencing token unique index was not installed" >&2; exit 1; fi
 echo "Recurring billing dispatch lease fencing schema verified."
+
+worker_registry_tables="$("${mysql_cmd[@]}" -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '$DB_NAME' AND table_type = 'BASE TABLE' AND table_name IN ('platform_billing_workers','platform_billing_worker_scopes')")"
+if [[ "$worker_registry_tables" != "2" ]]; then echo "Expected 2 platform billing worker registry tables, found $worker_registry_tables" >&2; exit 1; fi
+worker_scope_check="$("${mysql_cmd[@]}" -e "SELECT COUNT(*) FROM information_schema.table_constraints WHERE constraint_schema = '$DB_NAME' AND table_name = 'platform_billing_worker_scopes' AND constraint_type = 'CHECK'")"
+if [[ "$worker_scope_check" != "1" ]]; then echo "Billing worker app/job scope constraint was not installed" >&2; exit 1; fi
+echo "Platform billing worker identity and least-privilege scope schema verified."

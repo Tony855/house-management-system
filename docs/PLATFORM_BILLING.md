@@ -34,3 +34,7 @@ Existing usage_fee_config, orgs.fee_* and usage_fee_payments are legacy fields i
 
 ## Delivery status
 The SQL migration and pure domain validation helpers are foundations only. They are not wired to a running Platform API, payment provider, super-admin frontend, scheduled invoice issuer or production MariaDB migration runner. Do not advertise live online billing until those integrations and end-to-end tests are complete.
+
+
+## Automated billing worker identity (migration 016)
+Do not authorize scheduled billing by trusting a caller-supplied worker ID alone. Apply `016_platform_billing_worker_registry.sql`, create one high-entropy secret per worker, store only its SHA-256 hex digest in `platform_billing_workers.credential_sha256`, and grant only the exact `(app_id, job_type)` rows required in `platform_billing_worker_scopes`. Configure the worker process with the matching `BILLING_WORKER_ID` and secret, then inject `createPlatformBillingWorkerAuthorizer({ pool: platformPool, workerId, workerSecret })` as `billingSystemWriteAuthorizer`. Rotate by inserting/updating the digest through a controlled secret-management procedure; disable immediately by setting worker status to `disabled` or deleting its scope. Never place plaintext worker secrets in SQL migrations, source control, logs or tenant databases. The platform schema stores the digest, not the secret. Worker registration/rotation UI and KMS-backed secret distribution remain operational follow-up work.
