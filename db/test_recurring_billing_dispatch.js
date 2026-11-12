@@ -48,6 +48,7 @@ test('dispatcher uses tenant-local idempotent adapter and marks success only aft
   const result = await dispatcher.tick();
   assert.equal(result.results[0].state, 'dispatched');
   assert.deepEqual(calls.map(x => x[0]), ['claim', 'enqueue', 'dispatched']);
+  assert.equal(calls[2][1].leaseToken, row.leaseToken, 'completion must be fenced by the exact claim token');
   assert.deepEqual(calls[1][1], {
     tenantId: tenant, appId: 'property', jobType: 'property_fee',
     periodKey: '2030-02', requestId: row.requestId

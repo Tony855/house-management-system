@@ -60,6 +60,8 @@ test('recurring billing dispatch claims, lease recovery, retry backoff and termi
     assert.equal(recovered.workerId, 'ci-worker-a');
     assert.notEqual(recovered.leaseToken, oldLeaseToken, 'a restarted process reusing the same worker ID must receive a new fencing token');
     assert.equal(recovered.attemptCount, 2);
+    assert.equal(await store.renewLease({ id: firstId, workerId: 'ci-worker-a', leaseToken: oldLeaseToken, leaseSeconds: 60 }), false,
+      'a stale process must not renew a reclaimed lease when its worker ID is reused');
     assert.equal(await store.markDispatched({ id: firstId, workerId: 'ci-worker-a', leaseToken: oldLeaseToken }), false,
       'the previous process token must not complete a reclaimed job even when the worker ID is reused');
     assert.equal(await store.markDispatched({ id: firstId, workerId: 'ci-worker-a', leaseToken: recovered.leaseToken }), true);
@@ -78,8 +80,8 @@ test('recurring billing dispatch claims, lease recovery, retry backoff and termi
     );
     assert.equal(retryRows.length, 1);
     const retryId = Number(retryRows[0].id);
-    await store.claim({ id: retryId, workerId: 'ci-worker-a', leaseSeconds: 30 });
-    assert.equal(await store.markFailed({ id: retryId, workerId: 'ci-worker-a', leaseToken: (await pool.query('SELECT lease_token FROM platform_recurring_billing_dispatch WHERE id = ?', [retryId]))[0][0].lease_token, errorCode: 'TENANT_DB_UNAVAILABLE' }), true);
+    const retryClaim = await store.claim({ id: retryId, workerId: 'ci-worker-a', leaseSeconds: 30 });
+    assert.equal(await store.markFailed({ id: retryId, workerId: 'ci-worker-a', leaseToken: retryClaim.leaseToken, errorCode: 'TENANT_DB_UNAVAILABLE' }), true);
     const [retryState] = await pool.query(
       'SELECT state, error_code, available_at, attempt_count FROM platform_recurring_billing_dispatch WHERE id = ?',
       [retryId]
