@@ -215,7 +215,7 @@ test('administrator re-enable request requires a disabled target with an enabled
   assert.match(calls[1][0], /ORDER BY id FOR UPDATE/);
   assert.match(calls[2][0], /enabled = 1 FOR UPDATE/);
   assert.match(calls[3][0], /status\) VALUES \(\?, \?, \?, 'pending'\)/);
-  assert.match(calls[4][0], /admin.reenable.request/);
+  assert.equal(calls[4][1][2], 'admin.reenable.request');
   assert.equal(calls.includes('commit'), true);
   assert.equal(calls.at(-1), 'release');
 });
@@ -251,7 +251,7 @@ test('administrator re-enable approval requires a different active approver and 
   assert.match(calls[3][0], /enabled = 1 FOR UPDATE/);
   assert.match(calls[4][0], /SET status = 'active'/);
   assert.match(calls[5][0], /status = 'approved'/);
-  assert.match(calls[6][0], /admin.reenable.approve/);
+  assert.equal(calls[6][1][2], 'admin.reenable.approve');
   assert.equal(calls.includes('commit'), true);
   assert.equal(calls.at(-1), 'release');
 });
