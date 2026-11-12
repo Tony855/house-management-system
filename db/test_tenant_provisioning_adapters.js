@@ -51,10 +51,22 @@ test('secret, migration and isolation adapters validate contract and preserve ve
 
 test('platform tenant registry provisioning adapter persists state transitions and audit events', async () => {
   const calls = [];
-  const platformPool = { query: async (sql, values) => {
-    calls.push({ sql, values });
-    return [{ affectedRows: 1 }, []];
-  } };
+  const platformPool = {
+    query: async (sql, values) => {
+      calls.push({ sql, values });
+      return [{ affectedRows: 1 }, []];
+    },
+    getConnection: async () => ({
+      beginTransaction: async () => calls.push({ tx: 'begin' }),
+      query: async (sql, values) => {
+        calls.push({ sql, values, tx: true });
+        return [{ affectedRows: 1 }, []];
+      },
+      commit: async () => calls.push({ tx: 'commit' }),
+      rollback: async () => calls.push({ tx: 'rollback' }),
+      release: () => calls.push({ tx: 'release' })
+    })
+  };
   const adapters = createPlatformTenantProvisioningAdapters({
     platformPool,
     databaseAdmin: {
@@ -73,7 +85,9 @@ test('platform tenant registry provisioning adapter persists state transitions a
   });
   await adapters.registry.activateTenant('12345678-1234-4123-8123-123456789abc', { schemaVersion: 'tenant-v1' });
   await adapters.registry.markProvisioningFailed('12345678-1234-4123-8123-123456789abc', 'PROVISIONING_FAILED');
-  assert.equal(calls.length, 5);
-  assert.ok(calls.some(x => x.sql.includes("lifecycle_state = 'active'")));
-  assert.ok(calls.some(x => x.sql.includes("lifecycle_state = 'provisioning_failed'")));
+  assert.ok(calls.some(x => x.sql?.includes("lifecycle_state = 'active'") && x.tx === true));
+  assert.ok(calls.some(x => x.sql?.includes("lifecycle_state = 'provisioning_failed'") && x.tx === true));
+  assert.equal(calls.filter(x => x.tx === 'commit').length, 2);
+  assert.equal(calls.filter(x => x.tx === 'rollback').length, 0);
+  assert.equal(calls.filter(x => x.tx === 'release').length, 2);
 });
