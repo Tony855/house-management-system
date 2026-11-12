@@ -345,24 +345,36 @@ test('property collection history is restricted to a property bill and ordered n
   } finally {await new Promise(resolve=>server.close(resolve));}
 });
 
-test('property owner statement validates date ranges and summarizes owner balances', async () => {
-  let captured;
+test('property owner statements paginate details while preserving whole-period totals', async () => {
+  const calls=[];
   const app=express();
-  app.use((req,_res,next)=>{req.tenantDb={execute:async(sql,params)=>{captured={sql,params};return [[{
-    owner_id:9,owner_name:'Owner Co',bills_count:2,rooms_count:2,billed_amount:'300.00',
-    current_paid_amount:'100.00',outstanding_amount:'200.00',period_receipts:'120.00',period_refunds:'20.00'
-  }]];}};next();});
+  app.use((req,_res,next)=>{req.tenantDb={execute:async(sql,params)=>{
+    calls.push({sql,params});
+    if(sql.includes('COUNT(DISTINCT b.tenant_id)')) return [[{
+      owners_count:75,bills_count:140,billed_amount:'30000.00',current_paid_amount:'10000.00',
+      outstanding_amount:'20000.00',period_receipts:'12000.00',period_refunds:'2000.00'
+    }]];
+    return [[{
+      owner_id:9,owner_name:'Owner Co',bills_count:2,rooms_count:2,billed_amount:'300.00',
+      current_paid_amount:'100.00',outstanding_amount:'200.00',period_receipts:'120.00',period_refunds:'20.00'
+    }]];
+  }};next();});
   app.use('/api',createPropertyFeeRouter());app.use((e,_q,res,_n)=>res.status(e.status||500).json({error:e.code||'ERROR'}));
   const server=http.createServer(app);await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   try {
-    const response=await fetch('http://127.0.0.1:'+server.address().port+'/api/property-fees/owner-statements?from_date=2030-01-01&to_date=2030-01-31');
+    const response=await fetch('http://127.0.0.1:'+server.address().port+'/api/property-fees/owner-statements?from_date=2030-01-01&to_date=2030-01-31&page=2&page_size=25');
     assert.equal(response.status,200);const body=await response.json();
     assert.equal(body.items[0].owner_id,9);assert.equal(body.items[0].billed_amount,300);
-    assert.equal(body.items[0].outstanding_amount,200);assert.equal(body.totals.period_receipts,120);
-    assert.deepEqual(captured.params,['2030-01-01','2030-01-31','2030-01-01','2030-01-31']);
-    assert.match(captured.sql,/FROM bill_transactions WHERE transaction_date BETWEEN/);
+    assert.equal(body.items[0].outstanding_amount,200);assert.equal(body.totals.period_receipts,12000);
+    assert.equal(body.total_count,75);assert.equal(body.page,2);assert.equal(body.page_size,25);
+    assert.deepEqual(calls[0].params,['2030-01-01','2030-01-31','2030-01-01','2030-01-31']);
+    assert.deepEqual(calls[1].params,['2030-01-01','2030-01-31','2030-01-01','2030-01-31',25,25]);
+    assert.match(calls[0].sql,/COUNT\(DISTINCT b\.tenant_id\)/);
+    assert.match(calls[1].sql,/FROM bill_transactions WHERE transaction_date BETWEEN/);
     const invalid=await fetch('http://127.0.0.1:'+server.address().port+'/api/property-fees/owner-statements?from_date=2030-02-01&to_date=2030-01-01');
     assert.equal(invalid.status,400);assert.deepEqual(await invalid.json(),{error:'PROPERTY_OWNER_STATEMENT_RANGE_INVALID'});
+    const invalidPage=await fetch('http://127.0.0.1:'+server.address().port+'/api/property-fees/owner-statements?from_date=2030-01-01&to_date=2030-01-31&page=1&page_size=101');
+    assert.equal(invalidPage.status,400);assert.deepEqual(await invalidPage.json(),{error:'PROPERTY_OWNER_STATEMENT_PAGINATION_INVALID'});
   } finally {await new Promise(resolve=>server.close(resolve));}
 });
 

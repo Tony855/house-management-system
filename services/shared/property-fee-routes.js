@@ -304,8 +304,33 @@ function createPropertyFeeRouter() {
       }
       const span = (Date.parse(toDate + 'T00:00:00Z') - Date.parse(fromDate + 'T00:00:00Z')) / 86400000;
       if (span > 366) throw propertyFeeError('PROPERTY_OWNER_STATEMENT_RANGE_TOO_LARGE');
+      const page = req.query.page === undefined ? 1 : Number(req.query.page);
+      const pageSize = req.query.page_size === undefined ? 50 : Number(req.query.page_size);
+      if (!Number.isSafeInteger(page) || page < 1 || page > 100000 ||
+          !Number.isSafeInteger(pageSize) || pageSize < 1 || pageSize > 100) {
+        throw propertyFeeError('PROPERTY_OWNER_STATEMENT_PAGINATION_INVALID');
+      }
+      const offset = (page - 1) * pageSize;
+      const [summaryRows] = await req.tenantDb.execute(
+        \`SELECT COUNT(DISTINCT b.tenant_id) AS owners_count,
+                COUNT(DISTINCT b.id) AS bills_count,
+                COALESCE(SUM(b.amount), 0) AS billed_amount,
+                COALESCE(SUM(b.paid_amount), 0) AS current_paid_amount,
+                COALESCE(SUM(b.amount - b.paid_amount), 0) AS outstanding_amount,
+                COALESCE(SUM(COALESCE(tx.receipts, 0)), 0) AS period_receipts,
+                COALESCE(SUM(COALESCE(tx.refunds, 0)), 0) AS period_refunds
+           FROM bills b
+           LEFT JOIN (
+             SELECT bill_id,
+               SUM(CASE WHEN transaction_type = 'receipt' THEN amount ELSE 0 END) AS receipts,
+               SUM(CASE WHEN transaction_type = 'refund' THEN amount ELSE 0 END) AS refunds
+             FROM bill_transactions WHERE transaction_date BETWEEN ? AND ? GROUP BY bill_id
+           ) tx ON tx.bill_id = b.id
+          WHERE b.source = 'property' AND b.period_start BETWEEN ? AND ?\`,
+        [fromDate, toDate, fromDate, toDate]
+      );
       const [rows] = await req.tenantDb.execute(
-        `SELECT b.tenant_id AS owner_id, COALESCE(t.name, '') AS owner_name,
+        \`SELECT b.tenant_id AS owner_id, COALESCE(t.name, '') AS owner_name,
                 COUNT(DISTINCT b.id) AS bills_count, COUNT(DISTINCT b.room_id) AS rooms_count,
                 ROUND(SUM(b.amount), 2) AS billed_amount,
                 ROUND(SUM(b.paid_amount), 2) AS current_paid_amount,
@@ -321,8 +346,8 @@ function createPropertyFeeRouter() {
              FROM bill_transactions WHERE transaction_date BETWEEN ? AND ? GROUP BY bill_id
            ) tx ON tx.bill_id = b.id
           WHERE b.source = 'property' AND b.period_start BETWEEN ? AND ?
-          GROUP BY b.tenant_id, t.name ORDER BY t.name ASC, b.tenant_id ASC LIMIT 500`,
-        [fromDate, toDate, fromDate, toDate]
+          GROUP BY b.tenant_id, t.name ORDER BY t.name ASC, b.tenant_id ASC LIMIT ? OFFSET ?\`,
+        [fromDate, toDate, fromDate, toDate, pageSize, offset]
       );
       const items = rows.map(row => ({
         owner_id: Number(row.owner_id), owner_name: row.owner_name,
@@ -331,17 +356,19 @@ function createPropertyFeeRouter() {
         outstanding_amount: Number(row.outstanding_amount), period_receipts: Number(row.period_receipts),
         period_refunds: Number(row.period_refunds)
       }));
+      const summary = summaryRows[0] || {};
       return res.json({
-        from_date: fromDate, to_date: toDate, items,
-        totals: items.reduce((total, item) => ({
-          owners_count: total.owners_count + 1, bills_count: total.bills_count + item.bills_count,
-          billed_amount: Math.round((total.billed_amount + item.billed_amount) * 100) / 100,
-          current_paid_amount: Math.round((total.current_paid_amount + item.current_paid_amount) * 100) / 100,
-          outstanding_amount: Math.round((total.outstanding_amount + item.outstanding_amount) * 100) / 100,
-          period_receipts: Math.round((total.period_receipts + item.period_receipts) * 100) / 100,
-          period_refunds: Math.round((total.period_refunds + item.period_refunds) * 100) / 100
-        }), { owners_count: 0, bills_count: 0, billed_amount: 0, current_paid_amount: 0,
-          outstanding_amount: 0, period_receipts: 0, period_refunds: 0 })
+        from_date: fromDate, to_date: toDate, page, page_size: pageSize,
+        total_count: Number(summary.owners_count || 0), items,
+        totals: {
+          owners_count: Number(summary.owners_count || 0),
+          bills_count: Number(summary.bills_count || 0),
+          billed_amount: Number(summary.billed_amount || 0),
+          current_paid_amount: Number(summary.current_paid_amount || 0),
+          outstanding_amount: Number(summary.outstanding_amount || 0),
+          period_receipts: Number(summary.period_receipts || 0),
+          period_refunds: Number(summary.period_refunds || 0)
+        }
       });
     } catch (error) { return next(error); }
   });
