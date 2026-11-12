@@ -33,3 +33,8 @@ The platform API can now be given an explicit `migrationExecutor` dependency. Wh
 ## Product API and portal increment
 
 Rental, Hotel and Property APIs now mount a shared tenant-scoped building writer: create and partial/full update use the existing audited/idempotent tenant write service, lock rows, reject duplicate names and accept only name/address/remark fields. Room update supports both PUT and PATCH through one validation/transaction handler. Portal entrypoints now render a data overview after authentication, querying only the current product's permitted read APIs; platform portal uses platform-only list endpoints. The overview is a read-only operational summary, not a substitute for complete business management screens.
+
+
+## Platform runtime injection and shutdown
+
+The production Platform API runtime accepts an explicit `migrationConnectionResolver`. Only when deployment supplies this resolver does runtime construct the concrete MariaDB tenant-data executor and enable queue polling; without it the worker remains disabled. Runtime shutdown first drains/stops the migration runner and only then closes the Platform DB pool. The resolver is the trust boundary for obtaining a legacy read-only connection, tenant-scoped target connection, and durable audit adapter. A deployment must not enable copy mode until those principals and audit retention have been independently verified.

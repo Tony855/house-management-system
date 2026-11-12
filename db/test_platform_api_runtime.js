@@ -67,3 +67,24 @@ test('platform runtime refuses missing dedicated platform database settings', ()
     ...options(), env: { DB_HOST: 'legacy', DB_NAME: 'house_sys', DB_USER: 'legacy', DB_PASSWORD: 'legacy' }
   }), /PLATFORM_DATABASE_CONFIGURATION_REQUIRED/);
 });
+
+
+test('platform runtime wires an injected tenant migration connection resolver and drains runner before DB close', async () => {
+  const config = options({
+    migrationConnectionResolver: async () => { throw new Error('not invoked without queued jobs'); },
+    migrationWorkerId: 'runtime-migration-worker', migrationConcurrency: 1
+  });
+  const runtime = createPlatformApiRuntime(config);
+  assert.equal(runtime.app.locals.tenantMigrationRunner.isRunning(), true);
+  await runtime.close();
+  assert.equal(runtime.app.locals.tenantMigrationRunner.isRunning(), false);
+  assert.equal(config.pool.ended, 1);
+});
+
+test('platform runtime leaves migration worker disabled when no secure resolver is injected', async () => {
+  const config = options();
+  const runtime = createPlatformApiRuntime(config);
+  assert.equal(runtime.app.locals.tenantMigrationRunner, undefined);
+  await runtime.close();
+  assert.equal(config.pool.ended, 1);
+});
