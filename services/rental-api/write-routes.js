@@ -63,7 +63,7 @@ function validateContract(input) {
   const room_id = Number(input.room_id), tenant_id = Number(input.tenant_id);
   const pay_cycle = Number(input.pay_cycle === undefined ? 1 : input.pay_cycle);
   if (!Number.isSafeInteger(room_id) || room_id < 1 || !Number.isSafeInteger(tenant_id) || tenant_id < 1 ||
-      !Number.isSafeInteger(pay_cycle) || pay_cycle < 1 || pay_cycle > 12 ||
+      !Number.isSafeInteger(pay_cycle) || pay_cycle < 1 || pay_cycle > 36 ||
       typeof input.contract_no !== 'string' || !input.contract_no.trim() || input.contract_no.trim().length > 50 ||
       !validDate(input.start_date) || !validDate(input.end_date) || input.end_date < input.start_date || !validDate(input.sign_date) ||
       typeof (input.remark || '') !== 'string' || (input.remark || '').length > 200) throw contractError('CONTRACT_INPUT_INVALID');

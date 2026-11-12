@@ -101,7 +101,9 @@ test('POST /rooms rejects invalid DTO before invoking the write service', async 
 test('rental contract validation rejects invalid dates, amounts and tenant-controlled columns', () => {
   const input = { contract_no: 'R-31', room_id: 3, tenant_id: 8, start_date: '2026-11-01', end_date: '2027-10-31', sign_date: '2026-10-30', rent: 1200, deposit: 1200 };
   assert.equal(validateContract(input).pay_cycle, 1);
-  for (const bad of [{ ...input, org_id: 5 }, { ...input, end_date: '2026-10-01' }, { ...input, start_date: '2026-02-30' }, { ...input, rent: -1 }]) {
+  assert.equal(validateContract({ ...input, pay_cycle: 18 }).pay_cycle, 18);
+  assert.equal(validateContract({ ...input, pay_cycle: 36 }).pay_cycle, 36);
+  for (const bad of [{ ...input, org_id: 5 }, { ...input, end_date: '2026-10-01' }, { ...input, start_date: '2026-02-30' }, { ...input, rent: -1 }, { ...input, pay_cycle: 37 }, { ...input, pay_cycle: 0.5 }]) {
     assert.throws(() => validateContract(bad), error => error.code === 'CONTRACT_INPUT_INVALID');
   }
 });
