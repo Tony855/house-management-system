@@ -241,20 +241,30 @@ test('hotel cleaning completion rejects a room that is not in cleaning state', a
 });
 
 
-test('property arrears report validates its as-of date and returns outstanding balances', async () => {
-  const app=express(); app.use((req,_res,next)=>{req.tenantDb={execute:async(_sql,params)=>{
-    assert.deepEqual(params,['2030-02-01','2030-02-01']);
+test('property arrears report is property-scoped, paginated and returns complete aging totals', async () => {
+  const calls=[]; const app=express();
+  app.use((req,_res,next)=>{req.tenantDb={execute:async(sql,params)=>{
+    calls.push({sql,params});
+    if(sql.includes('COUNT(*) AS total_count')) return [[{total_count:125}]];
+    if(sql.includes('AS days_1_30')) return [[{overdue_count:125,total_outstanding:'12500.00',days_1_30:'1000.00',days_31_60:'2000.00',days_61_90:'3000.00',days_over_90:'6500.00'}]];
     return [[{id:41,source:'property',room_id:4,room_no:'P-401',owner_id:8,tenant_id:8,tenant_name:'Owner Ltd',
       due_date:'2030-01-10',amount:'109.50',paid_amount:'9.50',outstanding_amount:'100.00',days_overdue:22}]];
   }};next();});
   app.use('/api',createPropertyFeeRouter());app.use((e,_q,res,_n)=>res.status(e.status||500).json({error:e.code||'ERROR'}));
   const server=http.createServer(app);await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   try {
-    const response=await fetch('http://127.0.0.1:'+server.address().port+'/api/property-fees/arrears?as_of=2030-02-01');
+    const response=await fetch('http://127.0.0.1:'+server.address().port+'/api/property-fees/arrears?as_of=2030-02-01&page=2&page_size=25');
     assert.equal(response.status,200);const body=await response.json();
-    assert.equal(body.overdue_count,1);assert.equal(body.total_outstanding,100);
-    assert.equal(body.items[0].days_overdue,22);assert.equal(body.items[0].tenant_name,'Owner Ltd');
-    const invalid=await fetch('http://127.0.0.1:'+server.address().port+'/api/property-fees/arrears?as_of=2030-02-30');
-    assert.equal(invalid.status,400);assert.deepEqual(await invalid.json(),{error:'PROPERTY_ARREARS_DATE_INVALID'});
+    assert.equal(body.page,2);assert.equal(body.page_size,25);assert.equal(body.total_count,125);
+    assert.equal(body.overdue_count,125);assert.equal(body.total_outstanding,12500);
+    assert.deepEqual(body.aging,{days_1_30:1000,days_31_60:2000,days_61_90:3000,days_over_90:6500});
+    assert.equal(body.items.length,1);assert.equal(body.items[0].days_overdue,22);
+    assert.ok(calls.every(call=>call.sql.includes("b.source = 'property'")));
+    assert.deepEqual(calls[0].params,['2030-02-01']);
+    assert.deepEqual(calls[2].params,['2030-02-01','2030-02-01',25,25]);
+    const invalid=await fetch('http://127.0.0.1:'+server.address().port+'/api/property-fees/arrears?page=0');
+    assert.equal(invalid.status,400);assert.deepEqual(await invalid.json(),{error:'PROPERTY_ARREARS_PAGINATION_INVALID'});
+    const invalidDate=await fetch('http://127.0.0.1:'+server.address().port+'/api/property-fees/arrears?as_of=2030-02-30');
+    assert.equal(invalidDate.status,400);assert.deepEqual(await invalidDate.json(),{error:'PROPERTY_ARREARS_DATE_INVALID'});
   } finally {await new Promise(resolve=>server.close(resolve));}
 });

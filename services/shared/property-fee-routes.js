@@ -116,6 +116,27 @@ function createPropertyFeeRouter() {
           new Date(asOf + 'T00:00:00Z').toISOString().slice(0, 10) !== asOf) {
         throw propertyFeeError('PROPERTY_ARREARS_DATE_INVALID');
       }
+      const page = req.query.page === undefined ? 1 : Number(req.query.page);
+      const pageSize = req.query.page_size === undefined ? 50 : Number(req.query.page_size);
+      if (!Number.isSafeInteger(page) || page < 1 || page > 100000 ||
+          !Number.isSafeInteger(pageSize) || pageSize < 1 || pageSize > 100) {
+        throw propertyFeeError('PROPERTY_ARREARS_PAGINATION_INVALID');
+      }
+      const offset = (page - 1) * pageSize;
+      const filter = "b.source = 'property' AND b.due_date < ? AND b.amount > b.paid_amount";
+      const [countRows] = await req.tenantDb.execute(
+        `SELECT COUNT(*) AS total_count FROM bills b WHERE ${filter}`, [asOf]
+      );
+      const [summaryRows] = await req.tenantDb.execute(
+        `SELECT COUNT(*) AS overdue_count,
+                COALESCE(SUM(b.amount - b.paid_amount), 0) AS total_outstanding,
+                COALESCE(SUM(CASE WHEN DATEDIFF(?, b.due_date) BETWEEN 1 AND 30 THEN b.amount - b.paid_amount ELSE 0 END), 0) AS days_1_30,
+                COALESCE(SUM(CASE WHEN DATEDIFF(?, b.due_date) BETWEEN 31 AND 60 THEN b.amount - b.paid_amount ELSE 0 END), 0) AS days_31_60,
+                COALESCE(SUM(CASE WHEN DATEDIFF(?, b.due_date) BETWEEN 61 AND 90 THEN b.amount - b.paid_amount ELSE 0 END), 0) AS days_61_90,
+                COALESCE(SUM(CASE WHEN DATEDIFF(?, b.due_date) > 90 THEN b.amount - b.paid_amount ELSE 0 END), 0) AS days_over_90
+           FROM bills b WHERE ${filter}`,
+        [asOf, asOf, asOf, asOf, asOf]
+      );
       const [rows] = await req.tenantDb.execute(
         `SELECT b.id, b.source, b.room_id, r.room_no, r.owner_id,
                 b.tenant_id, t.name AS tenant_name, b.due_date, b.amount, b.paid_amount,
@@ -124,10 +145,10 @@ function createPropertyFeeRouter() {
            FROM bills b
            INNER JOIN rooms r ON r.id = b.room_id
            LEFT JOIN tenants t ON t.id = b.tenant_id
-          WHERE b.due_date < ? AND b.amount > b.paid_amount
+          WHERE ${filter}
           ORDER BY b.due_date ASC, b.id ASC
-          LIMIT 1000`,
-        [asOf, asOf]
+          LIMIT ? OFFSET ?`,
+        [asOf, asOf, pageSize, offset]
       );
       const items = rows.map(row => ({
         id: Number(row.id), source: row.source, room_id: Number(row.room_id),
@@ -137,10 +158,19 @@ function createPropertyFeeRouter() {
         amount: Number(row.amount), paid_amount: Number(row.paid_amount),
         outstanding_amount: Number(row.outstanding_amount), days_overdue: Number(row.days_overdue)
       }));
+      const summary = summaryRows[0] || {};
       return res.json({
-        as_of: asOf, items,
-        total_outstanding: Math.round(items.reduce((sum, item) => sum + item.outstanding_amount, 0) * 100) / 100,
-        overdue_count: items.length
+        as_of: asOf, page, page_size: pageSize,
+        total_count: Number(countRows[0]?.total_count || 0),
+        overdue_count: Number(summary.overdue_count || 0),
+        total_outstanding: Number(summary.total_outstanding || 0),
+        aging: {
+          days_1_30: Number(summary.days_1_30 || 0),
+          days_31_60: Number(summary.days_31_60 || 0),
+          days_61_90: Number(summary.days_61_90 || 0),
+          days_over_90: Number(summary.days_over_90 || 0)
+        },
+        items
       });
     } catch (error) { return next(error); }
   });
