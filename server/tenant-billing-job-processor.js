@@ -18,6 +18,25 @@ function createTenantBillingJobProcessor({registry,secretProvider,tenantPoolMana
  if(!Number.isInteger(leaseSeconds)||leaseSeconds<30||leaseSeconds>3600||!Number.isInteger(chunkSize)||chunkSize<1||chunkSize>MAX_CHUNK_SIZE||typeof createToken!=='function')throw new TypeError('BILLING_PROCESSOR_LEASE_CONFIG_INVALID');
  if(!Array.isArray(appIds)||appIds.length<1||appIds.some(app=>!Object.hasOwn(JOBS,app))||new Set(appIds).size!==appIds.length)throw new TypeError('BILLING_PROCESSOR_APP_SCOPE_INVALID');
  const systemWrite=createTenantSystemWriteService({authorizeSystem,auditWriter:createMariaDbTenantWriteAuditStore(),idempotencyStore:createMariaDbTenantWriteIdempotencyStore()});
+ const scanCursors=new Map(appIds.map(appId=>[appId,'']));
+ const scanQueues=new Map();
+ async function nextTenantPage(appId,limit){
+  const previous=scanQueues.get(appId)||Promise.resolve();
+  const operation=previous.then(async()=>{
+   const afterTenantId=scanCursors.get(appId)||'';
+   const page=await registry.listActiveTenants({appId,afterTenantId,limit});
+   if(!page||!Array.isArray(page.tenantIds)||page.tenantIds.length>limit||
+      (page.nextCursor!==null&&typeof page.nextCursor!=='string')||
+      page.tenantIds.some(id=>typeof id!=='string'||!/^[0-9a-f-]{36}$/i.test(id))){
+    throw fail('BILLING_TENANT_SCAN_RESULT_INVALID',503);
+   }
+   if(page.nextCursor&&page.nextCursor===afterTenantId)throw fail('BILLING_TENANT_SCAN_CURSOR_STALLED',503);
+   scanCursors.set(appId,page.nextCursor||'');
+   return page;
+  });
+  scanQueues.set(appId,operation.then(()=>undefined,()=>undefined));
+  return operation;
+ }
  async function processTenant({tenantId,appId,workerId}){
   if(!Object.hasOwn(JOBS,appId))throw fail('BILLING_PROCESSOR_APP_INVALID',400);
   if(typeof workerId!=='string'||!/^[A-Za-z0-9._:-]{1,100}$/.test(workerId))throw fail('BILLING_PROCESSOR_WORKER_INVALID',400);
@@ -64,8 +83,18 @@ function createTenantBillingJobProcessor({registry,secretProvider,tenantPoolMana
  async function processNextBatch({workerId,tenantScanBatchSize=100}={}){
   if(!Number.isInteger(tenantScanBatchSize)||tenantScanBatchSize<1||tenantScanBatchSize>500)throw fail('BILLING_TENANT_SCAN_BATCH_INVALID',400);
   let firstError=null;
-  for(const appId of appIds){let cursor='';for(;;){const page=await registry.listActiveTenants({appId,afterTenantId:cursor,limit:tenantScanBatchSize});for(const tenantId of page.tenantIds){try{const r=await processTenant({tenantId,appId,workerId});if(r.worked)return Object.freeze({...r,workerId});}catch(e){if(!firstError)firstError=e;}}if(!page.nextCursor)break;if(page.nextCursor===cursor)throw fail('BILLING_TENANT_SCAN_CURSOR_STALLED',500);cursor=page.nextCursor;}}
-  if(firstError)throw firstError;return Object.freeze({worked:false,state:'idle'});
+  // Process at most one page per app per lane tick. Shared per-app cursors are
+  // advanced serially so concurrent lanes scan different pages instead of
+  // repeatedly traversing the entire active-tenant registry on every poll.
+  for(const appId of appIds){
+   const page=await nextTenantPage(appId,tenantScanBatchSize);
+   for(const tenantId of page.tenantIds){
+    try{const r=await processTenant({tenantId,appId,workerId});if(r.worked)return Object.freeze({...r,workerId});}
+    catch(e){if(!firstError)firstError=e;}
+   }
+  }
+  if(firstError)throw firstError;
+  return Object.freeze({worked:false,state:'idle'});
  }
  return Object.freeze({processTenant,processNextBatch,leaseSeconds,chunkSize,appIds:Object.freeze([...appIds])});
 }
