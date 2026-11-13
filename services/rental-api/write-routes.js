@@ -174,11 +174,15 @@ async function readRentalDepositBalance(tx, contractId) {
     "SELECT COALESCE(SUM(CASE WHEN transaction_type = 'receipt' THEN amount ELSE 0 END), 0) AS received_amount, COALESCE(SUM(CASE WHEN transaction_type = 'refund' THEN amount ELSE 0 END), 0) AS refunded_amount, COALESCE(SUM(CASE WHEN transaction_type = 'deduction' THEN amount ELSE 0 END), 0) AS deducted_amount FROM rental_contract_deposit_transactions WHERE contract_id = ?",
     [contractId]
   );
-  const received_amount = Math.round(Number(rows[0].received_amount || 0) * 100) / 100;
-  const refunded_amount = Math.round(Number(rows[0].refunded_amount || 0) * 100) / 100;
-  const deducted_amount = Math.round(Number(rows[0].deducted_amount || 0) * 100) / 100;
-  return { received_amount, refunded_amount, deducted_amount,
-    held_amount: Math.round((received_amount - refunded_amount - deducted_amount) * 100) / 100 };
+  const receivedMinor = parseMinorUnits(rows[0].received_amount || 0, { allowZero: true, maxMinor: 10000000000 });
+  const refundedMinor = parseMinorUnits(rows[0].refunded_amount || 0, { allowZero: true, maxMinor: 10000000000 });
+  const deductedMinor = parseMinorUnits(rows[0].deducted_amount || 0, { allowZero: true, maxMinor: 10000000000 });
+  if ([receivedMinor, refundedMinor, deductedMinor].some(value => value === null) ||
+      refundedMinor + deductedMinor > receivedMinor) {
+    throw contractError('RENTAL_DEPOSIT_BALANCE_INVALID', 409);
+  }
+  return { received_amount: receivedMinor / 100, refunded_amount: refundedMinor / 100,
+    deducted_amount: deductedMinor / 100, held_amount: (receivedMinor - refundedMinor - deductedMinor) / 100 };
 }
 function createRentalWriteRouter() {
   const router = express.Router();
@@ -501,15 +505,23 @@ function createRentalWriteRouter() {
           mutate: async tx => {
             const [rows] = await tx.execute('SELECT id, deposit, status FROM contracts WHERE id = ? LIMIT 1 FOR UPDATE', [id]);
             if (!rows.length) throw contractError('CONTRACT_NOT_FOUND', 404);
-            const contract = rows[0], expected_amount = Number(contract.deposit);
-            if (!Number.isFinite(expected_amount) || expected_amount < 0) throw contractError('RENTAL_DEPOSIT_BALANCE_INVALID', 409);
+            const contract = rows[0];
+            const expectedMinor = parseMinorUnits(contract.deposit, { allowZero: true, maxMinor: 10000000000 });
+            if (expectedMinor === null) throw contractError('RENTAL_DEPOSIT_BALANCE_INVALID', 409);
+            const expected_amount = expectedMinor / 100;
             if (action.activeOnly && contract.status !== 'active') throw contractError('RENTAL_DEPOSIT_RECEIPT_REQUIRES_ACTIVE_CONTRACT', 409);
             if (action.terminatedOnly && contract.status !== 'terminated') throw contractError('RENTAL_DEPOSIT_SETTLEMENT_REQUIRES_TERMINATED_CONTRACT', 409);
             const balance = await readRentalDepositBalance(tx, id);
-            if (action.type === 'receipt' && transaction.amount > Math.round((expected_amount - balance.received_amount) * 100) / 100) {
+            const receivedMinor = parseMinorUnits(balance.received_amount, { allowZero: true, maxMinor: 10000000000 });
+            const heldMinor = parseMinorUnits(balance.held_amount, { allowZero: true, maxMinor: 10000000000 });
+            const transactionMinor = parseMinorUnits(transaction.amount);
+            if (receivedMinor === null || heldMinor === null || transactionMinor === null) {
+              throw contractError('RENTAL_DEPOSIT_BALANCE_INVALID', 409);
+            }
+            if (action.type === 'receipt' && transactionMinor > expectedMinor - receivedMinor) {
               throw contractError('RENTAL_DEPOSIT_RECEIPT_EXCEEDS_EXPECTED', 409);
             }
-            if (action.type !== 'receipt' && (balance.held_amount <= 0 || transaction.amount > balance.held_amount)) {
+            if (action.type !== 'receipt' && (heldMinor <= 0 || transactionMinor > heldMinor)) {
               throw contractError('RENTAL_DEPOSIT_SETTLEMENT_EXCEEDS_HELD', 409);
             }
             await tx.execute(
@@ -518,7 +530,7 @@ function createRentalWriteRouter() {
             );
             const next = await readRentalDepositBalance(tx, id);
             return { contract_id: id, expected_amount, ...next,
-              remaining_to_receive: Math.round((expected_amount - next.received_amount) * 100) / 100,
+              remaining_to_receive: (expectedMinor - parseMinorUnits(next.received_amount, { allowZero: true, maxMinor: 10000000000 })) / 100,
               settlement_status: next.held_amount <= 0 && next.received_amount > 0 ? 'settled' :
                 (next.refunded_amount + next.deducted_amount > 0 ? 'partially_settled' : 'pending') };
           }
@@ -549,9 +561,12 @@ function createRentalWriteRouter() {
           [id, pageSize, offset]
         )
       ]);
-      const expected_amount = Number(rows[0].deposit);
+      const expectedMinor = parseMinorUnits(rows[0].deposit, { allowZero: true, maxMinor: 10000000000 });
+      if (expectedMinor === null) throw contractError('RENTAL_DEPOSIT_BALANCE_INVALID', 409);
+      const expected_amount = expectedMinor / 100;
+      const receivedMinor = parseMinorUnits(balance.received_amount, { allowZero: true, maxMinor: 10000000000 });
       return res.json({ contract_id: id, contract_status: rows[0].status, expected_amount, ...balance,
-        remaining_to_receive: Math.round((expected_amount - balance.received_amount) * 100) / 100,
+        remaining_to_receive: (expectedMinor - receivedMinor) / 100,
         settlement_status: balance.held_amount <= 0 && balance.received_amount > 0 ? 'settled' :
           (balance.refunded_amount + balance.deducted_amount > 0 ? 'partially_settled' : 'pending'),
         page, page_size: pageSize, total_count: Number(countRows[0].total_count || 0),
