@@ -59,4 +59,4 @@ Lease renewal and checkpoint writes are also bounded by an operation timeout sho
 
 A migration job has a bounded automatic claim budget of eight attempts. Every successful claim increments `attempt_count`. If a worker process dies after claiming and never reaches `failJob`, the next runnable-job scan reaps the expired lease: jobs already at the budget are moved to `failed` with `TENANT_MIGRATION_ATTEMPTS_EXHAUSTED`; jobs below the budget may be reclaimed. Claim SQL rechecks the attempt budget and runnable state in the same UPDATE so concurrent workers cannot exceed the limit.
 
-An authorized operator retry uses compare-and-set against the observed `expectedAttemptCount` and resets the claim counter to zero. This starts a fresh bounded retry window while preserving the previous failure code until the new claim begins.
+An authorized operator retry uses compare-and-set against the observed `expectedAttemptCount` and resets the claim counter to zero. This starts a fresh bounded retry window and clears the previous failure code; a new claim will record any subsequent failure.
