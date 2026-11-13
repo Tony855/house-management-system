@@ -171,7 +171,8 @@ async function copyTenantOrgData({
       }
 
       if (!alreadyImported) {
-        target = await targetReader.readTenantSnapshot({ appId, tenantId });
+        target = await targetReader.readTenantSnapshot({ appId, tenantId, signal });
+        assertNotAborted(signal);
         targetNormalized = normalizeTargetSnapshot(appId, target);
         if (!compareManifests(normalized.manifest, targetNormalized.manifest)) {
           const error = new Error('TENANT_DATA_MIGRATION_RECONCILIATION_FAILED');
