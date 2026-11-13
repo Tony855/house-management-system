@@ -1,7 +1,17 @@
 'use strict';
 
 const crypto = require('node:crypto');
-const { verifyPassword: defaultVerifyPassword } = require('../../server/util');
+
+async function verifyPasswordAsync(password, stored) {
+  if (typeof stored !== 'string') return false;
+  const parts = stored.split(':');
+  if (parts.length !== 2 || !/^[a-f0-9]{16}$/i.test(parts[0]) || !/^[a-f0-9]{64}$/i.test(parts[1])) return false;
+  const expected = Buffer.from(parts[1], 'hex');
+  const derived = await new Promise((resolve, reject) => {
+    crypto.scrypt(String(password), parts[0], 32, (error, key) => error ? reject(error) : resolve(key));
+  });
+  return expected.length === derived.length && crypto.timingSafeEqual(expected, derived);
+}
 
 function authError(code, status = 401) {
   throw Object.assign(new Error(code), { code, status });
@@ -27,7 +37,7 @@ function decodeJsonSegment(segment) {
 
 function createPlatformAdminAuthService({
   adminStore, challengeStore, sessionStore, mfaService, signingKeyProvider,
-  verificationKeyProvider, issuer, verifyPassword = defaultVerifyPassword,
+  verificationKeyProvider, issuer, verifyPassword = verifyPasswordAsync,
   loginRateLimiter, now = () => Math.floor(Date.now() / 1000),
   sessionLifetimeSeconds = 900, challengeLifetimeSeconds = 180, stepUpFreshSeconds = 300,
   randomBytes = crypto.randomBytes
@@ -58,7 +68,7 @@ function createPlatformAdminAuthService({
     try { admin = await adminStore.findByUsername(username); }
     catch (_) { authError('AUTHENTICATION_UNAVAILABLE', 503); }
     let valid = false;
-    try { valid = !!admin && admin.status === 'active' && verifyPassword(password, admin.passwordHash) === true; }
+    try { valid = !!admin && admin.status === 'active' && await verifyPassword(password, admin.passwordHash) === true; }
     catch (_) { valid = false; }
     if (!valid) {
       try { await loginRateLimiter.recordFailure(identity); }
