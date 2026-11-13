@@ -277,7 +277,7 @@ test('rental deposit transaction DTO requires cash method or deduction reason an
 test('rental deposit receipts, refunds and deductions enforce contract state and held balance', async () => {
   const app=express();app.use(express.json());const ledger=[];let contractStatus='active';
   app.use((req,_res,next)=>{req.tenantWrite=async input=>input.mutate({execute:async(sql,params)=>{
-    if(sql.includes('FROM contracts')) return [[{id:9,deposit:'50.00',status:contractStatus}]];
+    if(sql.includes('FROM contracts')) return [[{id:9,deposit:'1.15',status:contractStatus}]];
     if(sql.includes('SUM(CASE WHEN transaction_type')) {
       const sum=type=>ledger.filter(x=>x.type===type).reduce((n,x)=>n+x.amount,0);
       return [[{received_amount:sum('receipt'),refunded_amount:sum('refund'),deducted_amount:sum('deduction')}]];
@@ -289,14 +289,14 @@ test('rental deposit receipts, refunds and deductions enforce contract state and
   const server=http.createServer(app);await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   const send=(path,body,key)=>fetch('http://127.0.0.1:'+server.address().port+path,{method:'POST',headers:{'content-type':'application/json','x-operation-reason':'Rental deposit ledger','x-step-up-token':'step-up-token-123456789','idempotency-key':key},body:JSON.stringify(body)});
   try {
-    const receipt=await send('/api/contracts/9/deposit/receive',{amount:50,pay_method:'cash'},'rental-deposit-receipt-0001');
-    assert.equal(receipt.status,201);assert.equal((await receipt.json()).held_amount,50);
+    const receipt=await send('/api/contracts/9/deposit/receive',{amount:1.15,pay_method:'cash'},'rental-deposit-receipt-0001');
+    assert.equal(receipt.status,201);assert.equal((await receipt.json()).held_amount,1.15);
     contractStatus='terminated';
-    const refund=await send('/api/contracts/9/deposit/refund',{amount:20,pay_method:'bank'},'rental-deposit-refund-0001');
-    assert.equal(refund.status,201);assert.equal((await refund.json()).held_amount,30);
-    const deduction=await send('/api/contracts/9/deposit/deduct',{amount:5,note:'Damage'},'rental-deposit-deduct-0001');
-    assert.equal(deduction.status,201);assert.equal((await deduction.json()).held_amount,25);
-    const excess=await send('/api/contracts/9/deposit/refund',{amount:26,pay_method:'bank'},'rental-deposit-refund-0002');
+    const refund=await send('/api/contracts/9/deposit/refund',{amount:0.15,pay_method:'bank'},'rental-deposit-refund-0001');
+    assert.equal(refund.status,201);assert.equal((await refund.json()).held_amount,1);
+    const deduction=await send('/api/contracts/9/deposit/deduct',{amount:0.05,note:'Damage'},'rental-deposit-deduct-0001');
+    assert.equal(deduction.status,201);assert.equal((await deduction.json()).held_amount,0.95);
+    const excess=await send('/api/contracts/9/deposit/refund',{amount:0.96,pay_method:'bank'},'rental-deposit-refund-0002');
     assert.equal(excess.status,409);
     assert.equal(ledger.length,3);
   } finally {await new Promise(resolve=>server.close(resolve));}
