@@ -95,8 +95,12 @@ test('admin disable refuses self-disable and last active administrator', async (
   };
   const store = createPlatformAdminAuthStore({ query: async () => [[], []], getConnection: async () => { connections++; return connection; } });
   assert.equal(await store.disableAdmin({ actorAdminId: 7, targetAdminId: 7 }), false);
-  assert.equal(connections, 0);
   assert.equal(await store.disableAdmin({ actorAdminId: 7, targetAdminId: 8, sessionId: 'session-id-1234567890', reason: 'short' }), false);
+  assert.equal(connections, 0);
+  assert.equal(await store.disableAdmin({
+    actorAdminId: 7, targetAdminId: 8, sessionId: 'session-id-1234567890',
+    reason: 'Valid administrative reason'
+  }), false);
 });
 
 
