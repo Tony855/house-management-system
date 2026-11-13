@@ -441,3 +441,38 @@ test('GET hotel deposit ledger paginates transaction history and retains full ba
     assert.equal(invalid.status,400);assert.deepEqual(await invalid.json(),{error:'HOTEL_DEPOSIT_PAGINATION_INVALID'});
   }finally{await new Promise(resolve=>server.close(resolve));}
 });
+
+
+test('bill payment settles exact decimal minor units without floating-point drift', async () => {
+  const app = express(); app.use(express.json());
+  let update;
+  app.use((req, _res, next) => {
+    req.tenantWrite = input => input.mutate({
+      execute: async sql => sql.includes('FROM bills')
+        ? [[{ id: 81, amount: '1.15', paid_amount: '0.00', status: 'unpaid', pay_method: '' }]]
+        : [[]],
+      updateById: async (table, id, fields) => { update = { table, id, fields }; return { affectedRows: 1 }; }
+    });
+    next();
+  });
+  app.use('/api', createBillPaymentRouter('rental'));
+  app.use((error, _req, res, _next) => res.status(error.status || 500).json({ error: error.code || 'ERROR' }));
+  const server = http.createServer(app);
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const response = await fetch('http://127.0.0.1:' + server.address().port + '/api/bills/81/pay', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-operation-reason': 'Settle exact decimal bill',
+        'x-step-up-token': 'step-up-token-123456789', 'idempotency-key': 'bill-payment-decimal-0001' },
+      body: JSON.stringify({ amount: 1.15, pay_method: 'cash' })
+    });
+    assert.equal(response.status, 200);
+    assert.deepEqual(update, { table: 'bills', id: 81, fields: { paid_amount: 1.15, status: 'paid', pay_date: new Date().toISOString().slice(0, 10), pay_method: 'cash' } });
+    const body = await response.json();
+    assert.equal(body.paid_amount, 1.15);
+    assert.equal(body.remaining, 0);
+    assert.equal(body.status, 'paid');
+  } finally {
+    await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+  }
+});
