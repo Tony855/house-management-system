@@ -29,6 +29,7 @@ export MYSQL_PWD="$DB_PASSWORD"
 "${mysql_cmd[@]}" "$DB_NAME" < "$ROOT_DIR/db/migrations/platform/015_recurring_billing_dispatch_lease_token.sql"
 "${mysql_cmd[@]}" "$DB_NAME" < "$ROOT_DIR/db/migrations/platform/016_platform_billing_worker_registry.sql"
 "${mysql_cmd[@]}" "$DB_NAME" < "$ROOT_DIR/db/migrations/platform/017_platform_admin_audit_reason.sql"
+"${mysql_cmd[@]}" "$DB_NAME" < "$ROOT_DIR/db/migrations/platform/018_tenant_migration_lease_token.sql"
 
 expected_tables=11
 actual_tables="$("${mysql_cmd[@]}" -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '$DB_NAME' AND table_type = 'BASE TABLE' AND table_name IN ('platform_billing_accounts','platform_products','platform_plans','platform_subscriptions','platform_invoices','platform_invoice_lines','platform_payment_transactions','platform_payment_webhook_events','platform_refunds','platform_ledger_entries','platform_billing_audit')")"
@@ -137,6 +138,11 @@ if [[ "$migration_jobs_table" != "1" ]]; then echo "Tenant migration job queue s
 migration_jobs_fk="$("${mysql_cmd[@]}" -e "SELECT COUNT(*) FROM information_schema.referential_constraints WHERE constraint_schema = '$DB_NAME' AND table_name = 'platform_tenant_migration_jobs'")"
 if [[ "$migration_jobs_fk" != "1" ]]; then echo "Tenant migration job tenant foreign key was not installed" >&2; exit 1; fi
 echo "Tenant migration job queue schema verified."
+migration_lease_token_column="$( "${mysql_cmd[@]}" -e "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = '$DB_NAME' AND table_name = 'platform_tenant_migration_jobs' AND column_name = 'lease_token' AND character_maximum_length = 36" )"
+if [[ "$migration_lease_token_column" != "1" ]]; then echo "Tenant migration lease fencing token column was not installed" >&2; exit 1; fi
+migration_lease_token_index="$( "${mysql_cmd[@]}" -e "SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema = '$DB_NAME' AND table_name = 'platform_tenant_migration_jobs' AND index_name = 'uk_tenant_migration_lease_token' AND non_unique = 0" )"
+if [[ "$migration_lease_token_index" != "1" ]]; then echo "Tenant migration lease fencing token unique index was not installed" >&2; exit 1; fi
+echo "Tenant migration lease fencing schema verified."
 dispatch_table="$("${mysql_cmd[@]}" -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '$DB_NAME' AND table_name = 'platform_recurring_billing_dispatch' AND table_type = 'BASE TABLE'")"
 if [[ "$dispatch_table" != "1" ]]; then echo "Recurring billing dispatch schema was not installed" >&2; exit 1; fi
 dispatch_fk="$("${mysql_cmd[@]}" -e "SELECT COUNT(*) FROM information_schema.referential_constraints WHERE constraint_schema = '$DB_NAME' AND table_name = 'platform_recurring_billing_dispatch'")"
