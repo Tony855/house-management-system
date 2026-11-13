@@ -64,9 +64,12 @@ function createHotelOrderRouter() {
           if (!guests.length) throw hotelError('GUEST_NOT_FOUND', 404);
           const [overlaps] = await tx.execute("SELECT id FROM orders WHERE room_id = ? AND status IN ('booked','checked_in') AND check_in_date < ? AND check_out_date > ? LIMIT 1 FOR UPDATE", [order.room_id, order.check_out_date, order.check_in_date]);
           if (overlaps.length) throw hotelError('ROOM_BOOKING_OVERLAP', 409);
-          const day_price = Number(rooms[0].day_price), deposit = Number(rooms[0].deposit);
-          if (!Number.isFinite(day_price) || day_price < 0 || !Number.isFinite(deposit) || deposit < 0) throw hotelError('ROOM_PRICING_INVALID', 409);
-          const total = Math.round(day_price * order.days * 100) / 100;
+          const dayPriceMinor = parseMinorUnits(rooms[0].day_price, { allowZero: true, maxMinor: 10000000000 });
+          const depositMinor = parseMinorUnits(rooms[0].deposit, { allowZero: true, maxMinor: 10000000000 });
+          if (dayPriceMinor === null || depositMinor === null) throw hotelError('ROOM_PRICING_INVALID', 409);
+          const totalMinor = dayPriceMinor * order.days;
+          if (!Number.isSafeInteger(totalMinor)) throw hotelError('ROOM_PRICING_INVALID', 409);
+          const day_price = dayPriceMinor / 100, deposit = depositMinor / 100, total = totalMinor / 100;
           const record = { ...order, day_price, deposit, total, status: 'booked' };
           const inserted = await tx.insert('orders', record);
           await tx.updateById('rooms', order.room_id, { status: 'booked' });
