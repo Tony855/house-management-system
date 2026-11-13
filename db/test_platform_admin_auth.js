@@ -3,6 +3,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const { createPlatformAdminAuthService } = require('../services/platform-api/admin-auth');
+const { hashPassword } = require('../server/util');
 
 function fixture(overrides = {}) {
   const calls = [];
@@ -274,4 +275,26 @@ test('platform auth rejects non-canonical base64url token segments', async () =>
 test('platform auth rejects unsafe lifetime configuration at construction', () => {
   assert.throws(() => fixture({ sessionLifetimeSeconds: 0 }), /PLATFORM_ADMIN_AUTH_CONFIG_INVALID/);
   assert.throws(() => fixture({ challengeLifetimeSeconds: 601 }), /PLATFORM_ADMIN_AUTH_CONFIG_INVALID/);
+});
+
+
+test('default platform admin password verification is asynchronous and validates scrypt hashes', async () => {
+  const passwordHash = hashPassword('correct');
+  const { service } = fixture({
+    verifyPassword: undefined,
+    adminStore: {
+      findByUsername: async username => username === 'root'
+        ? { id: 7, status: 'active', mfaRequired: true, passwordHash, permissions: ['platform:read'] }
+        : null,
+      findById: async id => id === 7
+        ? { id: 7, status: 'active', mfaRequired: true, permissions: ['platform:read'] }
+        : null
+    }
+  });
+  const challenge = await service.login({ username: 'root', password: 'correct' });
+  assert.equal(challenge.mfaRequired, true);
+  await assert.rejects(
+    service.login({ username: 'root', password: 'wrong' }),
+    error => error.code === 'INVALID_CREDENTIALS'
+  );
 });
