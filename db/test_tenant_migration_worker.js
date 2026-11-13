@@ -102,3 +102,24 @@ test('worker rejects lease operation timeouts that could exceed the lease', () =
     executeJob: async () => {}
   }), /TENANT_MIGRATION_JOB_OPERATION_TIMEOUT_INVALID/);
 });
+
+
+test('worker bounds initial job lookup and claim operations that never resolve', async () => {
+  const lookupWorker = createPlatformTenantMigrationWorker({
+    store: fakeStore({ getJob: () => new Promise(() => {}) }),
+    workerId: 'worker-a', leaseSeconds: 30, leaseOperationTimeoutMs: 10,
+    executeJob: async () => { throw new Error('must not execute'); }
+  });
+  await assert.rejects(lookupWorker.runJob(8),
+    error => error.code === 'TENANT_MIGRATION_JOB_LEASE_OPERATION_TIMEOUT');
+
+  let executed = false;
+  const claimWorker = createPlatformTenantMigrationWorker({
+    store: fakeStore({ claimJob: () => new Promise(() => {}) }),
+    workerId: 'worker-a', leaseSeconds: 30, leaseOperationTimeoutMs: 10,
+    executeJob: async () => { executed = true; }
+  });
+  await assert.rejects(claimWorker.runJob(8),
+    error => error.code === 'TENANT_MIGRATION_JOB_LEASE_OPERATION_TIMEOUT');
+  assert.equal(executed, false);
+});
