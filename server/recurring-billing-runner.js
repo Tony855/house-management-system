@@ -1,5 +1,14 @@
 'use strict';
 
+function withTimeout(operation, timeoutMs, code) {
+  let timer;
+  const pending = Promise.resolve().then(operation);
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(Object.assign(new Error(code), { code })), timeoutMs);
+  });
+  return Promise.race([pending, timeout]).finally(() => clearTimeout(timer));
+}
+
 function localDateParts(now, timeZone) {
   const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone, year: 'numeric', month: '2-digit', day: '2-digit'
@@ -11,18 +20,18 @@ function localDateParts(now, timeZone) {
 function createRecurringBillingRunner({
   store, dispatcher, workerId, timeZone = 'Asia/Phnom_Penh',
   pollIntervalMs = 60000, scanBatchSize = 100, dispatchBatchSize = 20,
-  now = () => new Date(), onError = () => {}
+  scanOperationTimeoutMs = 30000, now = () => new Date(), onError = () => {}
 } = {}) {
   if (!store || typeof store.enqueueActiveTenants !== 'function') throw new TypeError('BILLING_RUNNER_STORE_REQUIRED');
   if (!dispatcher || typeof dispatcher.tick !== 'function') throw new TypeError('BILLING_RUNNER_DISPATCHER_REQUIRED');
   if (typeof workerId !== 'string' || !/^[A-Za-z0-9._:-]{1,100}$/.test(workerId)) throw new TypeError('BILLING_RUNNER_WORKER_INVALID');
   if (!Number.isInteger(pollIntervalMs) || pollIntervalMs < 1000 || pollIntervalMs > 3600000 ||
       !Number.isInteger(scanBatchSize) || scanBatchSize < 1 || scanBatchSize > 500 ||
-      !Number.isInteger(dispatchBatchSize) || dispatchBatchSize < 1 || dispatchBatchSize > 100) {
+      !Number.isInteger(dispatchBatchSize) || dispatchBatchSize < 1 || dispatchBatchSize > 100 ||
+      !Number.isInteger(scanOperationTimeoutMs) || scanOperationTimeoutMs < 1 || scanOperationTimeoutMs > 300000) {
     throw new TypeError('BILLING_RUNNER_CONFIG_INVALID');
   }
   if (typeof onError !== 'function' || typeof now !== 'function') throw new TypeError('BILLING_RUNNER_CALLBACK_INVALID');
-  // Validate the timezone at construction, not after the worker has started.
   new Intl.DateTimeFormat('en-CA', { timeZone }).format(new Date());
   let timer = null, stopping = false, ticking = false;
   function report(error) {
@@ -34,7 +43,15 @@ function createRecurringBillingRunner({
     let cursor = '';
     let totalScanned = 0, totalEnqueued = 0;
     for (;;) {
-      const result = await store.enqueueActiveTenants({ appId, periodKey, afterTenantId: cursor, limit: scanBatchSize });
+      const result = await withTimeout(
+        () => store.enqueueActiveTenants({ appId, periodKey, afterTenantId: cursor, limit: scanBatchSize }),
+        scanOperationTimeoutMs, 'BILLING_RUNNER_SCAN_TIMEOUT'
+      );
+      if (!result || !Number.isSafeInteger(result.scanned) || result.scanned < 0 ||
+          !Number.isSafeInteger(result.enqueued) || result.enqueued < 0 ||
+          (result.nextCursor !== null && typeof result.nextCursor !== 'string')) {
+        throw Object.assign(new Error('BILLING_RUNNER_SCAN_RESULT_INVALID'), { code: 'BILLING_RUNNER_SCAN_RESULT_INVALID' });
+      }
       totalScanned += result.scanned;
       totalEnqueued += result.enqueued;
       if (!result.nextCursor) break;
@@ -48,10 +65,7 @@ function createRecurringBillingRunner({
     ticking = true;
     try {
       const { date, month } = localDateParts(now(), timeZone);
-      const scans = await Promise.all([
-        scan('rental', date),
-        scan('property', month)
-      ]);
+      const scans = await Promise.all([scan('rental', date), scan('property', month)]);
       const dispatched = await dispatcher.tick({ limit: dispatchBatchSize });
       return Object.freeze({ scans, dispatched });
     } catch (error) {
