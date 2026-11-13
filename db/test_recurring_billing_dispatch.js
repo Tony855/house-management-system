@@ -266,3 +266,12 @@ test('dispatcher rejects heartbeat cadence that leaves less than two thirds of l
     leaseSeconds: 30, heartbeatIntervalMs: 10001
   }), /RECURRING_BILLING_HEARTBEAT_INVALID/);
 });
+
+
+test('dispatcher rejects lease operation timeouts that consume the renewal safety margin', () => {
+  assert.throws(() => createRecurringBillingDispatcher({
+    store: { listRunnable() {}, claim() {}, markDispatched() {}, markFailed() {}, renewLease() {} },
+    workerId: 'worker-a', enqueueTenantJob: async () => {},
+    leaseSeconds: 30, leaseOperationTimeoutMs: 10001
+  }), /RECURRING_BILLING_LEASE_OPERATION_TIMEOUT_INVALID/);
+});
