@@ -123,3 +123,11 @@ test('worker bounds initial job lookup and claim operations that never resolve',
     error => error.code === 'TENANT_MIGRATION_JOB_LEASE_OPERATION_TIMEOUT');
   assert.equal(executed, false);
 });
+
+
+test('worker rejects operation timeout that can outlive the lease safety margin', () => {
+  assert.throws(() => createPlatformTenantMigrationWorker({
+    store: fakeStore(), workerId: 'worker-a', leaseSeconds: 30,
+    leaseOperationTimeoutMs: 10001, executeJob: async () => {}
+  }), /TENANT_MIGRATION_JOB_OPERATION_TIMEOUT_INVALID/);
+});
