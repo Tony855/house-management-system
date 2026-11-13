@@ -29,7 +29,8 @@ function createPlatformTenantMigrationWorker({ store, workerId, executeJob, leas
   if (!Number.isInteger(leaseSeconds) || leaseSeconds < 30 || leaseSeconds > 3600) {
     throw new TypeError('TENANT_MIGRATION_JOB_LEASE_INVALID');
   }
-  if (!Number.isInteger(leaseOperationTimeoutMs) || leaseOperationTimeoutMs < 1 || leaseOperationTimeoutMs >= leaseSeconds * 1000) {
+  if (!Number.isInteger(leaseOperationTimeoutMs) || leaseOperationTimeoutMs < 1 ||
+      leaseOperationTimeoutMs > Math.floor(leaseSeconds * 1000 / 3)) {
     throw new TypeError('TENANT_MIGRATION_JOB_OPERATION_TIMEOUT_INVALID');
   }
   async function withLeaseTimeout(operation) {
