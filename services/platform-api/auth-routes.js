@@ -95,10 +95,16 @@ function createPlatformAuthRouter({ authService, mfaService, auditStore, adminSt
       if (!Number.isSafeInteger(targetAdminId) || targetAdminId < 1) {
         return next(Object.assign(new Error('PLATFORM_ADMIN_ID_INVALID'), { code: 'PLATFORM_ADMIN_ID_INVALID', status: 400 }));
       }
+      const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
+      if (reason.length < 8 || reason.length > 500 || /[\\u0000-\\u001f\\u007f]/.test(reason)) {
+        return next(Object.assign(new Error('PLATFORM_ACTION_REASON_REQUIRED'), {
+          code: 'PLATFORM_ACTION_REASON_REQUIRED', status: 400
+        }));
+      }
       if (!adminStore || typeof adminStore.disableAdmin !== 'function') {
         return next(Object.assign(new Error('PLATFORM_ADMIN_MANAGEMENT_UNAVAILABLE'), { code: 'PLATFORM_ADMIN_MANAGEMENT_UNAVAILABLE', status: 503 }));
       }
-      const disabled = await adminStore.disableAdmin({ actorAdminId: req.platformAuth.adminId, targetAdminId, sessionId: req.platformAuth.sessionId });
+      const disabled = await adminStore.disableAdmin({ actorAdminId: req.platformAuth.adminId, targetAdminId, sessionId: req.platformAuth.sessionId, reason });
       if (disabled !== true) {
         return next(Object.assign(new Error('PLATFORM_ADMIN_DISABLE_REJECTED'), { code: 'PLATFORM_ADMIN_DISABLE_REJECTED', status: 409 }));
       }
