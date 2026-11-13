@@ -100,7 +100,7 @@ function createPlatformTenantMigrationJobStore(pool) {
     },
     async renewLease({ id, workerId, leaseToken, leaseSeconds = 300 }) {
       if (!Number.isSafeInteger(id) || id < 1) throw new TypeError('TENANT_MIGRATION_JOB_ID_INVALID');
-      assertWorker(workerId); assertLease(leaseSeconds);
+      assertWorker(workerId); assertLease(leaseSeconds); if (typeof leaseToken !== 'string' || !leaseToken) throw new TypeError('TENANT_MIGRATION_JOB_LEASE_TOKEN_INVALID');
       const [result] = await pool.query(
         "UPDATE platform_tenant_migration_jobs SET lease_expires_at = DATE_ADD(UTC_TIMESTAMP(), INTERVAL ? SECOND), updated_at = UTC_TIMESTAMP() WHERE id = ? AND state = 'running' AND lease_owner = ? AND lease_token = ? AND lease_expires_at > UTC_TIMESTAMP()",
         [leaseSeconds, id, workerId, leaseToken]
