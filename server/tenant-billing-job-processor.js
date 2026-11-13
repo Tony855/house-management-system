@@ -9,13 +9,19 @@ const {buildNextRentalBill}=require('../services/rental-api/write-routes');
 const {buildPropertyFeeBill}=require('../services/shared/property-fee-routes');
 const JOBS={rental:'rental_bill',property:'property_fee'},CHUNK_SIZE=50,LEASE_SECONDS=120,MAX_ATTEMPTS=8,MAX_CHUNK_SIZE=200;
 const dateOnly=v=>v instanceof Date?v.toISOString().slice(0,10):String(v).slice(0,10);
+function withTimeout(operation,timeoutMs,code){
+ let timer;
+ const pending=Promise.resolve().then(operation);
+ const timeout=new Promise((_,reject)=>{timer=setTimeout(()=>reject(fail(code,503)),timeoutMs);});
+ return Promise.race([pending,timeout]).finally(()=>clearTimeout(timer));
+}
 function fail(code,status=409){return Object.assign(new Error(code),{code,status});}
-function createTenantBillingJobProcessor({registry,secretProvider,tenantPoolManager,authorizeSystem,appIds=['rental','property'],leaseSeconds=LEASE_SECONDS,chunkSize=CHUNK_SIZE,createToken=crypto.randomUUID}={}){
+function createTenantBillingJobProcessor({registry,secretProvider,tenantPoolManager,authorizeSystem,appIds=['rental','property'],leaseSeconds=LEASE_SECONDS,chunkSize=CHUNK_SIZE,scanTimeoutMs=30000,createToken=crypto.randomUUID}={}){
  if(!registry||typeof registry.findTenantById!=='function'||typeof registry.listActiveTenants!=='function')throw new TypeError('BILLING_PROCESSOR_REGISTRY_REQUIRED');
  if(!secretProvider||typeof secretProvider.getDatabaseCredentials!=='function')throw new TypeError('BILLING_PROCESSOR_SECRET_PROVIDER_REQUIRED');
  if(!tenantPoolManager||typeof tenantPoolManager.getPool!=='function')throw new TypeError('BILLING_PROCESSOR_POOL_MANAGER_REQUIRED');
  if(typeof authorizeSystem!=='function')throw new TypeError('BILLING_PROCESSOR_SYSTEM_AUTHORIZER_REQUIRED');
- if(!Number.isInteger(leaseSeconds)||leaseSeconds<30||leaseSeconds>3600||!Number.isInteger(chunkSize)||chunkSize<1||chunkSize>MAX_CHUNK_SIZE||typeof createToken!=='function')throw new TypeError('BILLING_PROCESSOR_LEASE_CONFIG_INVALID');
+ if(!Number.isInteger(leaseSeconds)||leaseSeconds<30||leaseSeconds>3600||!Number.isInteger(chunkSize)||chunkSize<1||chunkSize>MAX_CHUNK_SIZE||!Number.isInteger(scanTimeoutMs)||scanTimeoutMs<1||scanTimeoutMs>300000||typeof createToken!=='function')throw new TypeError('BILLING_PROCESSOR_LEASE_CONFIG_INVALID');
  if(!Array.isArray(appIds)||appIds.length<1||appIds.some(app=>!Object.hasOwn(JOBS,app))||new Set(appIds).size!==appIds.length)throw new TypeError('BILLING_PROCESSOR_APP_SCOPE_INVALID');
  const systemWrite=createTenantSystemWriteService({authorizeSystem,auditWriter:createMariaDbTenantWriteAuditStore(),idempotencyStore:createMariaDbTenantWriteIdempotencyStore()});
  const scanCursors=new Map(appIds.map(appId=>[appId,'']));
@@ -24,7 +30,7 @@ function createTenantBillingJobProcessor({registry,secretProvider,tenantPoolMana
   const previous=scanQueues.get(appId)||Promise.resolve();
   const operation=previous.then(async()=>{
    const afterTenantId=scanCursors.get(appId)||'';
-   const page=await registry.listActiveTenants({appId,afterTenantId,limit});
+   const page=await withTimeout(()=>registry.listActiveTenants({appId,afterTenantId,limit}),scanTimeoutMs,'BILLING_TENANT_SCAN_TIMEOUT');
    if(!page||!Array.isArray(page.tenantIds)||page.tenantIds.length>limit||
       (page.nextCursor!==null&&typeof page.nextCursor!=='string')||
       page.tenantIds.some(id=>typeof id!=='string'||!/^[0-9a-f-]{36}$/i.test(id))){
