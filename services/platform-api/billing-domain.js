@@ -9,7 +9,10 @@ function currencyExponent(currency) {
 function toMinorUnits(value, currency) {
   const exponent = currencyExponent(currency);
   const input = typeof value === 'number' ? String(value) : value;
-  const match = typeof input === 'string' && input.match(/^(0|[1-9]\d*)(?:\.(\d+))?$/);
+  // Reject oversized decimal strings before BigInt parsing; API payload limits
+  // alone still allow a single field to trigger disproportionate CPU/memory.
+  const match = typeof input === 'string' && input.length <= 32 &&
+    input.match(/^(0|[1-9]\d*)(?:\.(\d+))?$/);
   if (!match) throw new Error('BILLING_AMOUNT_INVALID');
   const whole = match[1], fraction = match[2] || '';
   if (fraction.length > exponent) throw new Error('BILLING_AMOUNT_PRECISION_INVALID');
