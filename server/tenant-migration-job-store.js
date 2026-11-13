@@ -91,12 +91,19 @@ function createPlatformTenantMigrationJobStore(pool) {
     async claimJob({ id, workerId, leaseSeconds = 300 }) {
       if (!Number.isSafeInteger(id) || id < 1) throw new TypeError('TENANT_MIGRATION_JOB_ID_INVALID');
       assertWorker(workerId); assertLease(leaseSeconds);
+      const leaseToken = crypto.randomUUID();
       const [result] = await pool.query(
         "UPDATE platform_tenant_migration_jobs SET state = 'running', lease_owner = ?, lease_token = ?, lease_expires_at = DATE_ADD(UTC_TIMESTAMP(), INTERVAL ? SECOND), attempt_count = attempt_count + 1, error_code = NULL, updated_at = UTC_TIMESTAMP() WHERE id = ? AND (state = 'queued' OR (state = 'running' AND lease_expires_at <= UTC_TIMESTAMP()))",
-        [workerId, crypto.randomUUID(), leaseSeconds, id]
+        [workerId, leaseToken, leaseSeconds, id]
       );
       if (Number(result.affectedRows) !== 1) return null;
-      return findById(id);
+      // Never read back by job ID alone: a later claimant may have replaced
+      // this lease before the SELECT completes. Return only this exact claim.
+      const [rows] = await pool.query(
+        'SELECT ' + columns + ' FROM platform_tenant_migration_jobs WHERE id = ? AND lease_owner = ? AND lease_token = ? AND lease_expires_at > UTC_TIMESTAMP() LIMIT 1',
+        [id, workerId, leaseToken]
+      );
+      return rows[0] ? decode(rows[0]) : null;
     },
     async renewLease({ id, workerId, leaseToken, leaseSeconds = 300 }) {
       if (!Number.isSafeInteger(id) || id < 1) throw new TypeError('TENANT_MIGRATION_JOB_ID_INVALID');
