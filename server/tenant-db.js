@@ -20,6 +20,7 @@ class TenantPoolManager {
     this.tenantEpoch = new Map();
     this.creationQueue = Promise.resolve();
     this.closed = false;
+    this.closePromise = null;
   }
 
   _key(context) {
@@ -145,15 +146,19 @@ class TenantPoolManager {
   }
 
   async closeAll() {
+    if (this.closePromise) return this.closePromise;
     this.closed = true;
-    const pending = Array.from(this.pending.values());
-    const tenantIds = new Set([...this.entries.values()].map(entry => entry.tenantId));
-    for (const item of pending) tenantIds.add(item.tenantId);
-    for (const tenantId of tenantIds) this.tenantEpoch.set(tenantId, (this.tenantEpoch.get(tenantId) || 0) + 1);
-    const entries = Array.from(this.entries.values());
-    this.entries.clear();
-    await Promise.all(entries.map(entry => this._close(entry)));
-    await Promise.all(pending.map(item => item.promise.catch(() => {})));
+    this.closePromise = (async () => {
+      const pending = Array.from(this.pending.values());
+      const tenantIds = new Set([...this.entries.values()].map(entry => entry.tenantId));
+      for (const item of pending) tenantIds.add(item.tenantId);
+      for (const tenantId of tenantIds) this.tenantEpoch.set(tenantId, (this.tenantEpoch.get(tenantId) || 0) + 1);
+      const entries = Array.from(this.entries.values());
+      this.entries.clear();
+      await Promise.all(entries.map(entry => this._close(entry)));
+      await Promise.all(pending.map(item => item.promise.catch(() => {})));
+    })();
+    return this.closePromise;
   }
 
   get size() { return this.entries.size; }
