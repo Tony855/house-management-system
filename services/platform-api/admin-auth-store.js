@@ -125,10 +125,11 @@ function createPlatformAdminAuthStore(pool) {
       return Number(result.affectedRows) === 1;
     }
     ,
-    async disableAdmin({ actorAdminId, targetAdminId, sessionId }) {
+    async disableAdmin({ actorAdminId, targetAdminId, sessionId, reason }) {
       if (!Number.isSafeInteger(actorAdminId) || actorAdminId < 1 ||
           !Number.isSafeInteger(targetAdminId) || targetAdminId < 1 || actorAdminId === targetAdminId ||
-          typeof sessionId !== 'string' || !/^[A-Za-z0-9._~-]{16,128}$/.test(sessionId)) return false;
+          typeof sessionId !== 'string' || !/^[A-Za-z0-9._~-]{16,128}$/.test(sessionId) ||
+          typeof reason !== 'string' || reason.trim().length < 8 || reason.trim().length > 500 || /[\u0000-\u001f\u007f]/.test(reason)) return false;
       if (typeof pool.getConnection !== 'function') throw new TypeError('PLATFORM_ADMIN_TRANSACTION_REQUIRED');
       const connection = await pool.getConnection();
       try {
@@ -154,8 +155,8 @@ function createPlatformAdminAuthStore(pool) {
           [targetAdminId]
         );
         await connection.query(
-          'INSERT INTO platform_admin_audit_events (admin_id, session_id, action, outcome, detail_code) VALUES (?, ?, ?, ?, ?)',
-          [actorAdminId, sessionId, 'admin.disable', 'success', 'TARGET_ADMIN_' + targetAdminId]
+          'INSERT INTO platform_admin_audit_events (admin_id, session_id, action, outcome, detail_code, reason) VALUES (?, ?, ?, ?, ?, ?)',
+          [actorAdminId, sessionId, 'admin.disable', 'success', 'TARGET_ADMIN_' + targetAdminId, reason.trim()]
         );
         await connection.commit();
         return true;
