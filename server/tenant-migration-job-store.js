@@ -74,13 +74,22 @@ function createPlatformTenantMigrationJobStore(pool) {
       }
       return job;
     },
-    async listRunnableJobs({ limit = 10 } = {}) {
+    async listRunnableJobs({ limit = 10, maxAttempts = 8 } = {}) {
       if (!Number.isInteger(limit) || limit < 1 || limit > 50) {
         throw new TypeError('TENANT_MIGRATION_JOB_LIST_LIMIT_INVALID');
       }
+      if (!Number.isInteger(maxAttempts) || maxAttempts < 1 || maxAttempts > 20) {
+        throw new TypeError('TENANT_MIGRATION_JOB_RETRY_LIMIT_INVALID');
+      }
+      // Reap jobs whose worker repeatedly died after claiming; no worker can
+      // call failJob in that crash path, so expired leases must exhaust too.
+      await pool.query(
+        "UPDATE platform_tenant_migration_jobs SET state = 'failed', lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL, error_code = 'TENANT_MIGRATION_ATTEMPTS_EXHAUSTED', updated_at = UTC_TIMESTAMP() WHERE state = 'running' AND lease_expires_at <= UTC_TIMESTAMP() AND attempt_count >= ?",
+        [maxAttempts]
+      );
       const [rows] = await pool.query(
-        "SELECT " + columns + " FROM platform_tenant_migration_jobs WHERE state = 'queued' OR (state = 'running' AND lease_expires_at <= UTC_TIMESTAMP()) ORDER BY created_at ASC, id ASC LIMIT ?",
-        [limit]
+        "SELECT " + columns + " FROM platform_tenant_migration_jobs WHERE attempt_count < ? AND (state = 'queued' OR (state = 'running' AND lease_expires_at <= UTC_TIMESTAMP())) ORDER BY created_at ASC, id ASC LIMIT ?",
+        [maxAttempts, limit]
       );
       return rows.map(decode);
     },
@@ -88,13 +97,14 @@ function createPlatformTenantMigrationJobStore(pool) {
       if (!Number.isSafeInteger(id) || id < 1) throw new TypeError('TENANT_MIGRATION_JOB_ID_INVALID');
       return findById(id);
     },
-    async claimJob({ id, workerId, leaseSeconds = 300 }) {
+    async claimJob({ id, workerId, leaseSeconds = 300, maxAttempts = 8 }) {
       if (!Number.isSafeInteger(id) || id < 1) throw new TypeError('TENANT_MIGRATION_JOB_ID_INVALID');
       assertWorker(workerId); assertLease(leaseSeconds);
+      if (!Number.isInteger(maxAttempts) || maxAttempts < 1 || maxAttempts > 20) throw new TypeError('TENANT_MIGRATION_JOB_RETRY_LIMIT_INVALID');
       const leaseToken = crypto.randomUUID();
       const [result] = await pool.query(
-        "UPDATE platform_tenant_migration_jobs SET state = 'running', lease_owner = ?, lease_token = ?, lease_expires_at = DATE_ADD(UTC_TIMESTAMP(), INTERVAL ? SECOND), attempt_count = attempt_count + 1, error_code = NULL, updated_at = UTC_TIMESTAMP() WHERE id = ? AND (state = 'queued' OR (state = 'running' AND lease_expires_at <= UTC_TIMESTAMP()))",
-        [workerId, leaseToken, leaseSeconds, id]
+        "UPDATE platform_tenant_migration_jobs SET state = 'running', lease_owner = ?, lease_token = ?, lease_expires_at = DATE_ADD(UTC_TIMESTAMP(), INTERVAL ? SECOND), attempt_count = attempt_count + 1, error_code = NULL, updated_at = UTC_TIMESTAMP() WHERE id = ? AND attempt_count < ? AND (state = 'queued' OR (state = 'running' AND lease_expires_at <= UTC_TIMESTAMP()))",
+        [workerId, leaseToken, leaseSeconds, id, maxAttempts]
       );
       if (Number(result.affectedRows) !== 1) return null;
       // Never read back by job ID alone: a later claimant may have replaced
@@ -140,7 +150,7 @@ function createPlatformTenantMigrationJobStore(pool) {
         throw new TypeError('TENANT_MIGRATION_JOB_RETRY_INPUT_INVALID');
       }
       const [result] = await pool.query(
-        "UPDATE platform_tenant_migration_jobs SET state = 'queued', error_code = NULL, lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL, updated_at = UTC_TIMESTAMP() WHERE id = ? AND state = 'failed' AND attempt_count = ?",
+        "UPDATE platform_tenant_migration_jobs SET state = 'queued', attempt_count = 0, error_code = NULL, lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL, updated_at = UTC_TIMESTAMP() WHERE id = ? AND state = 'failed' AND attempt_count = ?",
         [id, expectedAttemptCount]
       );
       return Number(result.affectedRows) === 1;
