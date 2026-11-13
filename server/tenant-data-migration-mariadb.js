@@ -157,19 +157,20 @@ function createMariaDbTenantMigrationAdapters({ appId, sourcePool, targetPool })
         throw error;
       } finally {
         abortBinding.cleanup();
-        if (abortBinding.isDestroyed()) return;
-        let discardConnection = false;
-        if (lockAcquired) {
-          try {
-            const [releaseRows] = await connection.execute('SELECT RELEASE_LOCK(?) AS released', [lockName]);
-            if (Number(releaseRows[0]?.released) !== 1) discardConnection = true;
-          } catch (_) {
-            // Never return a pooled connection with an advisory lock to the pool.
-            discardConnection = true;
+        if (!abortBinding.isDestroyed()) {
+          let discardConnection = false;
+          if (lockAcquired) {
+            try {
+              const [releaseRows] = await connection.execute('SELECT RELEASE_LOCK(?) AS released', [lockName]);
+              if (Number(releaseRows[0]?.released) !== 1) discardConnection = true;
+            } catch (_) {
+              // Never return a pooled connection with an advisory lock to the pool.
+              discardConnection = true;
+            }
           }
+          if (discardConnection && typeof connection.destroy === 'function') connection.destroy();
+          else connection.release();
         }
-        if (discardConnection && typeof connection.destroy === 'function') connection.destroy();
-        else connection.release();
       }
     }
   });
