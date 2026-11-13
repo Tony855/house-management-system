@@ -121,8 +121,8 @@ function buildNextRentalBill(contract, lastPeriodEnd, today) {
       !validDate(today) || (lastPeriodEnd && !validDate(lastPeriodEnd))) throw contractError('RENTAL_BILL_CONTEXT_INVALID');
   if (contract.status !== 'active') throw contractError('CONTRACT_NOT_ACTIVE', 409);
   const cycle = Number(contract.pay_cycle) || 1;
-  const rent = Number(contract.rent);
-  if (!Number.isSafeInteger(cycle) || cycle < 1 || cycle > 36 || !Number.isFinite(rent) || rent < 0) throw contractError('RENTAL_BILL_CONTEXT_INVALID');
+  const rentMinor = parseMinorUnits(contract.rent, { allowZero: true, maxMinor: 10000000000 });
+  if (!Number.isSafeInteger(cycle) || cycle < 1 || cycle > 36 || rentMinor === null) throw contractError('RENTAL_BILL_CONTEXT_INVALID');
   const periodStart = lastPeriodEnd ? addCalendarDays(lastPeriodEnd, 1) : contract.start_date;
   if (periodStart > today) throw contractError('RENTAL_BILL_NOT_DUE', 409);
   if (periodStart > contract.end_date) throw contractError('CONTRACT_PERIOD_FINISHED', 409);
@@ -131,7 +131,7 @@ function buildNextRentalBill(contract, lastPeriodEnd, today) {
   return Object.freeze({
     source: 'rental', room_id: Number(contract.room_id), tenant_id: Number(contract.tenant_id),
     contract_id: Number(contract.id), period_start: periodStart, period_end: periodEnd,
-    due_date: periodStart, amount: Math.round(rent * cycle * 100) / 100,
+    due_date: periodStart, amount: (rentMinor * cycle) / 100,
     paid_amount: 0, status: 'unpaid', remark: '合同 ' + contract.contract_no
   });
 }
