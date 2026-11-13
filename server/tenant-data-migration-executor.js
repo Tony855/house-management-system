@@ -48,6 +48,7 @@ function createTenantDataMigrationExecutor({ resolveConnections, heartbeatInterv
     if (typeof timer.unref === 'function') timer.unref();
 
     let connections;
+    let executionError = null;
     try {
       await beat();
       if (heartbeatFailure) throw heartbeatFailure;
@@ -85,9 +86,22 @@ function createTenantDataMigrationExecutor({ resolveConnections, heartbeatInterv
         sourceOrgId: result.sourceOrgId, manifest: result.manifest,
         copied: result.copied, cutover: false
       });
+    } catch (error) {
+      executionError = error;
+      throw error;
     } finally {
       clearInterval(timer);
-      if (connections?.close) await connections.close();
+      if (connections?.close) {
+        try { await connections.close(); }
+        catch (closeError) {
+          if (executionError) {
+            executionError.cleanupError = typeof closeError?.code === 'string'
+              ? closeError.code : 'TENANT_MIGRATION_CONNECTION_CLEANUP_FAILED';
+          } else {
+            throw closeError;
+          }
+        }
+      }
     }
   };
 }
