@@ -89,8 +89,16 @@ test('Platform API mounts password login, MFA lifecycle, step-up, admin disable 
     assert.equal(stepUp.status, 200);
     assert.equal((await stepUp.json()).stepUpVerified, true);
 
-    const disabled = await fetch(base + '/api/platform/auth/admins/8/disable', {
+    const missingDisableReason = await fetch(base + '/api/platform/auth/admins/8/disable', {
       method: 'POST', headers: { authorization: 'Bearer session-token' }
+    });
+    assert.equal(missingDisableReason.status, 400);
+    assert.deepEqual(await missingDisableReason.json(), { error: 'PLATFORM_ACTION_REASON_REQUIRED' });
+
+    const disabled = await fetch(base + '/api/platform/auth/admins/8/disable', {
+      method: 'POST', headers: {
+        authorization: 'Bearer session-token', 'content-type': 'application/json'
+      }, body: JSON.stringify({ reason: 'Confirmed compromised administrator account' })
     });
     assert.equal(disabled.status, 204);
 
@@ -107,7 +115,7 @@ test('Platform API mounts password login, MFA lifecycle, step-up, admin disable 
   assert.deepEqual(calls[5][1], { adminId: 7, code: '123456' });
   assert.deepEqual(calls[6][1], { adminId: 7, sessionId: 'session-id-1234567890', code: '123456' });
   assert.deepEqual(calls[7][1], {
-    actorAdminId: 7, targetAdminId: 8, sessionId: 'session-id-1234567890'
+    actorAdminId: 7, targetAdminId: 8, sessionId: 'session-id-1234567890', reason: 'Confirmed compromised administrator account'
   });
 });
 
