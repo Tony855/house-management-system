@@ -2,7 +2,7 @@
 
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { hashPassword, verifyPassword, verifyPasswordAsync } = require('../server/util');
+const { hashPassword, hashPasswordAsync, verifyPassword, verifyPasswordAsync } = require('../server/util');
 
 test('sync and async password verifiers accept existing scrypt hashes', async () => {
   const stored = hashPassword('correct horse');
@@ -16,4 +16,12 @@ test('password verifiers reject malformed stored hashes without throwing', async
     assert.equal(verifyPassword('password', value), false);
     assert.equal(await verifyPasswordAsync('password', value), false);
   }
+});
+
+
+test('async password hashing produces hashes compatible with existing verifiers', async () => {
+  const stored = await hashPasswordAsync('new password');
+  assert.equal(verifyPassword('new password', stored), true);
+  assert.equal(await verifyPasswordAsync('new password', stored), true);
+  assert.equal(await verifyPasswordAsync('wrong password', stored), false);
 });
