@@ -2,7 +2,7 @@
 
 // Parse decimal currency input without binary floating-point multiplication.
 // Returns integer minor units or null when the value is not a plain 2dp amount.
-function parseMinorUnits(value, { allowZero = false, maxMinor = 1000000000 } = {}) {
+function parseMinorUnits(value, { allowZero = false, allowNegative = false, maxMinor = 1000000000 } = {}) {
   if (typeof value !== 'number' && typeof value !== 'string') return null;
   if (typeof value === 'number' && !Number.isFinite(value)) return null;
   const text = String(value);
