@@ -11,7 +11,7 @@ function fakeStore(overrides = {}) {
   return {
     calls,
     async getJob() { return baseJob; },
-    async claimJob(input) { calls.push(['claim', input]); return { ...baseJob, state: 'running' }; },
+    async claimJob(input) { calls.push(['claim', input]); return { ...baseJob, state: 'running', leaseToken: 'lease-token-1' }; },
     async renewLease(input) { calls.push(['heartbeat', input]); return true; },
     async saveCheckpoint(input) { calls.push(['checkpoint', input]); return true; },
     async completeJob(input) { calls.push(['complete', input]); return true; },
@@ -35,6 +35,7 @@ test('worker claims, resumes from checkpoint, heartbeats, checkpoints and comple
   const result = await worker.runJob(8);
   assert.equal(result.state, 'completed');
   assert.deepEqual(store.calls.map(call => call[0]), ['claim', 'heartbeat', 'checkpoint', 'complete']);
+  for (const call of store.calls.filter(call => ['heartbeat', 'checkpoint', 'complete'].includes(call[0]))) assert.equal(call[1].leaseToken, 'lease-token-1');
 });
 
 test('worker fails closed and records only a sanitized error code', async () => {
