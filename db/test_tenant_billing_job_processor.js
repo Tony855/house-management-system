@@ -85,3 +85,23 @@ test('billing processor bounds a platform tenant scan that never resolves', asyn
   error=>error.code==='BILLING_TENANT_SCAN_TIMEOUT'&&error.status===503
  );
 });
+
+
+test('billing processor rejects malformed tenant IDs and mismatched page cursors', async () => {
+ const invalidId=setup({
+  appId:'rental',appIds:['rental'],
+  listActiveTenants:async()=>({tenantIds:['not-a-tenant-uuid'],nextCursor:null})
+ });
+ await assert.rejects(
+  invalidId.processor.processNextBatch({workerId:'billing-worker-invalid'}),
+  error=>error.code==='BILLING_TENANT_SCAN_RESULT_INVALID'
+ );
+ const invalidCursor=setup({
+  appId:'rental',appIds:['rental'],
+  listActiveTenants:async()=>({tenantIds:[tenantId],nextCursor:'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'})
+ });
+ await assert.rejects(
+  invalidCursor.processor.processNextBatch({workerId:'billing-worker-invalid'}),
+  error=>error.code==='BILLING_TENANT_SCAN_RESULT_INVALID'
+ );
+});
