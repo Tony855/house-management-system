@@ -20,7 +20,7 @@ function localDateParts(now, timeZone) {
 function createRecurringBillingRunner({
   store, dispatcher, workerId, timeZone = 'Asia/Phnom_Penh',
   pollIntervalMs = 60000, scanBatchSize = 100, dispatchBatchSize = 20,
-  scanOperationTimeoutMs = 30000, now = () => new Date(), onError = () => {}
+  scanOperationTimeoutMs = 30000, stopGraceMs = 30000, now = () => new Date(), onError = () => {}
 } = {}) {
   if (!store || typeof store.enqueueActiveTenants !== 'function') throw new TypeError('BILLING_RUNNER_STORE_REQUIRED');
   if (!dispatcher || typeof dispatcher.tick !== 'function') throw new TypeError('BILLING_RUNNER_DISPATCHER_REQUIRED');
@@ -28,12 +28,13 @@ function createRecurringBillingRunner({
   if (!Number.isInteger(pollIntervalMs) || pollIntervalMs < 1000 || pollIntervalMs > 3600000 ||
       !Number.isInteger(scanBatchSize) || scanBatchSize < 1 || scanBatchSize > 500 ||
       !Number.isInteger(dispatchBatchSize) || dispatchBatchSize < 1 || dispatchBatchSize > 100 ||
-      !Number.isInteger(scanOperationTimeoutMs) || scanOperationTimeoutMs < 1 || scanOperationTimeoutMs > 300000) {
+      !Number.isInteger(scanOperationTimeoutMs) || scanOperationTimeoutMs < 1 || scanOperationTimeoutMs > 300000 ||
+      !Number.isInteger(stopGraceMs) || stopGraceMs < 100 || stopGraceMs > 300000) {
     throw new TypeError('BILLING_RUNNER_CONFIG_INVALID');
   }
   if (typeof onError !== 'function' || typeof now !== 'function') throw new TypeError('BILLING_RUNNER_CALLBACK_INVALID');
   new Intl.DateTimeFormat('en-CA', { timeZone }).format(new Date());
-  let timer = null, stopping = false, ticking = false;
+  let timer = null, stopping = false, ticking = false, stopPromise = null;
   function report(error) {
     const code = typeof error?.code === 'string' && /^[A-Z][A-Z0-9_]{1,95}$/.test(error.code)
       ? error.code : 'BILLING_RUNNER_FAILED';
@@ -82,10 +83,28 @@ function createRecurringBillingRunner({
     return true;
   }
   async function stop() {
+    if (stopPromise) return stopPromise;
     stopping = true;
     if (timer) clearInterval(timer);
     timer = null;
-    while (ticking) await new Promise(resolve => setTimeout(resolve, 10));
+    stopPromise = (async () => {
+      if (!ticking) return Object.freeze({ drained: true });
+      let timeout;
+      const timedOut = new Promise(resolve => {
+        timeout = setTimeout(() => resolve(false), stopGraceMs);
+      });
+      const drained = await Promise.race([
+        (async () => { while (ticking) await new Promise(resolve => setTimeout(resolve, 10)); return true; })(),
+        timedOut
+      ]);
+      clearTimeout(timeout);
+      if (!drained) {
+        report(Object.assign(new Error('BILLING_RUNNER_DRAIN_TIMEOUT'), { code: 'BILLING_RUNNER_DRAIN_TIMEOUT' }));
+        return Object.freeze({ drained: false, timedOut: true });
+      }
+      return Object.freeze({ drained: true });
+    })();
+    return stopPromise;
   }
   return Object.freeze({ tick, start, stop, isRunning: () => Boolean(timer) && !stopping });
 }
