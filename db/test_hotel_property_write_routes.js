@@ -396,9 +396,9 @@ test('hotel deposit receipt and refund enforce expected and held balances transa
     execute:async(sql,params)=>{
       if(sql.includes('FROM orders')) return [[{id:8,deposit:'1.15',status:'booked'}]];
       if(sql.includes('SUM(CASE WHEN transaction_type')) {
-        const received=ledger.filter(x=>x.type==='receipt').reduce((n,x)=>n+x.amount,0);
-        const refunded=ledger.filter(x=>x.type==='refund').reduce((n,x)=>n+x.amount,0);
-        return [[{held_amount:received-refunded,received_amount:received,refunded_amount:refunded}]];
+        const receivedMinor=ledger.filter(x=>x.type==='receipt').reduce((n,x)=>n+Math.round(x.amount*100),0);
+        const refundedMinor=ledger.filter(x=>x.type==='refund').reduce((n,x)=>n+Math.round(x.amount*100),0);
+        return [[{held_amount:(receivedMinor-refundedMinor)/100,received_amount:receivedMinor/100,refunded_amount:refundedMinor/100}]];
       }
       if(sql.includes('INSERT INTO hotel_order_deposit_transactions')) {ledger.push({type:sql.includes("'receipt'")?'receipt':'refund',amount:params[1]});return [{affectedRows:1}];}
       return [[]];
