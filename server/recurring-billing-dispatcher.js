@@ -32,7 +32,7 @@ function createRecurringBillingDispatcher({
     throw new TypeError('RECURRING_BILLING_HEARTBEAT_INVALID');
   }
   if (!Number.isInteger(leaseOperationTimeoutMs) || leaseOperationTimeoutMs < 1 ||
-      leaseOperationTimeoutMs >= leaseSeconds * 1000) throw new TypeError('RECURRING_BILLING_LEASE_OPERATION_TIMEOUT_INVALID');
+      leaseOperationTimeoutMs > Math.floor(leaseSeconds * 1000 / 3)) throw new TypeError('RECURRING_BILLING_LEASE_OPERATION_TIMEOUT_INVALID');
   if (!Number.isInteger(enqueueTimeoutMs) || enqueueTimeoutMs < 1 || enqueueTimeoutMs > 3600000) {
     throw new TypeError('RECURRING_BILLING_ENQUEUE_TIMEOUT_INVALID');
   }
