@@ -61,22 +61,30 @@ function createRecurringBillingDispatchStore(pool) {
         nextCursor: tenants.length === limit ? tenants[tenants.length - 1].tenant_uuid : null
       });
     },
-    async listRunnable({ limit = 20 } = {}) {
+    async listRunnable({ limit = 20, maxAttempts = 8 } = {}) {
       if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new TypeError('RECURRING_BILLING_LIST_LIMIT_INVALID');
+      if (!Number.isInteger(maxAttempts) || maxAttempts < 1 || maxAttempts > 20) throw new TypeError('RECURRING_BILLING_RETRY_LIMIT_INVALID');
+      // A worker crash cannot call markFailed; reap expired leases that have
+      // already consumed the retry budget so they do not remain dispatching forever.
+      await pool.query(
+        "UPDATE platform_recurring_billing_dispatch SET state = 'failed', lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL, error_code = 'BILLING_DISPATCH_ATTEMPTS_EXHAUSTED' WHERE state = 'dispatching' AND lease_expires_at <= UTC_TIMESTAMP() AND attempt_count >= ?",
+        [maxAttempts]
+      );
       const [rows] = await pool.query(
-        "SELECT " + columns + " FROM platform_recurring_billing_dispatch WHERE (state = 'queued' AND available_at <= UTC_TIMESTAMP()) OR (state = 'dispatching' AND lease_expires_at <= UTC_TIMESTAMP()) ORDER BY available_at,id LIMIT ?",
-        [limit]
+        "SELECT " + columns + " FROM platform_recurring_billing_dispatch WHERE attempt_count < ? AND ((state = 'queued' AND available_at <= UTC_TIMESTAMP()) OR (state = 'dispatching' AND lease_expires_at <= UTC_TIMESTAMP())) ORDER BY available_at,id LIMIT ?",
+        [maxAttempts, limit]
       );
       return rows.map(decode);
     },
-    async claim({ id, workerId, leaseSeconds = 180 }) {
+    async claim({ id, workerId, leaseSeconds = 180, maxAttempts = 8 }) {
       if (!Number.isSafeInteger(id) || id < 1) throw new TypeError('RECURRING_BILLING_JOB_ID_INVALID');
       assertWorker(workerId);
       if (!Number.isInteger(leaseSeconds) || leaseSeconds < 30 || leaseSeconds > 1800) throw new TypeError('RECURRING_BILLING_LEASE_INVALID');
+      if (!Number.isInteger(maxAttempts) || maxAttempts < 1 || maxAttempts > 20) throw new TypeError('RECURRING_BILLING_RETRY_LIMIT_INVALID');
       const leaseToken = crypto.randomUUID();
       const [result] = await pool.query(
-        "UPDATE platform_recurring_billing_dispatch SET state = 'dispatching', lease_owner = ?, lease_token = ?, lease_expires_at = DATE_ADD(UTC_TIMESTAMP(), INTERVAL ? SECOND), attempt_count = attempt_count + 1, error_code = NULL WHERE id = ? AND ((state = 'queued' AND available_at <= UTC_TIMESTAMP()) OR (state = 'dispatching' AND lease_expires_at <= UTC_TIMESTAMP()))",
-        [workerId, leaseToken, leaseSeconds, id]
+        "UPDATE platform_recurring_billing_dispatch SET state = 'dispatching', lease_owner = ?, lease_token = ?, lease_expires_at = DATE_ADD(UTC_TIMESTAMP(), INTERVAL ? SECOND), attempt_count = attempt_count + 1, error_code = NULL WHERE id = ? AND attempt_count < ? AND ((state = 'queued' AND available_at <= UTC_TIMESTAMP()) OR (state = 'dispatching' AND lease_expires_at <= UTC_TIMESTAMP()))",
+        [workerId, leaseToken, leaseSeconds, id, maxAttempts]
       );
       if (Number(result.affectedRows) !== 1) return null;
       const [rows] = await pool.query(
