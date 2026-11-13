@@ -40,11 +40,12 @@ async function readHotelDepositBalance(tx, orderId) {
     "SELECT COALESCE(SUM(CASE WHEN transaction_type = 'receipt' THEN amount ELSE -amount END), 0) AS held_amount, COALESCE(SUM(CASE WHEN transaction_type = 'receipt' THEN amount ELSE 0 END), 0) AS received_amount, COALESCE(SUM(CASE WHEN transaction_type = 'refund' THEN amount ELSE 0 END), 0) AS refunded_amount FROM hotel_order_deposit_transactions WHERE order_id = ?",
     [orderId]
   );
-  return {
-    held_amount: Math.round(Number(rows[0].held_amount || 0) * 100) / 100,
-    received_amount: Math.round(Number(rows[0].received_amount || 0) * 100) / 100,
-    refunded_amount: Math.round(Number(rows[0].refunded_amount || 0) * 100) / 100
-  };
+  const heldMinor = parseMinorUnits(rows[0].held_amount || 0, { allowZero: true, maxMinor: 10000000000 });
+  const receivedMinor = parseMinorUnits(rows[0].received_amount || 0, { allowZero: true, maxMinor: 10000000000 });
+  const refundedMinor = parseMinorUnits(rows[0].refunded_amount || 0, { allowZero: true, maxMinor: 10000000000 });
+  if ([heldMinor, receivedMinor, refundedMinor].some(value => value === null) ||
+      heldMinor !== receivedMinor - refundedMinor) throw hotelError('HOTEL_DEPOSIT_BALANCE_INVALID', 409);
+  return { held_amount: heldMinor / 100, received_amount: receivedMinor / 100, refunded_amount: refundedMinor / 100 };
 }
 function createHotelOrderRouter() {
   const router = express.Router();
@@ -151,18 +152,22 @@ function createHotelOrderRouter() {
         mutate: async tx => {
           const [orders] = await tx.execute('SELECT id, deposit, status FROM orders WHERE id = ? LIMIT 1 FOR UPDATE', [id]);
           if (!orders.length) throw hotelError('ORDER_NOT_FOUND', 404);
-          const expected = Number(orders[0].deposit);
-          if (!Number.isFinite(expected) || expected < 0) throw hotelError('HOTEL_DEPOSIT_BALANCE_INVALID', 409);
+          const expectedMinor = parseMinorUnits(orders[0].deposit, { allowZero: true, maxMinor: 10000000000 });
+          if (expectedMinor === null) throw hotelError('HOTEL_DEPOSIT_BALANCE_INVALID', 409);
+          const expected = expectedMinor / 100;
           const balance = await readHotelDepositBalance(tx, id);
-          if (transaction.amount > Math.round((expected - balance.received_amount) * 100) / 100) {
-            throw hotelError('HOTEL_DEPOSIT_RECEIPT_EXCEEDS_EXPECTED', 409);
+          const receivedMinor = parseMinorUnits(balance.received_amount, { allowZero: true, maxMinor: 10000000000 });
+          const transactionMinor = parseMinorUnits(transaction.amount);
+          if (receivedMinor === null || transactionMinor === null || receivedMinor > expectedMinor) {
+            throw hotelError('HOTEL_DEPOSIT_BALANCE_INVALID', 409);
           }
+          if (transactionMinor > expectedMinor - receivedMinor) throw hotelError('HOTEL_DEPOSIT_RECEIPT_EXCEEDS_EXPECTED', 409);
           await tx.execute(
             "INSERT INTO hotel_order_deposit_transactions (order_id, transaction_type, amount, pay_method, external_reference, note, request_id, transaction_date) VALUES (?, 'receipt', ?, ?, ?, ?, ?, ?)",
             [id, transaction.amount, transaction.pay_method, transaction.external_reference, transaction.note, requestId, transaction.transaction_date]
           );
           const nextBalance = await readHotelDepositBalance(tx, id);
-          return { order_id: id, expected_amount: expected, ...nextBalance, remaining_to_receive: Math.round((expected - nextBalance.received_amount) * 100) / 100 };
+          return { order_id: id, expected_amount: expected, ...nextBalance, remaining_to_receive: (expectedMinor - parseMinorUnits(nextBalance.received_amount, { allowZero: true, maxMinor: 10000000000 })) / 100 };
         }
       });
       return res.status(201).json(result);
@@ -180,18 +185,20 @@ function createHotelOrderRouter() {
         mutate: async tx => {
           const [orders] = await tx.execute('SELECT id, deposit FROM orders WHERE id = ? LIMIT 1 FOR UPDATE', [id]);
           if (!orders.length) throw hotelError('ORDER_NOT_FOUND', 404);
-          const expected = Number(orders[0].deposit);
-          if (!Number.isFinite(expected) || expected < 0) throw hotelError('HOTEL_DEPOSIT_BALANCE_INVALID', 409);
+          const expectedMinor = parseMinorUnits(orders[0].deposit, { allowZero: true, maxMinor: 10000000000 });
+          if (expectedMinor === null) throw hotelError('HOTEL_DEPOSIT_BALANCE_INVALID', 409);
+          const expected = expectedMinor / 100;
           const balance = await readHotelDepositBalance(tx, id);
-          if (transaction.amount > balance.held_amount || balance.held_amount <= 0) {
-            throw hotelError('HOTEL_DEPOSIT_REFUND_EXCEEDS_HELD', 409);
-          }
+          const heldMinor = parseMinorUnits(balance.held_amount, { allowZero: true, maxMinor: 10000000000 });
+          const transactionMinor = parseMinorUnits(transaction.amount);
+          if (heldMinor === null || transactionMinor === null) throw hotelError('HOTEL_DEPOSIT_BALANCE_INVALID', 409);
+          if (transactionMinor > heldMinor || heldMinor <= 0) throw hotelError('HOTEL_DEPOSIT_REFUND_EXCEEDS_HELD', 409);
           await tx.execute(
             "INSERT INTO hotel_order_deposit_transactions (order_id, transaction_type, amount, pay_method, external_reference, note, request_id, transaction_date) VALUES (?, 'refund', ?, ?, ?, ?, ?, ?)",
             [id, transaction.amount, transaction.pay_method, transaction.external_reference, transaction.note, requestId, transaction.transaction_date]
           );
           const nextBalance = await readHotelDepositBalance(tx, id);
-          return { order_id: id, expected_amount: expected, ...nextBalance, remaining_to_receive: Math.round((expected - nextBalance.held_amount) * 100) / 100 };
+          return { order_id: id, expected_amount: expected, ...nextBalance, remaining_to_receive: (expectedMinor - parseMinorUnits(nextBalance.held_amount, { allowZero: true, maxMinor: 10000000000 })) / 100 };
         }
       });
       return res.status(201).json(result);
@@ -219,9 +226,12 @@ function createHotelOrderRouter() {
           [id, pageSize, offset]
         )
       ]);
-      const expected = Number(orders[0].deposit);
+      const expectedMinor = parseMinorUnits(orders[0].deposit, { allowZero: true, maxMinor: 10000000000 });
+      const receivedMinor = parseMinorUnits(balance.received_amount, { allowZero: true, maxMinor: 10000000000 });
+      if (expectedMinor === null || receivedMinor === null || receivedMinor > expectedMinor) throw hotelError('HOTEL_DEPOSIT_BALANCE_INVALID', 409);
+      const expected = expectedMinor / 100;
       return res.json({ order_id: id, expected_amount: expected, ...balance,
-        remaining_to_receive: Math.round((expected - balance.received_amount) * 100) / 100,
+        remaining_to_receive: (expectedMinor - receivedMinor) / 100,
         page, page_size: pageSize, total_count: Number(countRows[0].total_count || 0), transactions });
     } catch (error) { return next(error); }
   });
