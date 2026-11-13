@@ -323,7 +323,7 @@ function createPropertyFeeRouter() {
              SELECT bill_id,
                SUM(CASE WHEN transaction_type = 'receipt' THEN amount ELSE 0 END) AS receipts,
                SUM(CASE WHEN transaction_type = 'refund' THEN amount ELSE 0 END) AS refunds
-             FROM bill_transactions WHERE transaction_date BETWEEN ? AND ? GROUP BY bill_id
+             FROM bill_transactions WHERE transaction_date >= ? AND transaction_date < DATE_ADD(?, INTERVAL 1 DAY) GROUP BY bill_id
            ) tx ON tx.bill_id = b.id
           WHERE b.source = 'property' AND b.period_start BETWEEN ? AND ?`,
         [fromDate, toDate, fromDate, toDate]
@@ -342,7 +342,7 @@ function createPropertyFeeRouter() {
              SELECT bill_id,
                SUM(CASE WHEN transaction_type = 'receipt' THEN amount ELSE 0 END) AS receipts,
                SUM(CASE WHEN transaction_type = 'refund' THEN amount ELSE 0 END) AS refunds
-             FROM bill_transactions WHERE transaction_date BETWEEN ? AND ? GROUP BY bill_id
+             FROM bill_transactions WHERE transaction_date >= ? AND transaction_date < DATE_ADD(?, INTERVAL 1 DAY) GROUP BY bill_id
            ) tx ON tx.bill_id = b.id
           WHERE b.source = 'property' AND b.period_start BETWEEN ? AND ?
           GROUP BY b.tenant_id, t.name ORDER BY t.name ASC, b.tenant_id ASC LIMIT ? OFFSET ?`,
