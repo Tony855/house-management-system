@@ -275,3 +275,20 @@ test('dispatcher rejects lease operation timeouts that consume the renewal safet
     leaseSeconds: 30, leaseOperationTimeoutMs: 10001
   }), /RECURRING_BILLING_LEASE_OPERATION_TIMEOUT_INVALID/);
 });
+
+
+test('dispatch store returns no claim when lease expires before token readback', async () => {
+  const calls = [];
+  const store = createRecurringBillingDispatchStore({
+    query: async (sql, params) => {
+      calls.push([sql, params]);
+      if (sql.startsWith('UPDATE platform_recurring_billing_dispatch')) return [{ affectedRows: 1 }, []];
+      if (sql.startsWith('SELECT id, tenant_uuid')) return [[], []];
+      throw new Error('unexpected query');
+    }
+  });
+  const result = await store.claim({ id: 5, workerId: 'worker-a', leaseSeconds: 30 });
+  assert.equal(result, null);
+  assert.match(calls[1][0], /lease_owner = \? AND lease_token = \? AND lease_expires_at > UTC_TIMESTAMP\(\)/);
+  assert.deepEqual(calls[1][1], [5, 'worker-a', calls[0][1][1]]);
+});
