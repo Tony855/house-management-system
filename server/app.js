@@ -12,7 +12,7 @@ const fs = require('fs');
 const pool = require('./db');
 const { shared, getPool, withMode, currentOrgId, currentMode, MODES } = require('./db');
 const {
-  hashPassword, verifyPasswordAsync, today, nowStr, addDays, addMonths, daysBetween,
+  hashPasswordAsync, verifyPasswordAsync, today, nowStr, addDays, addMonths, daysBetween,
   daysInMonth, monthStart, monthEnd
 } = require('./util');
 const { V, clean } = require('./validate');
@@ -630,7 +630,7 @@ router.post('/orgs', authMode, superOnly, h(async (req, res) => {
     const orgId = orgR.insertId;
     const [uR] = await conn.query(
       'INSERT INTO users (username, password, real_name, role, mode, org_id) VALUES (?, ?, ?, ?, ?, ?)',
-      [username, hashPassword(password), real_name || name + '管理员', 'admin', mode, orgId]);
+      [username, await hashPasswordAsync(password), real_name || name + '管理员', 'admin', mode, orgId]);
     await conn.query('UPDATE orgs SET admin_user_id = ? WHERE id = ?', [uR.insertId, orgId]);
     await conn.query(
       'INSERT INTO settings (org_id, currency, rate, net_price_per_mb, water_price, elec_price) VALUES (?, ?, ?, ?, ?, ?)',
@@ -664,7 +664,7 @@ router.put('/orgs/:id', authMode, superOnly, h(async (req, res) => {
   }
   if (password !== null && password) {
     if (password.length < 6) return res.status(400).json({ error: '密码至少 6 位' });
-    await shared.query('UPDATE users SET password = ? WHERE id = ?', [hashPassword(password), o.admin_user_id]);
+    await shared.query('UPDATE users SET password = ? WHERE id = ?', [await hashPasswordAsync(password), o.admin_user_id]);
   }
   res.json({ ok: true });
 }));
