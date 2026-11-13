@@ -190,8 +190,11 @@ function createHotelOrderRouter() {
           const expected = expectedMinor / 100;
           const balance = await readHotelDepositBalance(tx, id);
           const heldMinor = parseMinorUnits(balance.held_amount, { allowZero: true, maxMinor: 10000000000 });
+          const receivedMinor = parseMinorUnits(balance.received_amount, { allowZero: true, maxMinor: 10000000000 });
           const transactionMinor = parseMinorUnits(transaction.amount);
-          if (heldMinor === null || transactionMinor === null) throw hotelError('HOTEL_DEPOSIT_BALANCE_INVALID', 409);
+          if (heldMinor === null || receivedMinor === null || transactionMinor === null || receivedMinor > expectedMinor) {
+            throw hotelError('HOTEL_DEPOSIT_BALANCE_INVALID', 409);
+          }
           if (transactionMinor > heldMinor || heldMinor <= 0) throw hotelError('HOTEL_DEPOSIT_REFUND_EXCEEDS_HELD', 409);
           await tx.execute(
             "INSERT INTO hotel_order_deposit_transactions (order_id, transaction_type, amount, pay_method, external_reference, note, request_id, transaction_date) VALUES (?, 'refund', ?, ?, ?, ?, ?, ?)",
