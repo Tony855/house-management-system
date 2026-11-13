@@ -90,7 +90,7 @@ function createPlatformTenantMigrationJobStore(pool) {
     },
     async claimJob({ id, workerId, leaseSeconds = 300 }) {
       if (!Number.isSafeInteger(id) || id < 1) throw new TypeError('TENANT_MIGRATION_JOB_ID_INVALID');
-      assertWorker(workerId); assertLease(leaseSeconds); if (typeof leaseToken !== 'string' || !leaseToken) throw new TypeError('TENANT_MIGRATION_JOB_LEASE_TOKEN_INVALID');
+      assertWorker(workerId); assertLease(leaseSeconds);
       const [result] = await pool.query(
         "UPDATE platform_tenant_migration_jobs SET state = 'running', lease_owner = ?, lease_token = ?, lease_expires_at = DATE_ADD(UTC_TIMESTAMP(), INTERVAL ? SECOND), attempt_count = attempt_count + 1, error_code = NULL, updated_at = UTC_TIMESTAMP() WHERE id = ? AND (state = 'queued' OR (state = 'running' AND lease_expires_at <= UTC_TIMESTAMP()))",
         [workerId, crypto.randomUUID(), leaseSeconds, id]
@@ -114,7 +114,7 @@ function createPlatformTenantMigrationJobStore(pool) {
       try { json = JSON.stringify(checkpoint); } catch (_) { throw new TypeError('TENANT_MIGRATION_JOB_CHECKPOINT_INVALID'); }
       if (json === undefined || Buffer.byteLength(json) > 65536) throw new TypeError('TENANT_MIGRATION_JOB_CHECKPOINT_INVALID');
       const [result] = await pool.query(
-        "UPDATE platform_tenant_migration_jobs SET checkpoint_json = ?, updated_at = UTC_TIMESTAMP() WHERE id = ? AND state = 'running' AND lease_owner = ? AND lease_expires_at > UTC_TIMESTAMP()",
+        "UPDATE platform_tenant_migration_jobs SET checkpoint_json = ?, updated_at = UTC_TIMESTAMP() WHERE id = ? AND state = 'running' AND lease_owner = ? AND lease_token = ? AND lease_expires_at > UTC_TIMESTAMP()",
         [json, id, workerId, leaseToken]
       );
       return Number(result.affectedRows) === 1;
@@ -123,8 +123,8 @@ function createPlatformTenantMigrationJobStore(pool) {
       if (!Number.isSafeInteger(id) || id < 1) throw new TypeError('TENANT_MIGRATION_JOB_ID_INVALID');
       assertWorker(workerId); if (typeof leaseToken !== 'string' || !leaseToken) throw new TypeError('TENANT_MIGRATION_JOB_LEASE_TOKEN_INVALID');
       const [result] = await pool.query(
-        "UPDATE platform_tenant_migration_jobs SET state = 'completed', lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL, error_code = NULL, updated_at = UTC_TIMESTAMP() WHERE id = ? AND state = 'running' AND lease_owner = ? AND lease_expires_at > UTC_TIMESTAMP()",
-        [id, workerId]
+        "UPDATE platform_tenant_migration_jobs SET state = 'completed', lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL, error_code = NULL, updated_at = UTC_TIMESTAMP() WHERE id = ? AND state = 'running' AND lease_owner = ? AND lease_token = ? AND lease_expires_at > UTC_TIMESTAMP()",
+        [id, workerId, leaseToken]
       );
       return Number(result.affectedRows) === 1;
     },
@@ -152,7 +152,7 @@ function createPlatformTenantMigrationJobStore(pool) {
       const safeCode = typeof errorCode === 'string' && /^[A-Z][A-Z0-9_]{1,95}$/.test(errorCode)
         ? errorCode : 'TENANT_MIGRATION_FAILED';
       const [result] = await pool.query(
-        "UPDATE platform_tenant_migration_jobs SET state = 'failed', lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL, error_code = ?, updated_at = UTC_TIMESTAMP() WHERE id = ? AND state = 'running' AND lease_owner = ? AND lease_expires_at > UTC_TIMESTAMP()",
+        "UPDATE platform_tenant_migration_jobs SET state = 'failed', lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL, error_code = ?, updated_at = UTC_TIMESTAMP() WHERE id = ? AND state = 'running' AND lease_owner = ? AND lease_token = ? AND lease_expires_at > UTC_TIMESTAMP()",
         [safeCode, id, workerId, leaseToken]
       );
       return Number(result.affectedRows) === 1;
