@@ -54,8 +54,7 @@ const h = fn => (req, res) => fn(req, res).catch(e => {
   console.error(e);
   const status = Number.isInteger(e?.status) && e.status >= 400 && e.status <= 599 ? e.status : 500;
   const message = status >= 500 ? '服务错误' :
-    (typeof e?.message === 'string' && e.message.length <= 200 && !/[\\x00-\\x08\\x0b\\x0c\\x0e-\\x1f\\x7f]/.test(e.message)
-      ? e.message : '请求失败');
+    (typeof e?.message === 'string' && e.message.length <= 200 ? e.message : '请求失败');
   res.status(status).json({ error: message });
 });
 const num = v => (v === null || v === undefined || v === '') ? null : Number(v);
