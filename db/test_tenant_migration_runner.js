@@ -93,3 +93,21 @@ test('runner validates shutdown drain deadline', () => {
     store: { listRunnableJobs() {} }, worker: { runJob() {} }, stopGraceMs: 0
   }), /TENANT_MIGRATION_RUNNER_CONFIG_INVALID/);
 });
+
+
+test('runner times out a hung runnable-job scan and can poll again', async () => {
+  let calls = 0;
+  const errors = [];
+  const runner = createPlatformTenantMigrationRunner({
+    store: { listRunnableJobs: () => {
+      calls++;
+      return calls === 1 ? new Promise(() => {}) : Promise.resolve([]);
+    } },
+    worker: { runJob: async () => {} },
+    concurrency: 1, pollOperationTimeoutMs: 10, onError: error => errors.push(error)
+  });
+  assert.equal(await runner.tick(), 0);
+  assert.deepEqual(errors, [{ code: 'TENANT_MIGRATION_RUNNER_SCAN_TIMEOUT' }]);
+  assert.equal(await runner.tick(), 0);
+  assert.equal(calls, 2);
+});
