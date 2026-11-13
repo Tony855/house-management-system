@@ -1,15 +1,16 @@
 'use strict';
 
 const express = require('express');
+const { parseMinorUnits } = require('../../server/money');
 function meterError(code, status = 400) { return Object.assign(new Error(code), { code, status }); }
 function validateMeter(input) {
   const allowed = new Set(['room_id','month','water_prev','water_curr','elec_prev','elec_curr','remark']);
   if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(key => !allowed.has(key))) throw meterError('METER_INPUT_INVALID');
   const room_id = Number(input.room_id), month = input.month;
   const money = value => {
-    const n = Number(value === undefined ? 0 : value);
-    if (!Number.isFinite(n) || n < 0 || n > 100000000 || Math.round(n * 100) !== n * 100) throw meterError('METER_INPUT_INVALID');
-    return n;
+    const minor = parseMinorUnits(value === undefined ? 0 : value, { allowZero: true, maxMinor: 10000000000 });
+    if (minor === null) throw meterError('METER_INPUT_INVALID');
+    return minor / 100;
   };
   const water_prev = money(input.water_prev), water_curr = money(input.water_curr);
   const elec_prev = money(input.elec_prev), elec_curr = money(input.elec_curr);
