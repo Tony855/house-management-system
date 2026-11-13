@@ -10,7 +10,7 @@ test('money conversion is exact for USD, KHR and three-decimal currencies', () =
   assert.equal(fromMinorUnits(120000, 'KHR'), '1200.00');
 });
 test('money rejects invalid, negative, exponent and excessive precision inputs', () => {
-  for (const value of ['-1', '1e3', '1.001', '01.00', 'NaN', '']) assert.throws(() => toMinorUnits(value, 'USD'));
+  for (const value of ['-1', '1e3', '1.001', '01.00', 'NaN', '', '9'.repeat(33)]) assert.throws(() => toMinorUnits(value, 'USD'));
   assert.throws(() => toMinorUnits('1.001', 'KHR'), /BILLING_AMOUNT_PRECISION_INVALID/);
 });
 test('invoice totals validate amounts and prevent discounts above subtotal', () => {
