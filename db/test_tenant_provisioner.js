@@ -232,6 +232,28 @@ test('tenant provisioner rejects invalid DB endpoint and incomplete adapters bef
   assert.equal(created, false);
 });
 
+test('tenant provisioner accepts valid DB hostnames containing ordinary letters and digits', async () => {
+  let activated = false;
+  const result = await provisionTenant({
+    appId: 'rental', displayLabel: 'Valid host', tenantId: '14141414-1414-4141-8141-141414141414',
+    registry: {
+      createProvisioningTenant: async () => {},
+      activateTenant: async () => { activated = true; },
+      markProvisioningFailed: async () => {}
+    },
+    databaseAdmin: {
+      host: 'db.service0.internal', port: 3306,
+      createDatabase: async () => {}, createPrincipal: async () => {}, grantDatabaseOnly: async () => {}
+    },
+    secretStore: { put: async () => {} },
+    migrationRunner: { apply: async () => {} },
+    isolationVerifier: { verify: async () => ({ passed: true, schemaVersion: 'v1' }) },
+    audit: async () => {}
+  });
+  assert.equal(result.lifecycleState, 'active');
+  assert.equal(activated, true);
+});
+
 test('tenant display labels reject control characters and oversized values', async () => {
   const base = {
     appId: 'rental', tenantId: '13131313-1313-4131-8131-131313131313',
