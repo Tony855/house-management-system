@@ -1,6 +1,7 @@
 'use strict';
 
 const express = require('express');
+const { parseMinorUnits } = require('../../server/money');
 
 function propertyFeeError(code, status = 400) {
   return Object.assign(new Error(code), { code, status });
