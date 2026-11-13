@@ -170,7 +170,7 @@ test('registry activation reconciliation resolves committed and rolled-back acti
     lifecycleState: 'active', schemaVersion: 'tenant-v1', reconciled: true
   });
   assert.ok(calls.some(x => typeof x === 'object' && x.sql.includes('FOR UPDATE')));
-  assert.ok(calls.some(x => typeof x === 'object' && x.sql.includes('tenant_activation_reconciled')));
+  assert.ok(calls.some(x => typeof x === 'object' && x.sql.startsWith('INSERT INTO platform_provisioning_events') && x.values?.[1] === 'tenant_activation_reconciled'));
   const updateCount = calls.filter(x => typeof x === 'object' && x.sql.startsWith("UPDATE platform_tenants SET lifecycle_state = 'active'")).length;
   const alreadyActive = await adapters.registry.reconcileActivation('12345678-1234-4123-8123-123456789abc', { schemaVersion: 'tenant-v1' });
   assert.equal(alreadyActive.reconciled, false);
