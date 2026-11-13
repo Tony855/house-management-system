@@ -411,7 +411,9 @@ test('hotel deposit receipt and refund enforce expected and held balances transa
     const received=await send('/api/orders/8/deposit/receive',{amount:1.15},'hotel-deposit-receive-0001');
     assert.equal(received.status,201);assert.equal((await received.json()).held_amount,1.15);
     const refunded=await send('/api/orders/8/deposit/refund',{amount:0.15},'hotel-deposit-refund-0001');
-    assert.equal(refunded.status,201);assert.equal((await refunded.json()).held_amount,1);
+    const refundedBody = await refunded.json();
+    assert.equal(refunded.status,201,JSON.stringify(refundedBody));
+    assert.equal(refundedBody.held_amount,1);
     const excess=await send('/api/orders/8/deposit/refund',{amount:1.01},'hotel-deposit-refund-0002');
     assert.equal(excess.status,409);assert.equal(calls.length,3);
   } finally {await new Promise(resolve=>server.close(resolve));}
