@@ -322,3 +322,38 @@ test('tenant display labels reject control characters and oversized values', asy
   await assert.rejects(provisionTenant({ ...base, displayLabel: 'bad' + String.fromCharCode(10) + 'label' }), /TENANT_PROVISIONING_INPUT_INVALID/);
   await assert.rejects(provisionTenant({ ...base, displayLabel: 'x'.repeat(121) }), /TENANT_PROVISIONING_INPUT_INVALID/);
 });
+
+
+test('activation timeout is resolved safely when registry reconciliation confirms active state', async () => {
+  const calls = [];
+  const result = await provisionTenant({
+    appId: 'rental', displayLabel: 'Reconciled activation', tenantId: '17171717-1717-4171-8171-171717171717',
+    registry: {
+      createProvisioningTenant: async () => calls.push('registry:create'),
+      activateTenant: async () => { calls.push('registry:activate-timeout'); throw new Error('CLIENT_TIMEOUT'); },
+      reconcileActivation: async (_tenantId, input) => {
+        calls.push(['registry:reconcile', input.schemaVersion]);
+        return { lifecycleState: 'active', schemaVersion: input.schemaVersion, reconciled: true };
+      },
+      markProvisioningFailed: async () => calls.push('registry:failed')
+    },
+    databaseAdmin: {
+      host: 'db.internal', createDatabase: async () => calls.push('db:create'),
+      createPrincipal: async () => calls.push('user:create'), grantDatabaseOnly: async () => calls.push('grant'),
+      dropPrincipal: async () => calls.push('user:drop'), dropDatabase: async () => calls.push('db:drop')
+    },
+    secretStore: { put: async () => calls.push('secret:put'), delete: async () => calls.push('secret:delete') },
+    migrationRunner: { apply: async () => calls.push('migrate') },
+    isolationVerifier: { verify: async () => ({ passed: true, schemaVersion: 'tenant-v4' }) },
+    audit: async event => calls.push('audit:' + event.event)
+  });
+  assert.equal(result.lifecycleState, 'active');
+  assert.equal(result.reconciled, true);
+  assert.equal(result.schemaVersion, 'tenant-v4');
+  assert.ok(calls.some(x => Array.isArray(x) && x[0] === 'registry:reconcile' && x[1] === 'tenant-v4'));
+  assert.equal(calls.includes('registry:failed'), false);
+  assert.equal(calls.includes('db:drop'), false);
+  assert.equal(calls.includes('user:drop'), false);
+  assert.equal(calls.includes('secret:delete'), false);
+  assert.ok(calls.includes('audit:provisioning_activation_reconciled'));
+});
