@@ -184,6 +184,30 @@ test('resource creation timeout still triggers deterministic cleanup attempt', a
   assert.equal(dropAttempted, true);
 });
 
+test('registry creation timeout is reconciled to provisioning_failed', async () => {
+  let failedState = false;
+  let databaseCreated = false;
+  await assert.rejects(provisionTenant({
+    appId: 'hotel', displayLabel: 'Registry timeout', tenantId: '15151515-1515-4151-8151-151515151515',
+    registry: {
+      createProvisioningTenant: async () => { throw new Error('REGISTRY_CREATED_BUT_CLIENT_TIMED_OUT'); },
+      activateTenant: async () => { throw new Error('MUST_NOT_ACTIVATE'); },
+      markProvisioningFailed: async () => { failedState = true; }
+    },
+    databaseAdmin: {
+      host: 'db.internal',
+      createDatabase: async () => { databaseCreated = true; },
+      createPrincipal: async () => {}, grantDatabaseOnly: async () => {}
+    },
+    secretStore: { put: async () => {} },
+    migrationRunner: { apply: async () => {} },
+    isolationVerifier: { verify: async () => ({ passed: true }) },
+    audit: async () => {}
+  }), /REGISTRY_CREATED_BUT_CLIENT_TIMED_OUT/);
+  assert.equal(failedState, true);
+  assert.equal(databaseCreated, false);
+});
+
 test('audit adapter is mandatory before any provisioning side effect', async () => {
   let created = false;
   await assert.rejects(provisionTenant({
