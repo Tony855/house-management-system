@@ -29,8 +29,8 @@ function createFinanceReconciliationRouter(appId) {
         FROM bills b
         LEFT JOIN (
           SELECT bill_id,
-            SUM(CASE WHEN transaction_type = 'receipt' AND transaction_date BETWEEN ? AND ? THEN amount ELSE 0 END) AS receipts,
-            SUM(CASE WHEN transaction_type = 'refund' AND transaction_date BETWEEN ? AND ? THEN amount ELSE 0 END) AS refunds,
+            SUM(CASE WHEN transaction_type = 'receipt' AND transaction_date >= ? AND transaction_date < DATE_ADD(?, INTERVAL 1 DAY) THEN amount ELSE 0 END) AS receipts,
+            SUM(CASE WHEN transaction_type = 'refund' AND transaction_date >= ? AND transaction_date < DATE_ADD(?, INTERVAL 1 DAY) THEN amount ELSE 0 END) AS refunds,
             SUM(CASE WHEN transaction_type = 'receipt' THEN amount ELSE -amount END) AS net_lifetime
           FROM bill_transactions GROUP BY bill_id
         ) t ON t.bill_id = b.id
