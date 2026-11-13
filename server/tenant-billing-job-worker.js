@@ -19,9 +19,9 @@ function createTenantBillingJobWorker({
       ? error.code : 'TENANT_BILLING_WORKER_FAILED';
     try { onError(Object.freeze({ code, workerId })); } catch (_) {}
   }
-  async function lane() {
+  async function lane(laneIndex) {
     try {
-      const result = await processNextBatch({ workerId });
+      const result = await processNextBatch({ workerId, laneIndex });
       if (!result || typeof result !== 'object' || typeof result.worked !== 'boolean') {
         throw Object.assign(new Error('TENANT_BILLING_PROCESSOR_RESULT_INVALID'), {
           code: 'TENANT_BILLING_PROCESSOR_RESULT_INVALID'
@@ -39,7 +39,7 @@ function createTenantBillingJobWorker({
   async function tick() {
     if (stopping || activeTick) return Object.freeze({ skipped: true });
     const current = (async () => {
-      const results = await Promise.all(Array.from({ length: concurrency }, () => lane()));
+      const results = await Promise.all(Array.from({ length: concurrency }, (_, laneIndex) => lane(laneIndex)));
       return Object.freeze({
         concurrency,
         worked: results.filter(result => result.worked).length,
