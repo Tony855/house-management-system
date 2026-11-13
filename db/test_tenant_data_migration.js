@@ -175,3 +175,22 @@ test('source export and normalization failures are durably audited before migrat
   }), /source unavailable/);
   assert.deepEqual(events, ['tenant_data_migration_started', 'tenant_data_migration_failed']);
 });
+
+
+test('migration audit failure handling normalizes primitive thrown values', async () => {
+  const events = [];
+  await assert.rejects(copyTenantOrgData({
+    appId: 'rental', tenantId, sourceOrgId: 102,
+    sourceReader: { exportOrgSnapshot: async () => { throw 'legacy adapter rejected'; } },
+    audit: async event => {
+      events.push(event.event);
+      if (event.event === 'tenant_data_migration_failed') throw 'audit unavailable';
+    }
+  }), error => {
+    assert.equal(error.message, 'TENANT_DATA_MIGRATION_FAILED');
+    assert.equal(error.cause, 'legacy adapter rejected');
+    assert.equal(error.auditFailure, 'AUDIT_WRITE_FAILED');
+    return true;
+  });
+  assert.deepEqual(events, ['tenant_data_migration_started', 'tenant_data_migration_failed']);
+});
