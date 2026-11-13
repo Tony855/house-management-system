@@ -39,6 +39,7 @@ function createPlatformTenantMigrationWorker({ store, workerId, executeJob, leas
       }
       const job = await store.claimJob({ id: jobId, workerId, leaseSeconds });
       if (!job) return Object.freeze({ claimed: false, state: 'not_claimed' });
+      if (typeof job.leaseToken !== 'string' || !job.leaseToken) throw new Error('TENANT_MIGRATION_JOB_LEASE_TOKEN_MISSING');
 
       let leaseLost = false;
       const assertLease = async operation => {
@@ -52,18 +53,18 @@ function createPlatformTenantMigrationWorker({ store, workerId, executeJob, leas
       const context = Object.freeze({
         job,
         checkpoint: job.checkpoint,
-        heartbeat: () => assertLease(() => store.renewLease({ id: job.id, workerId, leaseSeconds })),
-        saveCheckpoint: checkpoint => assertLease(() => store.saveCheckpoint({ id: job.id, workerId, checkpoint }))
+        heartbeat: () => assertLease(() => store.renewLease({ id: job.id, workerId, leaseToken: job.leaseToken, leaseSeconds })),
+        saveCheckpoint: checkpoint => assertLease(() => store.saveCheckpoint({ id: job.id, workerId, leaseToken: job.leaseToken, checkpoint }))
       });
 
       try {
         const result = await executeJob(context);
-        await assertLease(() => store.completeJob({ id: job.id, workerId }));
+        await assertLease(() => store.completeJob({ id: job.id, workerId, leaseToken: job.leaseToken }));
         return Object.freeze({ claimed: true, state: 'completed', jobId: job.id, result });
       } catch (error) {
         let failureRecorded = false;
         if (!leaseLost) {
-          try { failureRecorded = await store.failJob({ id: job.id, workerId, errorCode: safeErrorCode(error) }); }
+          try { failureRecorded = await store.failJob({ id: job.id, workerId, leaseToken: job.leaseToken, errorCode: safeErrorCode(error) }); }
           catch (_) { /* lease expiry/recovery remains the source of truth */ }
         }
         return Object.freeze({
