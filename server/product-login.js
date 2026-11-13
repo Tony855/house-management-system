@@ -104,11 +104,13 @@ function createProductLoginService({
     });
     const unsigned = header + '.' + claims;
     const signature = crypto.createHmac('sha256', signing.key).update(unsigned).digest('base64url');
+    // Clear the matching failure counter before persisting a session. If the
+    // limiter is unavailable, login fails without leaving an active orphan session.
+    await runRateLimit('clear', rateLimitIdentity);
     await sessionStore.createSession({
       sessionId, userId: subjectId, tenantId: mapped.tenant_uuid, appId,
       issuedAt, expiresAt
     });
-    await runRateLimit('clear', rateLimitIdentity);
     return Object.freeze({
       accessToken: unsigned + '.' + signature,
       tokenType: 'Bearer',
