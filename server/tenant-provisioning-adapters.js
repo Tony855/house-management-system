@@ -168,6 +168,37 @@ function createPlatformTenantProvisioningAdapters({
           );
         });
       },
+      async reconcileActivation(tenantId, { schemaVersion }) {
+        if (typeof tenantId !== 'string' || !UUID_RE.test(tenantId) ||
+            typeof schemaVersion !== 'string' || !schemaVersion || schemaVersion.length > 100) {
+          throw new TypeError('TENANT_REGISTRY_RECONCILIATION_INPUT_INVALID');
+        }
+        return withPlatformTransaction(async connection => {
+          const [rows] = await connection.query(
+            'SELECT lifecycle_state, schema_version FROM platform_tenants WHERE tenant_uuid = ? FOR UPDATE',
+            [tenantId]
+          );
+          const tenant = rows[0];
+          if (!tenant) throw new Error('TENANT_REGISTRY_RECONCILIATION_TENANT_NOT_FOUND');
+          if (tenant.lifecycle_state === 'active') {
+            if (tenant.schema_version !== schemaVersion) throw new Error('TENANT_REGISTRY_RECONCILIATION_SCHEMA_MISMATCH');
+            return Object.freeze({ tenantId, lifecycleState: 'active', schemaVersion, reconciled: false });
+          }
+          if (tenant.lifecycle_state !== 'provisioning') {
+            throw new Error('TENANT_REGISTRY_RECONCILIATION_STATE_CONFLICT');
+          }
+          const [result] = await connection.query(
+            "UPDATE platform_tenants SET lifecycle_state = 'active', schema_version = ? WHERE tenant_uuid = ? AND lifecycle_state = 'provisioning'",
+            [schemaVersion, tenantId]
+          );
+          if (Number(result.affectedRows) !== 1) throw new Error('TENANT_REGISTRY_RECONCILIATION_STATE_CONFLICT');
+          await connection.query(
+            'INSERT INTO platform_provisioning_events (tenant_uuid, event_type, outcome, detail_code) VALUES (?, ?, ?, ?)',
+            [tenantId, 'tenant_activation_reconciled', 'succeeded', schemaVersion]
+          );
+          return Object.freeze({ tenantId, lifecycleState: 'active', schemaVersion, reconciled: true });
+        });
+      },
       async markProvisioningFailed(tenantId, detailCode) {
         if (typeof tenantId !== 'string' || !UUID_RE.test(tenantId)) {
           throw new TypeError('TENANT_REGISTRY_FAILURE_INPUT_INVALID');
