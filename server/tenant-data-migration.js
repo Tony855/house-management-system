@@ -40,6 +40,10 @@ function digestRows(rows) {
   return crypto.createHash('sha256').update(JSON.stringify(canonicalize(rows))).digest('hex');
 }
 
+function normalizeMigrationError(error) {
+  return error instanceof Error ? error : Object.assign(new Error('TENANT_DATA_MIGRATION_FAILED'), { cause: error });
+}
+
 function assertNotAborted(signal) {
   if (signal?.aborted) throw Object.assign(new Error('TENANT_MIGRATION_JOB_LEASE_LOST'), { code: 'TENANT_MIGRATION_JOB_LEASE_LOST' });
 }
@@ -137,7 +141,8 @@ async function copyTenantOrgData({
       await audit({ event: 'tenant_data_migration_dry_run_verified', appId, tenantId, sourceOrgId, manifest: normalized.manifest });
       return { mode, appId, tenantId, sourceOrgId, manifest: normalized.manifest, copied: false, cutover: false };
     }
-  } catch (error) {
+  } catch (caught) {
+    const error = normalizeMigrationError(caught);
     try {
       await audit({
         event: 'tenant_data_migration_failed',
@@ -198,7 +203,8 @@ async function copyTenantOrgData({
 
     await audit({ event: 'tenant_data_migration_copy_verified', appId, tenantId, sourceOrgId, manifest: normalized.manifest });
     return { mode, appId, tenantId, sourceOrgId, manifest: normalized.manifest, copied: true, alreadyImported, cutover: false };
-  } catch (error) {
+  } catch (caught) {
+    const error = normalizeMigrationError(caught);
     try {
       await audit({
         event: 'tenant_data_migration_failed',
