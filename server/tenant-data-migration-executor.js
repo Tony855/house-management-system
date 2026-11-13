@@ -21,13 +21,17 @@ function createTenantDataMigrationExecutor({ resolveConnections, heartbeatInterv
     throw new TypeError('TENANT_MIGRATION_HEARTBEAT_INTERVAL_INVALID');
   }
 
-  return async function executeTenantMigration({ job, heartbeat, saveCheckpoint }) {
+  return async function executeTenantMigration({ job, heartbeat, saveCheckpoint, leaseSeconds = 300 }) {
     if (!job || !Number.isSafeInteger(job.id) || !['rental', 'hotel', 'property'].includes(job.appId) ||
         !['dry-run', 'copy'].includes(job.mode)) throw new TypeError('TENANT_MIGRATION_JOB_INVALID');
     if (typeof heartbeat !== 'function' || typeof saveCheckpoint !== 'function') {
       throw new TypeError('TENANT_MIGRATION_WORKER_CONTEXT_INVALID');
     }
 
+    if (!Number.isInteger(leaseSeconds) || leaseSeconds < 30 || leaseSeconds > 3600) {
+      throw new TypeError('TENANT_MIGRATION_JOB_LEASE_INVALID');
+    }
+    const effectiveHeartbeatIntervalMs = Math.min(heartbeatIntervalMs, Math.max(5000, Math.floor(leaseSeconds * 1000 / 3)));
     let heartbeatPromise = null;
     let heartbeatFailure = null;
     const abortController = new AbortController();
@@ -40,7 +44,7 @@ function createTenantDataMigrationExecutor({ resolveConnections, heartbeatInterv
       }).finally(() => { heartbeatPromise = null; });
       return heartbeatPromise;
     };
-    const timer = setInterval(() => { void beat(); }, heartbeatIntervalMs);
+    const timer = setInterval(() => { void beat(); }, effectiveHeartbeatIntervalMs);
     if (typeof timer.unref === 'function') timer.unref();
 
     let connections;
