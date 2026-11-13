@@ -39,6 +39,8 @@ function createProductApi({ appId, authenticate, registry, secretProvider, poolM
       username: body.username,
       password: body.password
     });
+    res.set('Cache-Control', 'no-store');
+    res.set('Pragma', 'no-cache');
     return res.json(result);
   }));
   app.post('/api/auth/logout', asyncBoundary(async (req, res) => {
