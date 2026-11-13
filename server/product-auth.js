@@ -93,7 +93,8 @@ function createProductAuthenticator({
           !Number.isSafeInteger(claims.iat) || !Number.isSafeInteger(claims.exp) ||
           claims.exp <= current || claims.iat > current + clockSkewSeconds ||
           claims.exp <= claims.iat || claims.exp - claims.iat > maxLifetimeSeconds ||
-          (claims.nbf !== undefined && (!Number.isSafeInteger(claims.nbf) || claims.nbf > current + clockSkewSeconds))) {
+          (claims.nbf !== undefined && (!Number.isSafeInteger(claims.nbf) ||
+            claims.nbf > current + clockSkewSeconds || claims.nbf > claims.exp))) {
         throw new ProductAuthError('TOKEN_INVALID');
       }
 
