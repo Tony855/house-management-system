@@ -130,3 +130,53 @@ test('tenant registry activation rolls back lifecycle state when activation even
   assert.equal(calls.includes('commit'), false);
   assert.equal(calls.at(-1), 'release');
 });
+
+
+test('registry activation reconciliation resolves committed and rolled-back activation outcomes under row lock', async () => {
+  const calls = [];
+  let lifecycleState = 'provisioning';
+  const platformPool = {
+    query: async () => [[], []],
+    getConnection: async () => ({
+      beginTransaction: async () => calls.push('begin'),
+      query: async (sql, values) => {
+        calls.push({ sql, values });
+        if (sql.startsWith('SELECT lifecycle_state')) return [[{ lifecycle_state: lifecycleState, schema_version: lifecycleState === 'active' ? 'tenant-v1' : null }], []];
+        if (sql.startsWith("UPDATE platform_tenants SET lifecycle_state = 'active'")) {
+          lifecycleState = 'active';
+          return [{ affectedRows: 1 }, []];
+        }
+        return [{ affectedRows: 1 }, []];
+      },
+      commit: async () => calls.push('commit'),
+      rollback: async () => calls.push('rollback'),
+      release: () => calls.push('release')
+    })
+  };
+  const adapters = createPlatformTenantProvisioningAdapters({
+    platformPool,
+    databaseAdmin: {
+      host: 'db.internal', port: 3306,
+      createDatabase: async () => {}, createPrincipal: async () => {},
+      grantDatabaseOnly: async () => {}, dropPrincipal: async () => {}, dropDatabase: async () => {}
+    },
+    secretManager: { putSecret: async () => {}, deleteSecret: async () => {} },
+    runMigrations: async () => ({ schemaVersion: 'tenant-v1' }),
+    verifyIsolation: async () => ({ passed: true, schemaVersion: 'tenant-v1' })
+  });
+  const recovered = await adapters.registry.reconcileActivation('12345678-1234-4123-8123-123456789abc', { schemaVersion: 'tenant-v1' });
+  assert.deepEqual(recovered, {
+    tenantId: '12345678-1234-4123-8123-123456789abc',
+    lifecycleState: 'active', schemaVersion: 'tenant-v1', reconciled: true
+  });
+  assert.ok(calls.some(x => typeof x === 'object' && x.sql.includes('FOR UPDATE')));
+  assert.ok(calls.some(x => typeof x === 'object' && x.sql.includes('tenant_activation_reconciled')));
+  const updateCount = calls.filter(x => typeof x === 'object' && x.sql.startsWith("UPDATE platform_tenants SET lifecycle_state = 'active'")).length;
+  const alreadyActive = await adapters.registry.reconcileActivation('12345678-1234-4123-8123-123456789abc', { schemaVersion: 'tenant-v1' });
+  assert.equal(alreadyActive.reconciled, false);
+  assert.equal(calls.filter(x => typeof x === 'object' && x.sql.startsWith("UPDATE platform_tenants SET lifecycle_state = 'active'")).length, updateCount);
+  await assert.rejects(
+    adapters.registry.reconcileActivation('12345678-1234-4123-8123-123456789abc', { schemaVersion: 'tenant-v2' }),
+    /TENANT_REGISTRY_RECONCILIATION_SCHEMA_MISMATCH/
+  );
+});
