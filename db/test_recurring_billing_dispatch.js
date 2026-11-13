@@ -219,3 +219,41 @@ test('recurring billing runner rejects malformed scan counters and cursors', asy
   const result = await runner.tick();
   assert.equal(result.errorCode, 'BILLING_RUNNER_SCAN_RESULT_INVALID');
 });
+
+
+test('recurring billing runner shutdown is bounded when dispatcher never resolves', async () => {
+  const errors = [];
+  const runner = createRecurringBillingRunner({
+    store: { enqueueActiveTenants: async () => ({ scanned: 0, enqueued: 0, nextCursor: null }) },
+    dispatcher: { tick: () => new Promise(() => {}) },
+    workerId: 'worker-a', stopGraceMs: 100,
+    now: () => new Date('2030-02-01T12:00:00Z'),
+    onError: error => errors.push(error)
+  });
+  const tick = runner.tick();
+  await new Promise(resolve => setImmediate(resolve));
+  const result = await runner.stop();
+  assert.deepEqual(result, { drained: false, timedOut: true });
+  assert.deepEqual(errors, [{ code: 'BILLING_RUNNER_DRAIN_TIMEOUT' }]);
+  assert.deepEqual(await runner.tick(), { skipped: true });
+  void tick;
+});
+
+test('recurring billing runner stop shares one shutdown promise', async () => {
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const runner = createRecurringBillingRunner({
+    store: { enqueueActiveTenants: async () => ({ scanned: 0, enqueued: 0, nextCursor: null }) },
+    dispatcher: { tick: async () => { await gate; return {}; } },
+    workerId: 'worker-a', stopGraceMs: 1000,
+    now: () => new Date('2030-02-01T12:00:00Z')
+  });
+  const tick = runner.tick();
+  await new Promise(resolve => setImmediate(resolve));
+  const a = runner.stop();
+  const b = runner.stop();
+  release();
+  const results = await Promise.all([a, b, tick]);
+  assert.deepEqual(results[0], { drained: true });
+  assert.deepEqual(results[1], { drained: true });
+});
