@@ -55,7 +55,10 @@ function createProductAuthenticator({
   return async function authenticateProductRequest(req, _res, next) {
     try {
       const header = req.headers.authorization;
-      if (typeof header !== 'string' || !/^Bearer [A-Za-z0-9._~-]+$/.test(header)) {
+      // Product access tokens are compact JWTs; bound parsing and HMAC work
+      // before splitting or decoding attacker-controlled bearer input.
+      if (typeof header !== 'string' || header.length > 8192 ||
+          !/^Bearer [A-Za-z0-9._~-]+$/.test(header)) {
         throw new ProductAuthError('AUTH_REQUIRED');
       }
       const token = header.slice(7);
