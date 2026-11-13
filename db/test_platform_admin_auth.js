@@ -45,7 +45,7 @@ function fixture(overrides = {}) {
       touchStepUpVerified: async ({ adminId, sessionId, verifiedAt }) => {
         const row = sessions.get(sessionId);
         if (!row || row.adminId !== adminId || row.revoked) return false;
-        row.stepUpVerifiedAt = verifiedAt; return true;
+        row.stepUpVerifiedAt = verifiedAt; row.mfaVerifiedAt = verifiedAt; return true;
       },
       revokeSession: async ({ adminId, sessionId }) => {
         const row = sessions.get(sessionId);
@@ -297,4 +297,23 @@ test('default platform admin password verification is asynchronous and validates
     service.login({ username: 'root', password: 'wrong' }),
     error => error.code === 'INVALID_CREDENTIALS'
   );
+});
+
+
+test('successful step-up refreshes both MFA freshness and sensitive-operation freshness', async () => {
+  let current = 1800000000;
+  const { service } = fixture({
+    now: () => current,
+    mfaService: { verify: async () => ({ verified: true, method: 'totp', verifiedAt: current }) }
+  });
+  const challenge = await service.login({ username: 'root', password: 'correct' });
+  const issued = await service.verifyChallenge({ challenge: challenge.challenge, code: '123456' });
+  const sessionId = JSON.parse(Buffer.from(issued.accessToken.split('.')[1], 'base64url').toString()).jti;
+  current += 301; // original login MFA is now stale
+  await service.stepUp({ adminId: 7, sessionId, code: '123456' });
+  const req = { headers: { authorization: 'Bearer ' + issued.accessToken } };
+  await service.authenticate(req, {}, error => { assert.equal(error, undefined); });
+  assert.equal(req.platformAuth.mfaVerified, true);
+  assert.equal(req.platformAuth.stepUpVerified, true);
+  assert.equal(req.platformAuth.mfaVerifiedAt, current);
 });
