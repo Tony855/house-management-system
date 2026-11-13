@@ -84,7 +84,7 @@ function createPlatformTenantMigrationJobStore(pool) {
       // Reap jobs whose worker repeatedly died after claiming; no worker can
       // call failJob in that crash path, so expired leases must exhaust too.
       await pool.query(
-        "UPDATE platform_tenant_migration_jobs SET state = 'failed', lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL, error_code = 'TENANT_MIGRATION_ATTEMPTS_EXHAUSTED', updated_at = UTC_TIMESTAMP() WHERE state = 'running' AND lease_expires_at <= UTC_TIMESTAMP() AND attempt_count >= ?",
+        "UPDATE platform_tenant_migration_jobs SET state = 'failed', lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL, error_code = 'TENANT_MIGRATION_ATTEMPTS_EXHAUSTED', updated_at = UTC_TIMESTAMP() WHERE state = 'running' AND (lease_expires_at IS NULL OR lease_expires_at <= UTC_TIMESTAMP()) AND attempt_count >= ?",
         [maxAttempts]
       );
       const [rows] = await pool.query(
