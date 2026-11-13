@@ -210,3 +210,33 @@ test('platform runtime can enable scheduler without enabling tenant bill generat
   await runtime.close();
   assert.equal(config.pool.ended, 1);
 });
+
+
+test('platform runtime drains already-started migration workers when later startup wiring fails', async () => {
+  const config = options({
+    migrationConnectionResolver: async () => { throw new Error('not invoked without queued jobs'); },
+    migrationWorkerId: 'runtime-migration-worker',
+    tenantSecretManager: { getSecret: async () => ({ user: 'tenant-user', password: 'tenant-password', version: 'v1' }) },
+    billingSystemWriteAuthorizer: async () => true,
+    billingSchedulerEnabled: true,
+    billingPollIntervalMs: 500
+  });
+  const originalSetInterval = global.setInterval;
+  const originalClearInterval = global.clearInterval;
+  const activeIntervals = new Set();
+  global.setInterval = () => {
+    const handle = { unref() {} };
+    activeIntervals.add(handle);
+    return handle;
+  };
+  global.clearInterval = handle => activeIntervals.delete(handle);
+  try {
+    assert.throws(() => createPlatformApiRuntime(config), /BILLING_RUNNER_CONFIG_INVALID/);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(activeIntervals.size, 0);
+    assert.equal(config.pool.ended, 1);
+  } finally {
+    global.setInterval = originalSetInterval;
+    global.clearInterval = originalClearInterval;
+  }
+});
