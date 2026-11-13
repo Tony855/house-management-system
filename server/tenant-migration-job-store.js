@@ -88,7 +88,7 @@ function createPlatformTenantMigrationJobStore(pool) {
         [maxAttempts]
       );
       const [rows] = await pool.query(
-        "SELECT " + columns + " FROM platform_tenant_migration_jobs WHERE attempt_count < ? AND (state = 'queued' OR (state = 'running' AND lease_expires_at <= UTC_TIMESTAMP())) ORDER BY created_at ASC, id ASC LIMIT ?",
+        "SELECT " + columns + " FROM platform_tenant_migration_jobs WHERE attempt_count < ? AND (state = 'queued' OR (state = 'running' AND (lease_expires_at IS NULL OR lease_expires_at <= UTC_TIMESTAMP()))) ORDER BY created_at ASC, id ASC LIMIT ?",
         [maxAttempts, limit]
       );
       return rows.map(decode);
@@ -103,7 +103,7 @@ function createPlatformTenantMigrationJobStore(pool) {
       if (!Number.isInteger(maxAttempts) || maxAttempts < 1 || maxAttempts > 20) throw new TypeError('TENANT_MIGRATION_JOB_RETRY_LIMIT_INVALID');
       const leaseToken = crypto.randomUUID();
       const [result] = await pool.query(
-        "UPDATE platform_tenant_migration_jobs SET state = 'running', lease_owner = ?, lease_token = ?, lease_expires_at = DATE_ADD(UTC_TIMESTAMP(), INTERVAL ? SECOND), attempt_count = attempt_count + 1, error_code = NULL, updated_at = UTC_TIMESTAMP() WHERE id = ? AND attempt_count < ? AND (state = 'queued' OR (state = 'running' AND lease_expires_at <= UTC_TIMESTAMP()))",
+        "UPDATE platform_tenant_migration_jobs SET state = 'running', lease_owner = ?, lease_token = ?, lease_expires_at = DATE_ADD(UTC_TIMESTAMP(), INTERVAL ? SECOND), attempt_count = attempt_count + 1, error_code = NULL, updated_at = UTC_TIMESTAMP() WHERE id = ? AND attempt_count < ? AND (state = 'queued' OR (state = 'running' AND (lease_expires_at IS NULL OR lease_expires_at <= UTC_TIMESTAMP())))",
         [workerId, leaseToken, leaseSeconds, id, maxAttempts]
       );
       if (Number(result.affectedRows) !== 1) return null;
