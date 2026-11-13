@@ -394,7 +394,7 @@ test('hotel deposit receipt and refund enforce expected and held balances transa
   const ledger=[];const calls=[];
   app.use((req,_res,next)=>{req.tenantWrite=async input=>{calls.push(input);return input.mutate({
     execute:async(sql,params)=>{
-      if(sql.includes('FROM orders')) return [[{id:8,deposit:'30.00',status:'booked'}]];
+      if(sql.includes('FROM orders')) return [[{id:8,deposit:'1.15',status:'booked'}]];
       if(sql.includes('SUM(CASE WHEN transaction_type')) {
         const received=ledger.filter(x=>x.type==='receipt').reduce((n,x)=>n+x.amount,0);
         const refunded=ledger.filter(x=>x.type==='refund').reduce((n,x)=>n+x.amount,0);
@@ -408,11 +408,11 @@ test('hotel deposit receipt and refund enforce expected and held balances transa
   const server=http.createServer(app);await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   const send=(path,body,key)=>fetch('http://127.0.0.1:'+server.address().port+path,{method:'POST',headers:{'content-type':'application/json','x-operation-reason':'Record hotel deposit','x-step-up-token':'step-up-token-123456789','idempotency-key':key},body:JSON.stringify(body)});
   try {
-    const received=await send('/api/orders/8/deposit/receive',{amount:20},'hotel-deposit-receive-0001');
-    assert.equal(received.status,201);assert.equal((await received.json()).held_amount,20);
-    const refunded=await send('/api/orders/8/deposit/refund',{amount:5},'hotel-deposit-refund-0001');
-    assert.equal(refunded.status,201);assert.equal((await refunded.json()).held_amount,15);
-    const excess=await send('/api/orders/8/deposit/refund',{amount:16},'hotel-deposit-refund-0002');
+    const received=await send('/api/orders/8/deposit/receive',{amount:1.15},'hotel-deposit-receive-0001');
+    assert.equal(received.status,201);assert.equal((await received.json()).held_amount,1.15);
+    const refunded=await send('/api/orders/8/deposit/refund',{amount:0.15},'hotel-deposit-refund-0001');
+    assert.equal(refunded.status,201);assert.equal((await refunded.json()).held_amount,1);
+    const excess=await send('/api/orders/8/deposit/refund',{amount:1.01},'hotel-deposit-refund-0002');
     assert.equal(excess.status,409);assert.equal(calls.length,3);
   } finally {await new Promise(resolve=>server.close(resolve));}
 });
