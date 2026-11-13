@@ -246,3 +246,44 @@ test('MariaDB target adapter rolls back its transaction when the migration lease
   assert.ok(pools.targetCalls.includes('ROLLBACK'));
   assert.ok(!pools.targetCalls.includes('COMMIT'));
 });
+
+
+test('source adapter destroys an in-flight database connection immediately on lease loss', async () => {
+  const pools = createPools('rental', 101);
+  const controller = new AbortController();
+  let queryStarted;
+  const started = new Promise(resolve => { queryStarted = resolve; });
+  let rejectQuery;
+  let destroyed = false;
+  let released = false;
+  pools.sourcePool.getConnection = async () => ({
+    async execute(sql) {
+      if (sql === 'SELECT DATABASE() AS databaseName') return [[{ databaseName: 'house_sys_rental' }]];
+      if (sql === 'SET TRANSACTION ISOLATION LEVEL REPEATABLE READ') return [[]];
+      if (sql === 'START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY') return [[]];
+      if (sql.startsWith('SELECT *')) {
+        queryStarted();
+        return new Promise((resolve, reject) => { rejectQuery = reject; });
+      }
+      return [[]];
+    },
+    async commit() {},
+    async rollback() { throw new Error('destroyed connection must not be reused for rollback'); },
+    release() { released = true; },
+    destroy() {
+      destroyed = true;
+      rejectQuery(Object.assign(new Error('connection destroyed'), { code: 'ECONNRESET' }));
+    }
+  });
+  const adapters = createMariaDbTenantMigrationAdapters({
+    appId: 'rental', sourcePool: pools.sourcePool, targetPool: pools.targetPool
+  });
+  const pending = adapters.sourceReader.exportOrgSnapshot({
+    appId: 'rental', sourceOrgId: 101, signal: controller.signal
+  });
+  await started;
+  controller.abort();
+  await assert.rejects(pending, /connection destroyed/);
+  assert.equal(destroyed, true);
+  assert.equal(released, false);
+});
