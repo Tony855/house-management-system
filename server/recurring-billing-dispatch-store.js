@@ -67,11 +67,11 @@ function createRecurringBillingDispatchStore(pool) {
       // A worker crash cannot call markFailed; reap expired leases that have
       // already consumed the retry budget so they do not remain dispatching forever.
       await pool.query(
-        "UPDATE platform_recurring_billing_dispatch SET state = 'failed', lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL, error_code = 'BILLING_DISPATCH_ATTEMPTS_EXHAUSTED' WHERE state = 'dispatching' AND lease_expires_at <= UTC_TIMESTAMP() AND attempt_count >= ?",
+        "UPDATE platform_recurring_billing_dispatch SET state = 'failed', lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL, error_code = 'BILLING_DISPATCH_ATTEMPTS_EXHAUSTED' WHERE state = 'dispatching' AND (lease_expires_at IS NULL OR lease_expires_at <= UTC_TIMESTAMP()) AND attempt_count >= ?",
         [maxAttempts]
       );
       const [rows] = await pool.query(
-        "SELECT " + columns + " FROM platform_recurring_billing_dispatch WHERE attempt_count < ? AND ((state = 'queued' AND available_at <= UTC_TIMESTAMP()) OR (state = 'dispatching' AND lease_expires_at <= UTC_TIMESTAMP())) ORDER BY available_at,id LIMIT ?",
+        "SELECT " + columns + " FROM platform_recurring_billing_dispatch WHERE attempt_count < ? AND ((state = 'queued' AND available_at <= UTC_TIMESTAMP()) OR (state = 'dispatching' AND (lease_expires_at IS NULL OR lease_expires_at <= UTC_TIMESTAMP()))) ORDER BY available_at,id LIMIT ?",
         [maxAttempts, limit]
       );
       return rows.map(decode);
@@ -83,7 +83,7 @@ function createRecurringBillingDispatchStore(pool) {
       if (!Number.isInteger(maxAttempts) || maxAttempts < 1 || maxAttempts > 20) throw new TypeError('RECURRING_BILLING_RETRY_LIMIT_INVALID');
       const leaseToken = crypto.randomUUID();
       const [result] = await pool.query(
-        "UPDATE platform_recurring_billing_dispatch SET state = 'dispatching', lease_owner = ?, lease_token = ?, lease_expires_at = DATE_ADD(UTC_TIMESTAMP(), INTERVAL ? SECOND), attempt_count = attempt_count + 1, error_code = NULL WHERE id = ? AND attempt_count < ? AND ((state = 'queued' AND available_at <= UTC_TIMESTAMP()) OR (state = 'dispatching' AND lease_expires_at <= UTC_TIMESTAMP()))",
+        "UPDATE platform_recurring_billing_dispatch SET state = 'dispatching', lease_owner = ?, lease_token = ?, lease_expires_at = DATE_ADD(UTC_TIMESTAMP(), INTERVAL ? SECOND), attempt_count = attempt_count + 1, error_code = NULL WHERE id = ? AND attempt_count < ? AND ((state = 'queued' AND available_at <= UTC_TIMESTAMP()) OR (state = 'dispatching' AND (lease_expires_at IS NULL OR lease_expires_at <= UTC_TIMESTAMP())))",
         [workerId, leaseToken, leaseSeconds, id, maxAttempts]
       );
       if (Number(result.affectedRows) !== 1) return null;
