@@ -63,7 +63,7 @@ test('checkpoint writes are bounded and lease-owner scoped', async () => {
   assert.equal(await store.saveCheckpoint({ id: 7, workerId: 'worker-a', leaseToken: 'lease-a', checkpoint: { table: 'rooms', lastId: 99 } }), true);
   assert.deepEqual(JSON.parse(captured[1][0]), { table: 'rooms', lastId: 99 });
   assert.match(captured[0], /lease_owner = \?/);
-  await assert.rejects(store.saveCheckpoint({ id: 7, workerId: 'worker-a', checkpoint: 'x'.repeat(70000) }), /TENANT_MIGRATION_JOB_CHECKPOINT_INVALID/);
+  await assert.rejects(store.saveCheckpoint({ id: 7, workerId: 'worker-a', leaseToken: 'lease-a', checkpoint: 'x'.repeat(70000) }), /TENANT_MIGRATION_JOB_CHECKPOINT_INVALID/);
 });
 
 test('lease renewal, completion and failure are conditional on the current unexpired owner', async () => {
@@ -74,6 +74,9 @@ test('lease renewal, completion and failure are conditional on the current unexp
   assert.equal(await store.renewLease({ id: 7, workerId: 'worker-a', leaseToken: 'lease-a', leaseSeconds: 120 }), true);
   assert.equal(await store.completeJob({ id: 7, workerId: 'worker-a', leaseToken: 'lease-a' }), true);
   assert.equal(await store.failJob({ id: 7, workerId: 'worker-a', leaseToken: 'lease-a', errorCode: 'SOURCE_UNAVAILABLE' }), true);
+  assert.match(calls[0][0], /lease_token = \?/);
+  assert.match(calls[1][0], /lease_token = \?/);
+  assert.match(calls[2][0], /lease_token = \?/);
   assert.match(calls[0][0], /lease_expires_at > UTC_TIMESTAMP\(\)/);
   assert.equal(calls[2][1][0], 'SOURCE_UNAVAILABLE');
 });
@@ -83,6 +86,8 @@ test('migration job store rejects unsafe identifiers, leases and checkpoint payl
   await assert.rejects(store.createJob({ idempotencyKey: 'short', tenantId, appId: 'rental', sourceOrgId: 1 }), /TENANT_MIGRATION_JOB_INPUT_INVALID/);
   await assert.rejects(store.createJob({ idempotencyKey: 'migration-request-0001', tenantId, appId: 'platform', sourceOrgId: 1 }), /TENANT_MIGRATION_JOB_TENANT_INVALID/);
   await assert.rejects(store.claimJob({ id: 7, workerId: 'bad worker', leaseSeconds: 10 }), /TENANT_MIGRATION_JOB_WORKER_INVALID/);
+  await assert.rejects(store.renewLease({ id: 7, workerId: 'worker-a' }), /TENANT_MIGRATION_JOB_LEASE_TOKEN_INVALID/);
+  await assert.rejects(store.completeJob({ id: 7, workerId: 'worker-a' }), /TENANT_MIGRATION_JOB_LEASE_TOKEN_INVALID/);
 });
 
 test('failed jobs require an expected attempt count to retry and queued jobs can be cancelled', async () => {
