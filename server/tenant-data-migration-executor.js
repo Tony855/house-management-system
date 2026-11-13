@@ -86,9 +86,11 @@ function createTenantDataMigrationExecutor({ resolveConnections, heartbeatInterv
         sourceOrgId: result.sourceOrgId, manifest: result.manifest,
         copied: result.copied, cutover: false
       });
-    } catch (error) {
-      executionError = error;
-      throw error;
+    } catch (caught) {
+      executionError = caught instanceof Error
+        ? caught
+        : Object.assign(new Error('TENANT_MIGRATION_EXECUTION_FAILED'), { cause: caught });
+      throw executionError;
     } finally {
       clearInterval(timer);
       if (connections?.close) {
