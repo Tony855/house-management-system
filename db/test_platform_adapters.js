@@ -58,6 +58,8 @@ test('platform product session store creates and revokes an exact scoped session
   const store = createPlatformProductSessionStore({ query: async (...args) => { calls.push(args); return [{ affectedRows: 1 }, []]; } });
   await store.createSession({ sessionId: 'session-1', userId: 'u-1', tenantId, appId: 'rental', issuedAt: 1800000000, expiresAt: 1800000900 });
   assert.deepEqual(calls[0][1].slice(0, 4), ['session-1', 'rental', tenantId, 'u-1']);
+  assert.deepEqual(calls[0][1].slice(4), ['2027-01-15 08:00:00', '2027-01-15 08:15:00']);
+  assert.equal(calls[0][1].every(value => !(value instanceof Date)), true);
   assert.equal(await store.revokeSession({ sessionId: 'session-1', userId: 'u-1', tenantId, appId: 'rental' }), true);
   assert.deepEqual(calls[1][1], ['session-1', 'u-1', tenantId, 'rental']);
   assert.match(calls[1][0], /revoked_at IS NULL/);
