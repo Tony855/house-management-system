@@ -46,6 +46,8 @@ test('Platform API mounts password login, MFA lifecycle, step-up, admin disable 
       body: JSON.stringify({ username: 'root', password: 'password' })
     });
     assert.equal(login.status, 200);
+    assert.equal(login.headers.get('cache-control'), 'no-store');
+    assert.equal(login.headers.get('pragma'), 'no-cache');
     assert.deepEqual(await login.json(), { mfaRequired: true, challenge: 'challenge-token' });
 
     const verify = await fetch(base + '/api/platform/auth/mfa/verify', {
@@ -53,6 +55,8 @@ test('Platform API mounts password login, MFA lifecycle, step-up, admin disable 
       body: JSON.stringify({ challenge: 'challenge-token', code: '123456' })
     });
     assert.equal(verify.status, 200);
+    assert.equal(verify.headers.get('cache-control'), 'no-store');
+    assert.equal(verify.headers.get('pragma'), 'no-cache');
     assert.deepEqual(await verify.json(), { tokenType: 'Bearer', accessToken: 'signed-token' });
 
     const status = await fetch(base + '/api/platform/auth/mfa/status', { headers: { authorization: 'Bearer session-token' } });
