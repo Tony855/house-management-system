@@ -24,10 +24,14 @@ function createTenantDataMigrationExecutor({ resolveConnections, heartbeatInterv
 
     let heartbeatRunning = false;
     let heartbeatFailure = null;
+    const abortController = new AbortController();
     const beat = async () => {
       if (heartbeatRunning || heartbeatFailure) return;
       heartbeatRunning = true;
-      try { await heartbeat(); } catch (error) { heartbeatFailure = error; }
+      try { await heartbeat(); } catch (error) {
+        heartbeatFailure = error;
+        abortController.abort(error);
+      }
       finally { heartbeatRunning = false; }
     };
     const timer = setInterval(() => { void beat(); }, heartbeatIntervalMs);
@@ -49,7 +53,7 @@ function createTenantDataMigrationExecutor({ resolveConnections, heartbeatInterv
       await saveCheckpoint({ phase: 'copy_started', updatedAt: new Date().toISOString() });
       const result = await copyTenantOrgData({
         appId: job.appId, tenantId: job.tenantId, sourceOrgId: job.sourceOrgId,
-        mode: job.mode, ...adapters, audit: connections.audit
+        mode: job.mode, ...adapters, audit: connections.audit, signal: abortController.signal
       });
       if (heartbeatFailure) throw heartbeatFailure;
       await heartbeat();
