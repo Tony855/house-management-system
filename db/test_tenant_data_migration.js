@@ -169,6 +169,8 @@ test('source export and normalization failures are durably audited before migrat
   await assert.rejects(copyTenantOrgData({
     appId: 'rental', tenantId, sourceOrgId: 101, mode: 'copy',
     sourceReader: { exportOrgSnapshot: async () => { throw Object.assign(new Error('source unavailable'), { code: 'LEGACY_SOURCE_UNAVAILABLE' }); } },
+    targetWriter: { importTenantSnapshot: async () => {} },
+    targetReader: { readTenantSnapshot: async () => ({ tables: Object.fromEntries([...TABLES.rental].map(table => [table, []])) }) },
     audit: async event => { events.push(event.event); }
   }), /source unavailable/);
   assert.deepEqual(events, ['tenant_data_migration_started', 'tenant_data_migration_failed']);
