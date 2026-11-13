@@ -53,3 +53,10 @@ For deployment, stop and drain all migration workers before applying migration 0
 
 
 Lease renewal and checkpoint writes are also bounded by an operation timeout shorter than the active lease. A stalled control-plane DB call is treated as lease loss and aborts the migration rather than allowing copy work to continue indefinitely without proof of ownership. The executor adapts its heartbeat cadence to the configured lease duration (at most one third of the lease); do not configure a heartbeat timeout equal to or longer than the lease.
+
+
+## Worker crash retry budget
+
+A migration job has a bounded automatic claim budget of eight attempts. Every successful claim increments `attempt_count`. If a worker process dies after claiming and never reaches `failJob`, the next runnable-job scan reaps the expired lease: jobs already at the budget are moved to `failed` with `TENANT_MIGRATION_ATTEMPTS_EXHAUSTED`; jobs below the budget may be reclaimed. Claim SQL rechecks the attempt budget and runnable state in the same UPDATE so concurrent workers cannot exceed the limit.
+
+An authorized operator retry uses compare-and-set against the observed `expectedAttemptCount` and resets the claim counter to zero. This starts a fresh bounded retry window while preserving the previous failure code until the new claim begins.
