@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const { createTenantBillingJobProcessor, LEASE_SECONDS, MAX_ATTEMPTS, MAX_CHUNK_SIZE } = require('../server/tenant-billing-job-processor');
 const tenantId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
-function setup({ appId = 'rental', appIds = [appId], listActiveTenants = async () => ({ tenantIds: [], nextCursor: null }), scanTimeoutMs = 30000, job = null, authorizeSystem = async () => true, claimAllowed = Boolean(job), failChunk = false, chunkSize = 50, propertyRows = [] } = {}) {
+function setup({ appId = 'rental', appIds = [appId], listActiveTenants = async () => ({ tenantIds: [], nextCursor: null }), scanTimeoutMs = 30000, job = null, authorizeSystem = async () => true, claimAllowed = Boolean(job), failChunk = false, failFailureWrite = false, chunkSize = 50, propertyRows = [] } = {}) {
  const calls=[];let fingerprint=null,idempotencyState='processing',leaseToken=null;
  const connection={
   beginTransaction:async()=>calls.push('BEGIN'),commit:async()=>calls.push('COMMIT'),rollback:async()=>calls.push('ROLLBACK'),release:()=>calls.push('RELEASE'),
@@ -103,5 +103,18 @@ test('billing processor rejects malformed tenant IDs and mismatched page cursors
  await assert.rejects(
   invalidCursor.processor.processNextBatch({workerId:'billing-worker-invalid'}),
   error=>error.code==='BILLING_TENANT_SCAN_RESULT_INVALID'
+ );
+});
+
+
+test('billing processor preserves the generation error when retry-state persistence also fails', async () => {
+ const f=setup({job:{id:88,attemptCount:0,cursorId:null},failChunk:true,failFailureWrite:true});
+ await assert.rejects(
+  f.processor.processTenant({tenantId,appId:'rental',workerId:'billing-worker-01'}),
+  error=>{
+   assert.equal(error.message,'secret database detail');
+   assert.equal(error.failureWriteError,'ECONNRESET');
+   return true;
+  }
  );
 });
