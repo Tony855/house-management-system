@@ -4,15 +4,57 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
+const { createLegacyPasswordStore } = require('../server/legacy-password-store');
 
 const source = fs.readFileSync(path.join(__dirname, '..', 'server', 'app.js'), 'utf8');
+const passwordHash = '0123456789abcdef:' + 'a'.repeat(64);
 
-test('legacy account password changes revoke all existing sessions for the affected user', () => {
-  assert.match(source, /UPDATE users SET password = \?, real_name = \? WHERE id = \?['\x60],\s*\[await hashPasswordAsync\(password\), real_name \|\| '', exist\[0\]\.id\]\);\s*await shared\.query\('DELETE FROM sessions WHERE user_id = \?', \[exist\[0\]\.id\]\);/);
-  assert.match(source, /UPDATE users SET password = \? WHERE id = \?['\x60], \[await hashPasswordAsync\(password\), o\.admin_user_id\]\);\s*await shared\.query\('DELETE FROM sessions WHERE user_id = \?', \[o\.admin_user_id\]\);/);
-  assert.match(source, /UPDATE users SET password = \? WHERE id = \?['\x60], \[await hashPasswordAsync\(password\), req\.params\.id\]\);\s*await shared\.query\('DELETE FROM sessions WHERE user_id = \?', \[req\.params\.id\]\);/);
+test('legacy password store atomically updates the password and revokes all user sessions', async () => {
+  const calls = [];
+  const connection = {
+    beginTransaction: async () => calls.push('BEGIN'),
+    query: async (sql, params) => { calls.push([sql, params]); return [{ affectedRows: 1 }, []]; },
+    commit: async () => calls.push('COMMIT'),
+    rollback: async () => calls.push('ROLLBACK'),
+    release: () => calls.push('RELEASE')
+  };
+  const store = createLegacyPasswordStore({ getConnection: async () => connection });
+  assert.equal(await store.updatePasswordAndRevokeSessions({
+    userId: 17, passwordHash, realName: 'Tenant Admin'
+  }), true);
+  assert.deepEqual(calls, [
+    'BEGIN',
+    ['UPDATE users SET password = ?, real_name = ? WHERE id = ?', [passwordHash, 'Tenant Admin', 17]],
+    ['DELETE FROM sessions WHERE user_id = ?', [17]],
+    'COMMIT',
+    'RELEASE'
+  ]);
 });
 
+test('legacy password store rolls back if session revocation fails', async () => {
+  const calls = [];
+  const connection = {
+    beginTransaction: async () => calls.push('BEGIN'),
+    query: async sql => {
+      calls.push(sql);
+      if (sql.startsWith('DELETE FROM sessions')) throw new Error('session store unavailable');
+      return [{ affectedRows: 1 }, []];
+    },
+    commit: async () => calls.push('COMMIT'),
+    rollback: async () => calls.push('ROLLBACK'),
+    release: () => calls.push('RELEASE')
+  };
+  const store = createLegacyPasswordStore({ getConnection: async () => connection });
+  await assert.rejects(store.updatePasswordAndRevokeSessions({ userId: 17, passwordHash }),
+    /session store unavailable/);
+  assert.deepEqual(calls, ['BEGIN', 'UPDATE users SET password = ? WHERE id = ?', 'DELETE FROM sessions WHERE user_id = ?', 'ROLLBACK', 'RELEASE']);
+  assert.equal(calls.includes('COMMIT'), false);
+});
+
+test('legacy account password update routes all use the atomic revocation service', () => {
+  assert.equal((source.match(/legacyPasswordStore\.updatePasswordAndRevokeSessions\(/g) || []).length, 3);
+  assert.doesNotMatch(source, /UPDATE users SET password = \?/);
+});
 
 test('legacy async route wrapper redacts internal server errors and bounds status codes', () => {
   assert.match(source, /const status = Number\.isInteger\(e\?\.status\) && e\.status >= 400 && e\.status <= 599 \? e\.status : 500;/);
