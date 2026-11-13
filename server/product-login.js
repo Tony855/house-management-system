@@ -2,7 +2,17 @@
 
 const crypto = require('node:crypto');
 const { resolveTenantContext } = require('./tenant-registry');
-const { verifyPassword: defaultVerifyPassword } = require('./util');
+
+async function verifyPasswordAsync(password, stored) {
+  if (typeof stored !== 'string') return false;
+  const parts = stored.split(':');
+  if (parts.length !== 2 || !/^[a-f0-9]{16}$/i.test(parts[0]) || !/^[a-f0-9]{64}$/i.test(parts[1])) return false;
+  const expected = Buffer.from(parts[1], 'hex');
+  const derived = await new Promise((resolve, reject) => {
+    crypto.scrypt(String(password), parts[0], 32, (error, key) => error ? reject(error) : resolve(key));
+  });
+  return expected.length === derived.length && crypto.timingSafeEqual(expected, derived);
+}
 
 const APP_IDS = new Set(['rental', 'hotel', 'property']);
 const USERNAME_RE = /^[A-Za-z0-9_@.-]{1,50}$/;
@@ -23,7 +33,7 @@ function encode(value) { return Buffer.from(JSON.stringify(value)).toString('bas
 
 function createProductLoginService({
   appId, issuer, registry, secretProvider, poolManager, sessionStore, signingKeyProvider, loginRateLimiter,
-  verifyPassword = defaultVerifyPassword, now = () => Math.floor(Date.now() / 1000),
+  verifyPassword = verifyPasswordAsync, now = () => Math.floor(Date.now() / 1000),
   lifetimeSeconds = 900
 }) {
   if (!APP_IDS.has(appId)) throw new TypeError('PRODUCT_LOGIN_APP_ID_INVALID');
@@ -78,7 +88,7 @@ function createProductLoginService({
     const user = rows[0];
     let valid = false;
     if (user && typeof user.password === 'string') {
-      try { valid = verifyPassword(password, user.password) === true; } catch (_) { valid = false; }
+      try { valid = await verifyPassword(password, user.password) === true; } catch (_) { valid = false; }
     }
     if (!valid) {
       await runRateLimit('recordFailure', rateLimitIdentity);
