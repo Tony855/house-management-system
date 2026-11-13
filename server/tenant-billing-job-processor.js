@@ -33,7 +33,8 @@ function createTenantBillingJobProcessor({registry,secretProvider,tenantPoolMana
    const page=await withTimeout(()=>registry.listActiveTenants({appId,afterTenantId,limit}),scanTimeoutMs,'BILLING_TENANT_SCAN_TIMEOUT');
    if(!page||!Array.isArray(page.tenantIds)||page.tenantIds.length>limit||
       (page.nextCursor!==null&&typeof page.nextCursor!=='string')||
-      page.tenantIds.some(id=>typeof id!=='string'||!/^[0-9a-f-]{36}$/i.test(id))){
+      page.tenantIds.some(id=>typeof id!=='string'||!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id))||
+      (page.nextCursor!==null&&(!page.tenantIds.length||page.nextCursor!==page.tenantIds[page.tenantIds.length-1]))){
     throw fail('BILLING_TENANT_SCAN_RESULT_INVALID',503);
    }
    if(page.nextCursor&&page.nextCursor===afterTenantId)throw fail('BILLING_TENANT_SCAN_CURSOR_STALLED',503);
