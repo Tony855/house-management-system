@@ -130,11 +130,13 @@ function createPlatformApiRuntime({
     if (tenantPoolManager && typeof tenantPoolManager.closeAll === 'function') {
       shutdowns.push(Promise.resolve().then(() => tenantPoolManager.closeAll()).catch(() => {}));
     }
-    Promise.allSettled(shutdowns).finally(() => {
+    const closePlatformPool = () => {
       if (typeof platformPool.end === 'function') {
         try { Promise.resolve(platformPool.end()).catch(() => {}); } catch (_) { /* preserve startup failure */ }
       }
-    });
+    };
+    if (shutdowns.length === 0) closePlatformPool();
+    else Promise.allSettled(shutdowns).finally(closePlatformPool);
     throw error;
   }
 }
