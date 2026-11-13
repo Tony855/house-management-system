@@ -47,7 +47,7 @@ test('hotel order creation derives price from locked room and updates room statu
   const calls = [];
   const app = express(); app.use(express.json());
   app.use((req,_res,next)=>{req.tenantWrite=async input=>{calls.push(input);return input.mutate({
-    execute: async sql => sql.includes('FROM rooms') ? [[{id:4,day_price:80,deposit:30,status:'vacant'}]] : sql.includes('FROM tenants') ? [[{id:8}]] : [[]],
+    execute: async sql => sql.includes('FROM rooms') ? [[{id:4,day_price:1.15,deposit:0.15,status:'vacant'}]] : sql.includes('FROM tenants') ? [[{id:8}]] : [[]],
     insert: async (table,fields)=>{calls.push({table,fields});return {insertId:22};},
     updateById: async (table,id,fields)=>{calls.push({table,id,fields});return {affectedRows:1};}
   });};next();});
@@ -56,7 +56,7 @@ test('hotel order creation derives price from locked room and updates room statu
   const server=http.createServer(app);await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   try {
     const response=await fetch('http://127.0.0.1:'+server.address().port+'/api/orders',{method:'POST',headers:{'content-type':'application/json','x-operation-reason':'Create hotel reservation','x-step-up-token':'step-up-token-123456789','idempotency-key':'hotel-order-create-0001'},body:JSON.stringify({order_no:'H-100',room_id:4,guest_id:8,check_in_date:'2026-11-15',check_out_date:'2026-11-18'})});
-    assert.equal(response.status,201);const body=await response.json();assert.equal(body.total,240);assert.equal(body.deposit,30);
+    assert.equal(response.status,201);const body=await response.json();assert.equal(body.total,3.45);assert.equal(body.deposit,0.15);
     assert.equal(calls[0].payload.__resource,'orders');assert.ok(calls.some(x=>x.table==='rooms'&&x.fields.status==='booked'));
   } finally {await new Promise(resolve=>server.close(resolve));}
 });
