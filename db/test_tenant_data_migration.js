@@ -60,7 +60,7 @@ test('copy fails closed when target reconciliation differs', async () => {
   await assert.rejects(copyTenantOrgData({
     appId: 'rental', tenantId, sourceOrgId: 44, mode: 'copy', ...a
   }), /TENANT_DATA_MIGRATION_RECONCILIATION_FAILED/);
-  assert.ok(a.calls.some(call => call[0] === 'audit' && call[1] === 'tenant_data_migration_copy_failed'));
+  assert.ok(a.calls.some(call => call[0] === 'audit' && call[1] === 'tenant_data_migration_failed'));
 });
 
 test('copy requires durable audit and a complete target adapter before side effects', async () => {
@@ -161,4 +161,15 @@ test('copy refuses a pre-existing target whose contents do not match the source 
     appId: 'rental', tenantId, sourceOrgId: 92, mode: 'copy', ...a
   }), /TENANT_DATA_MIGRATION_TARGET_NOT_EMPTY/);
   assert.equal(a.calls.some(call => call[0] === 'write'), false);
+});
+
+
+test('source export and normalization failures are durably audited before migration stops', async () => {
+  const events = [];
+  await assert.rejects(copyTenantOrgData({
+    appId: 'rental', tenantId, sourceOrgId: 101, mode: 'copy',
+    sourceReader: { exportOrgSnapshot: async () => { throw Object.assign(new Error('source unavailable'), { code: 'LEGACY_SOURCE_UNAVAILABLE' }); } },
+    audit: async event => { events.push(event.event); }
+  }), /source unavailable/);
+  assert.deepEqual(events, ['tenant_data_migration_started', 'tenant_data_migration_failed']);
 });
