@@ -72,3 +72,24 @@ test('runner stop waits for an in-flight poll without starving its I/O completio
   assert.equal(runner.getActiveCount(), 0);
   assert.equal(runner.isRunning(), false);
 });
+
+
+test('runner shutdown is bounded when a migration job never resolves', async () => {
+  const errors = [];
+  const runner = createPlatformTenantMigrationRunner({
+    store: { async listRunnableJobs() { return [{ id: 77 }]; } },
+    worker: { runJob: () => new Promise(() => {}) },
+    concurrency: 1, stopGraceMs: 100, onError: error => errors.push(error)
+  });
+  await runner.tick();
+  const result = await runner.stop();
+  assert.deepEqual(result, { drained: false, timedOut: true, active: 1 });
+  assert.deepEqual(errors, [{ code: 'TENANT_MIGRATION_RUNNER_DRAIN_TIMEOUT' }]);
+  assert.equal(runner.isRunning(), false);
+});
+
+test('runner validates shutdown drain deadline', () => {
+  assert.throws(() => createPlatformTenantMigrationRunner({
+    store: { listRunnableJobs() {} }, worker: { runJob() {} }, stopGraceMs: 0
+  }), /TENANT_MIGRATION_RUNNER_CONFIG_INVALID/);
+});
