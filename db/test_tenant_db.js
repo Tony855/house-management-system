@@ -65,3 +65,23 @@ test('tenant pool manager rejects invalid tenant database identifiers before poo
   assert.equal(creates, 0);
   await manager.closeAll();
 });
+
+
+test('concurrent closeAll calls share the same pool-drain completion', async () => {
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const manager = new TenantPoolManager({
+    createPool: () => ({ end: async () => { await gate; } })
+  });
+  await manager.getPool(context());
+  let firstDone = false, secondDone = false;
+  const first = manager.closeAll().then(() => { firstDone = true; });
+  const second = manager.closeAll().then(() => { secondDone = true; });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(firstDone, false);
+  assert.equal(secondDone, false);
+  release();
+  await Promise.all([first, second]);
+  assert.equal(firstDone, true);
+  assert.equal(secondDone, true);
+});
