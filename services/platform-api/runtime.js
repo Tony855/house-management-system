@@ -29,6 +29,8 @@ function createPlatformApiRuntime({
   }
   if (billingSystemWriteAuthorizer !== undefined && (tenantSecretManager === undefined || typeof billingSystemWriteAuthorizer !== 'function')) throw new TypeError('PLATFORM_BILLING_SYSTEM_AUTHORIZER_REQUIRED');
   const platformPool = createPlatformPool({ env, ...(createPool ? { createPool } : {}) });
+  let app = null;
+  let tenantPoolManager = null;
   try {
     const auth = createPlatformAdminAuthDependencies({
       platformPool, mfaEncryption, recoveryCodePepper, loginRateLimitHmacKey,
@@ -36,14 +38,13 @@ function createPlatformApiRuntime({
     });
     const migrationExecutor = migrationConnectionResolver === undefined ? undefined :
       createTenantDataMigrationExecutor({ resolveConnections: migrationConnectionResolver });
-    const app = createPlatformApi({
+    app = createPlatformApi({
       pool: platformPool, adminAuthService: auth.authService,
       mfaService: auth.mfaService, auditStore: auth.auditStore, adminStore: auth.authStore,
       ...(migrationExecutor ? { migrationExecutor } : {}),
       ...(migrationWorkerId ? { migrationWorkerId } : {}),
       ...(migrationConcurrency ? { migrationConcurrency } : {})
     });
-    let tenantPoolManager = null;
     let tenantRegistry = null;
     let tenantSecretProvider = null;
     let recurringBillingRunner = null;
@@ -118,9 +119,22 @@ function createPlatformApiRuntime({
       }
     });
   } catch (error) {
-    if (typeof platformPool.end === 'function') {
-      try { Promise.resolve(platformPool.end()).catch(() => {}); } catch (_) { /* preserve startup failure */ }
+    const shutdowns = [];
+    if (app?.locals) {
+      for (const name of ['stopTenantMigrationRunner', 'stopRecurringBillingRunner', 'stopTenantBillingJobWorker']) {
+        if (typeof app.locals[name] === 'function') {
+          shutdowns.push(Promise.resolve().then(() => app.locals[name]()).catch(() => {}));
+        }
+      }
     }
+    if (tenantPoolManager && typeof tenantPoolManager.closeAll === 'function') {
+      shutdowns.push(Promise.resolve().then(() => tenantPoolManager.closeAll()).catch(() => {}));
+    }
+    Promise.allSettled(shutdowns).finally(() => {
+      if (typeof platformPool.end === 'function') {
+        try { Promise.resolve(platformPool.end()).catch(() => {}); } catch (_) { /* preserve startup failure */ }
+      }
+    });
     throw error;
   }
 }
