@@ -24,8 +24,9 @@ test('worker claims, resumes from checkpoint, heartbeats, checkpoints and comple
   const store = fakeStore();
   const worker = createPlatformTenantMigrationWorker({
     store, workerId: 'worker-a', leaseSeconds: 90,
-    executeJob: async ({ job, checkpoint, heartbeat, saveCheckpoint }) => {
+    executeJob: async ({ job, checkpoint, heartbeat, saveCheckpoint, leaseSeconds }) => {
       assert.equal(job.id, 8);
+      assert.equal(leaseSeconds, 90);
       assert.deepEqual(checkpoint, baseJob.checkpoint);
       await heartbeat();
       await saveCheckpoint({ table: 'bills', lastId: 22 });
@@ -77,4 +78,27 @@ test('worker reports lease loss when a failure cannot be recorded by the expired
   const result = await worker.runJob(8);
   assert.equal(result.state, 'lease_lost');
   assert.equal(store.calls.some(call => call[0] === 'complete'), false);
+});
+
+
+test('worker abandons migration when lease renewal hangs past its bounded timeout', async () => {
+  const store = fakeStore({
+    async renewLease() { return new Promise(() => {}); }
+  });
+  const worker = createPlatformTenantMigrationWorker({
+    store, workerId: 'worker-a', leaseSeconds: 30, leaseOperationTimeoutMs: 10,
+    executeJob: async ({ heartbeat }) => { await heartbeat(); }
+  });
+  const result = await worker.runJob(8);
+  assert.equal(result.state, 'lease_lost');
+  assert.equal(result.errorCode, 'TENANT_MIGRATION_JOB_LEASE_LOST');
+  assert.equal(store.calls.some(call => call[0] === 'fail'), false);
+  assert.equal(store.calls.some(call => call[0] === 'complete'), false);
+});
+
+test('worker rejects lease operation timeouts that could exceed the lease', () => {
+  assert.throws(() => createPlatformTenantMigrationWorker({
+    store: fakeStore(), workerId: 'worker-a', leaseSeconds: 30, leaseOperationTimeoutMs: 30000,
+    executeJob: async () => {}
+  }), /TENANT_MIGRATION_JOB_OPERATION_TIMEOUT_INVALID/);
 });
