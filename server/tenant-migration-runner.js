@@ -1,7 +1,7 @@
 'use strict';
 
 function createPlatformTenantMigrationRunner({
-  store, worker, concurrency = 2, pollIntervalMs = 5000, onError = () => {}
+  store, worker, concurrency = 2, pollIntervalMs = 5000, stopGraceMs = 30000, onError = () => {}
 } = {}) {
   if (!store || typeof store.listRunnableJobs !== 'function') {
     throw new TypeError('TENANT_MIGRATION_RUNNER_STORE_INVALID');
@@ -10,7 +10,8 @@ function createPlatformTenantMigrationRunner({
     throw new TypeError('TENANT_MIGRATION_RUNNER_WORKER_INVALID');
   }
   if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 16 ||
-      !Number.isInteger(pollIntervalMs) || pollIntervalMs < 250 || pollIntervalMs > 300000) {
+      !Number.isInteger(pollIntervalMs) || pollIntervalMs < 250 || pollIntervalMs > 300000 ||
+      !Number.isInteger(stopGraceMs) || stopGraceMs < 100 || stopGraceMs > 300000) {
     throw new TypeError('TENANT_MIGRATION_RUNNER_CONFIG_INVALID');
   }
   if (typeof onError !== 'function') throw new TypeError('TENANT_MIGRATION_RUNNER_ERROR_HANDLER_INVALID');
@@ -21,6 +22,7 @@ function createPlatformTenantMigrationRunner({
   let tickSettled = Promise.resolve();
   let resolveTickSettled = null;
   let stopping = false;
+  let stopPromise = null;
 
   function report(error) {
     const code = typeof error?.code === 'string' && /^[A-Z][A-Z0-9_]{1,95}$/.test(error.code)
@@ -78,10 +80,26 @@ function createPlatformTenantMigrationRunner({
   }
 
   async function stop() {
+    if (stopPromise) return stopPromise;
     stopping = true;
     if (timer) clearInterval(timer);
     timer = null;
-    await waitForIdle();
+    stopPromise = (async () => {
+      let timeout;
+      const timedOut = new Promise(resolve => {
+        timeout = setTimeout(() => resolve(false), stopGraceMs);
+      });
+      const drained = await Promise.race([waitForIdle().then(() => true, () => true), timedOut]);
+      clearTimeout(timeout);
+      if (!drained) {
+        report(Object.assign(new Error('TENANT_MIGRATION_RUNNER_DRAIN_TIMEOUT'), {
+          code: 'TENANT_MIGRATION_RUNNER_DRAIN_TIMEOUT'
+        }));
+        return Object.freeze({ drained: false, timedOut: true, active: active.size });
+      }
+      return Object.freeze({ drained: true, active: 0 });
+    })();
+    return stopPromise;
   }
 
   return Object.freeze({
