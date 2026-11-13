@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const crypto = require('node:crypto');
 const { createProductLoginService, normalizeLoginHost } = require('../server/product-login');
+const { hashPassword } = require('../server/util');
 
 const tenantA = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const tenantB = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
@@ -161,4 +162,21 @@ test('successful login clears only the matching normalized host/user rate-limit 
   await service.login({ host: 'TENANT.example.test.', username: 'same-user', password: 'correct' });
   const identity = calls.find(x => x[0] === 'rate-clear')[1];
   assert.deepEqual(identity, { appId: 'rental', host: 'tenant.example.test', username: 'same-user' });
+});
+
+
+test('default product password verification is asynchronous and accepts stored scrypt hashes', async () => {
+  const stored = hashPassword('correct');
+  const { service } = setup({
+    verifyPassword: undefined,
+    poolManager: { getPool: async () => ({
+      execute: async () => [[{ id: 17, username: 'same-user', password: stored, real_name: 'Tenant User', role: 'admin', mode: 'rental' }]]
+    }) }
+  });
+  const result = await service.login({ host: 'tenant.example.test', username: 'same-user', password: 'correct' });
+  assert.equal(result.user.id, '17');
+  await assert.rejects(
+    service.login({ host: 'tenant.example.test', username: 'same-user', password: 'wrong' }),
+    error => error.code === 'INVALID_CREDENTIALS'
+  );
 });
