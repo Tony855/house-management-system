@@ -21,6 +21,21 @@ function assertNotAborted(signal) {
   if (signal?.aborted) throw Object.assign(new Error('TENANT_MIGRATION_JOB_LEASE_LOST'), { code: 'TENANT_MIGRATION_JOB_LEASE_LOST' });
 }
 
+function bindAbortToConnection(connection, signal) {
+  let destroyed = false;
+  const onAbort = () => {
+    if (destroyed || typeof connection.destroy !== 'function') return;
+    destroyed = true;
+    connection.destroy();
+  };
+  if (signal?.aborted) onAbort();
+  else signal?.addEventListener('abort', onAbort, { once: true });
+  return {
+    isDestroyed: () => destroyed,
+    cleanup: () => signal?.removeEventListener('abort', onAbort)
+  };
+}
+
 function assertPool(pool, method, code) {
   if (!pool || typeof pool[method] !== 'function') throw new TypeError(code);
 }
@@ -43,7 +58,9 @@ function createMariaDbTenantMigrationAdapters({ appId, sourcePool, targetPool })
       if (requestedAppId !== appId || !Number.isSafeInteger(sourceOrgId) || sourceOrgId < 1) {
         throw new TypeError('TENANT_DATA_MIGRATION_SOURCE_SCOPE_INVALID');
       }
+      assertNotAborted(signal);
       const connection = await sourcePool.getConnection();
+      const abortBinding = bindAbortToConnection(connection, signal);
       let transactionStarted = false;
       try {
         await assertDatabase(connection, 'house_sys_' + appId, 'TENANT_DATA_MIGRATION_SOURCE_DATABASE_MISMATCH');
@@ -66,12 +83,13 @@ function createMariaDbTenantMigrationAdapters({ appId, sourcePool, targetPool })
         transactionStarted = false;
         return { tables: result };
       } catch (error) {
-        if (transactionStarted) {
+        if (transactionStarted && !abortBinding.isDestroyed()) {
           try { await connection.rollback(); } catch (rollbackError) { error.rollbackError = rollbackError; }
         }
         throw error;
       } finally {
-        connection.release();
+        abortBinding.cleanup();
+        if (!abortBinding.isDestroyed()) connection.release();
       }
     }
   });
@@ -85,7 +103,9 @@ function createMariaDbTenantMigrationAdapters({ appId, sourcePool, targetPool })
       if (!snapshotTables || JSON.stringify(Object.keys(snapshotTables).sort()) !== JSON.stringify(tables)) {
         throw new Error('TENANT_DATA_MIGRATION_TARGET_TABLE_SET_MISMATCH');
       }
+      assertNotAborted(signal);
       const connection = await targetPool.getConnection();
+      const abortBinding = bindAbortToConnection(connection, signal);
       const lockName = 'tenant-migrate-' + tenantId;
       let lockAcquired = false;
       try {
@@ -131,9 +151,13 @@ function createMariaDbTenantMigrationAdapters({ appId, sourcePool, targetPool })
         await connection.commit();
         return { imported: true, tableCount: tables.length };
       } catch (error) {
-        try { await connection.rollback(); } catch (rollbackError) { error.rollbackError = rollbackError; }
+        if (!abortBinding.isDestroyed()) {
+          try { await connection.rollback(); } catch (rollbackError) { error.rollbackError = rollbackError; }
+        }
         throw error;
       } finally {
+        abortBinding.cleanup();
+        if (abortBinding.isDestroyed()) return;
         let discardConnection = false;
         if (lockAcquired) {
           try {
@@ -155,15 +179,23 @@ function createMariaDbTenantMigrationAdapters({ appId, sourcePool, targetPool })
       if (requestedAppId !== appId || typeof tenantId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(tenantId)) {
         throw new TypeError('TENANT_DATA_MIGRATION_TARGET_SCOPE_INVALID');
       }
-      await assertDatabase(targetPool, tenantDatabaseName(appId, tenantId), 'TENANT_DATA_MIGRATION_TARGET_DATABASE_MISMATCH');
-      const result = {};
-      for (const table of tables) {
-        assertNotAborted(signal);
-        const [rows] = await targetPool.execute('SELECT * FROM ' + quoteIdentifier(table) + ' ORDER BY `id` ASC');
-        result[table] = rows;
-        assertNotAborted(signal);
+      assertNotAborted(signal);
+      const connection = await targetPool.getConnection();
+      const abortBinding = bindAbortToConnection(connection, signal);
+      try {
+        await assertDatabase(connection, tenantDatabaseName(appId, tenantId), 'TENANT_DATA_MIGRATION_TARGET_DATABASE_MISMATCH');
+        const result = {};
+        for (const table of tables) {
+          assertNotAborted(signal);
+          const [rows] = await connection.execute('SELECT * FROM ' + quoteIdentifier(table) + ' ORDER BY `id` ASC');
+          result[table] = rows;
+          assertNotAborted(signal);
+        }
+        return { tables: result };
+      } finally {
+        abortBinding.cleanup();
+        if (!abortBinding.isDestroyed()) connection.release();
       }
-      return { tables: result };
     }
   });
 
