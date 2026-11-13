@@ -112,7 +112,7 @@ test('executor preserves the primary migration error when connection cleanup als
     job: { id: 3, appId: 'rental', tenantId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', sourceOrgId: 9, mode: 'copy' },
     heartbeat: async () => {}, saveCheckpoint: async () => {}
   }), error => {
-    assert.equal(error.code, 'TENANT_MIGRATION_SOURCE_POOL_REQUIRED');
+    assert.equal(error.message, 'TENANT_MIGRATION_SOURCE_POOL_REQUIRED');
     assert.equal(error.cleanupError, 'POOL_CLOSE_FAILED');
     return true;
   });
