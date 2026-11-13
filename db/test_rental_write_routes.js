@@ -257,13 +257,16 @@ test('rental termination rejects contracts with unpaid bills and does not change
 test('rental deposit transaction DTO requires cash method or deduction reason and rejects client balances', () => {
   const { validateRentalDepositTransaction } = require('../services/rental-api/write-routes');
   assert.equal(validateRentalDepositTransaction({ amount: 20, pay_method: 'cash', transaction_date: '2030-01-01' }, 'receipt').amount, 20);
+  assert.equal(validateRentalDepositTransaction({ amount: 1.15, pay_method: 'cash' }, 'receipt').amount, 1.15);
   assert.equal(validateRentalDepositTransaction({ amount: 5, note: 'Damage' }, 'deduction').amount, 5);
   for (const [body, action] of [
     [{ amount: 0, pay_method: 'cash' }, 'receipt'],
     [{ amount: 10, pay_method: 'cash', held_amount: 99 }, 'refund'],
     [{ amount: 10 }, 'receipt'],
     [{ amount: 10, note: '' }, 'deduction'],
-    [{ amount: 10, pay_method: 'cash', transaction_date: '2030-02-30' }, 'refund']
+    [{ amount: 10, pay_method: 'cash', transaction_date: '2030-02-30' }, 'refund'],
+    [{ amount: true, pay_method: 'cash' }, 'receipt'],
+    [{ amount: '1e2', pay_method: 'cash' }, 'receipt']
   ]) assert.throws(() => validateRentalDepositTransaction(body, action), e => e.code === 'RENTAL_DEPOSIT_INPUT_INVALID');
 });
 test('rental deposit receipts, refunds and deductions enforce contract state and held balance', async () => {
