@@ -125,15 +125,29 @@ async function copyTenantOrgData({
     throw new TypeError('TENANT_DATA_MIGRATION_TARGET_REQUIRED');
   }
 
-  assertNotAborted(signal);
-  await audit({ event: 'tenant_data_migration_started', appId, tenantId, sourceOrgId, mode });
-  assertNotAborted(signal);
-  const source = await sourceReader.exportOrgSnapshot({ appId, sourceOrgId, signal });
-  assertNotAborted(signal);
-  const normalized = normalizeSourceSnapshot(appId, sourceOrgId, source);
-  if (mode === 'dry-run') {
-    await audit({ event: 'tenant_data_migration_dry_run_verified', appId, tenantId, sourceOrgId, manifest: normalized.manifest });
-    return { mode, appId, tenantId, sourceOrgId, manifest: normalized.manifest, copied: false, cutover: false };
+  let normalized;
+  try {
+    assertNotAborted(signal);
+    await audit({ event: 'tenant_data_migration_started', appId, tenantId, sourceOrgId, mode });
+    assertNotAborted(signal);
+    const source = await sourceReader.exportOrgSnapshot({ appId, sourceOrgId, signal });
+    assertNotAborted(signal);
+    normalized = normalizeSourceSnapshot(appId, sourceOrgId, source);
+    if (mode === 'dry-run') {
+      await audit({ event: 'tenant_data_migration_dry_run_verified', appId, tenantId, sourceOrgId, manifest: normalized.manifest });
+      return { mode, appId, tenantId, sourceOrgId, manifest: normalized.manifest, copied: false, cutover: false };
+    }
+  } catch (error) {
+    try {
+      await audit({
+        event: 'tenant_data_migration_copy_failed',
+        appId, tenantId, sourceOrgId,
+        code: /^[A-Z][A-Z0-9_]{1,63}$/.test(error.code || '') ? error.code : 'TENANT_DATA_MIGRATION_FAILED'
+      });
+    } catch (auditError) {
+      error.auditFailure = auditError.code || auditError.message || 'AUDIT_WRITE_FAILED';
+    }
+    throw error;
   }
 
   try {
