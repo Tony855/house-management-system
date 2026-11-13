@@ -56,6 +56,8 @@ test('rejects malformed, expired, overlong and cross-product tokens', async () =
     'Bearer malformed',
     'Bearer ' + token({ exp: now }),
     'Bearer ' + token({ exp: now + 3601 }),
+    // A not-before claim after expiry is internally inconsistent, even within clock skew.
+    'Bearer ' + token({ nbf: now + 10, exp: now + 5 }),
     'Bearer ' + token({ aud: 'hotel', appId: 'hotel' }),
     'Bearer ' + token({ aud: ['rental', 'platform'] }),
     'Bearer ' + token({}, { alg: 'none' }),
