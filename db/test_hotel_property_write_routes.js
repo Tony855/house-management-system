@@ -99,7 +99,8 @@ test('meter creation derives fees from locked room rates and previous reading', 
 
 test('bill payment DTO rejects invalid amounts and client-controlled balance fields', () => {
   assert.equal(validateBillPayment({ amount: 12.5, pay_method: 'cash', pay_date: '2030-01-31' }).amount, 12.5);
-  for (const bad of [{ amount: 0 }, { amount: -1 }, { amount: 1.001 }, { amount: 20, paid_amount: 100 }, { amount: 20, status: 'paid' }, { amount: 20, pay_date: '2030-02-30' }]) {
+  assert.equal(validateBillPayment({ amount: 1.15 }).amount, 1.15);
+  for (const bad of [{ amount: 0 }, { amount: -1 }, { amount: 1.001 }, { amount: true }, { amount: '1e2' }, { amount: 20, paid_amount: 100 }, { amount: 20, status: 'paid' }, { amount: 20, pay_date: '2030-02-30' }]) {
     assert.throws(() => validateBillPayment(bad), e => e.code === 'BILL_PAYMENT_INPUT_INVALID');
   }
 });
@@ -370,7 +371,7 @@ test('property owner statements paginate details while preserving whole-period t
     assert.deepEqual(calls[0].params,['2030-01-01','2030-01-31','2030-01-01','2030-01-31']);
     assert.deepEqual(calls[1].params,['2030-01-01','2030-01-31','2030-01-01','2030-01-31',25,25]);
     assert.match(calls[0].sql,/COUNT\(DISTINCT b\.tenant_id\)/);
-    assert.match(calls[1].sql,/FROM bill_transactions WHERE transaction_date BETWEEN/);
+    assert.match(calls[1].sql,/FROM bill_transactions WHERE transaction_date >= \\? AND transaction_date < DATE_ADD\\(\\?, INTERVAL 1 DAY\\)/);
     const invalid=await fetch('http://127.0.0.1:'+server.address().port+'/api/property-fees/owner-statements?from_date=2030-02-01&to_date=2030-01-01');
     assert.equal(invalid.status,400);assert.deepEqual(await invalid.json(),{error:'PROPERTY_OWNER_STATEMENT_RANGE_INVALID'});
     const invalidPage=await fetch('http://127.0.0.1:'+server.address().port+'/api/property-fees/owner-statements?from_date=2030-01-01&to_date=2030-01-31&page=1&page_size=101');
@@ -381,7 +382,8 @@ test('property owner statements paginate details while preserving whole-period t
 test('hotel deposit transaction DTO rejects invalid and client-controlled fields', () => {
   const { validateHotelDepositTransaction } = require('../services/hotel-api/order-routes');
   assert.equal(validateHotelDepositTransaction({ amount: 12.5, pay_method: 'cash', transaction_date: '2030-01-31' }).amount, 12.5);
-  for (const bad of [{ amount: 0 }, { amount: -1 }, { amount: 1.001 }, { amount: 5, held_amount: 99 }, { amount: 5, transaction_date: '2030-02-30' }]) {
+  assert.equal(validateHotelDepositTransaction({ amount: 1.15 }).amount, 1.15);
+  for (const bad of [{ amount: 0 }, { amount: -1 }, { amount: 1.001 }, { amount: true }, { amount: '1e2' }, { amount: 5, held_amount: 99 }, { amount: 5, transaction_date: '2030-02-30' }]) {
     assert.throws(() => validateHotelDepositTransaction(bad), e => e.code === 'HOTEL_DEPOSIT_INPUT_INVALID');
   }
 });
