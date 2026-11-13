@@ -16,6 +16,8 @@ const {
   daysInMonth, monthStart, monthEnd
 } = require('./util');
 const { V, clean } = require('./validate');
+const { createLegacyPasswordStore } = require('./legacy-password-store');
+const legacyPasswordStore = createLegacyPasswordStore(shared);
 
 const app = express();
 app.use(express.json({ limit: '256kb' }));
@@ -672,8 +674,9 @@ router.put('/orgs/:id', authMode, superOnly, h(async (req, res) => {
   }
   if (password !== null && password) {
     if (password.length < 6) return res.status(400).json({ error: '密码至少 6 位' });
-    await shared.query('UPDATE users SET password = ? WHERE id = ?', [await hashPasswordAsync(password), o.admin_user_id]);
-    await shared.query('DELETE FROM sessions WHERE user_id = ?', [o.admin_user_id]);
+    await legacyPasswordStore.updatePasswordAndRevokeSessions({
+      userId: o.admin_user_id, passwordHash: await hashPasswordAsync(password)
+    });
   }
   res.json({ ok: true });
 }));
@@ -1522,9 +1525,9 @@ router.post('/tenants/:id/company-admin', authMode, orgAdminOnly, h(async (req, 
   const [exist] = await shared.query(
     'SELECT id FROM users WHERE company_id = ? AND org_id = ?', [id, req.orgId]);
   if (exist.length) {
-    await shared.query('UPDATE users SET password = ?, real_name = ? WHERE id = ?',
-      [await hashPasswordAsync(password), real_name || '', exist[0].id]);
-    await shared.query('DELETE FROM sessions WHERE user_id = ?', [exist[0].id]);
+    await legacyPasswordStore.updatePasswordAndRevokeSessions({
+      userId: exist[0].id, passwordHash: await hashPasswordAsync(password), realName: real_name || ''
+    });
   } else {
     await shared.query(
       `INSERT INTO users (username, password, real_name, role, mode, org_id, company_id)
@@ -3111,8 +3114,9 @@ router.put('/users/:id', authMode, orgAdminOnly, h(async (req, res) => {
   await shared.query('UPDATE users SET real_name = ?, role = ? WHERE id = ?',
     [real_name !== null ? real_name : target.real_name, newRole, req.params.id]);
   if (password) {
-    await shared.query('UPDATE users SET password = ? WHERE id = ?', [await hashPasswordAsync(password), req.params.id]);
-    await shared.query('DELETE FROM sessions WHERE user_id = ?', [req.params.id]);
+    await legacyPasswordStore.updatePasswordAndRevokeSessions({
+      userId: req.params.id, passwordHash: await hashPasswordAsync(password)
+    });
   }
   const [rows] = await shared.query('SELECT * FROM users WHERE id = ?', [req.params.id]);
   res.json(rows[0]);
