@@ -14,8 +14,10 @@ function invalid() {
 }
 function decimal(value, { min = 0, max, nullable = false } = {}) {
   if (value === undefined || value === null || value === '') return nullable ? null : 0;
-  const n = Number(value);
-  if (!Number.isFinite(n) || n < min || (max !== undefined && n > max) || Math.round(n * 100) !== n * 100) throw invalid();
+  const maxMagnitude = Number.isFinite(max) ? Math.ceil(Math.max(Math.abs(min), Math.abs(max)) * 100) : Number.MAX_SAFE_INTEGER;
+  const minor = parseMinorUnits(value, { allowZero: true, allowNegative: min < 0, maxMinor: maxMagnitude });
+  const n = minor === null ? NaN : minor / 100;
+  if (!Number.isFinite(n) || n < min || (max !== undefined && n > max)) throw invalid();
   return n;
 }
 function validateRoom(body) {
