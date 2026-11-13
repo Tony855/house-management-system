@@ -100,21 +100,50 @@ function createPlatformAdminAuthService({
     return Object.freeze({ tokenType: 'Bearer', accessToken: header + '.' + claims + '.' + signature, expiresIn: sessionLifetimeSeconds });
   }
 
+  function mfaRateLimitIdentity(adminId) {
+    return { appId: 'platform', host: 'platform', username: 'admin:' + String(adminId) };
+  }
+
+  async function verifyMfaCode({ adminId, code }) {
+    const identity = mfaRateLimitIdentity(adminId);
+    try {
+      await loginRateLimiter.assertAllowed(identity);
+    } catch (error) {
+      if (error && error.code === 'LOGIN_RATE_LIMITED' && error.status === 429) throw error;
+      authError('AUTHENTICATION_UNAVAILABLE', 503);
+    }
+
+    let verified;
+    try {
+      verified = await mfaService.verify({ adminId, code });
+    } catch (error) {
+      if (error && error.status === 401) {
+        try { await loginRateLimiter.recordFailure(identity); }
+        catch (_) { authError('AUTHENTICATION_UNAVAILABLE', 503); }
+      }
+      throw error;
+    }
+    if (!verified || verified.verified !== true) {
+      try { await loginRateLimiter.recordFailure(identity); }
+      catch (_) { authError('AUTHENTICATION_UNAVAILABLE', 503); }
+      authError('PLATFORM_MFA_REQUIRED', 401);
+    }
+    try { await loginRateLimiter.clear(identity); }
+    catch (_) { authError('AUTHENTICATION_UNAVAILABLE', 503); }
+    return verified;
+  }
+
   async function verifyChallenge({ challenge, code }) {
     if (typeof challenge !== 'string' || challenge.length < 40 || challenge.length > 128) authError('MFA_CHALLENGE_INVALID');
     const record = await challengeStore.getChallenge(digest(challenge));
     if (!record || record.consumedAt || record.expiresAt <= now()) authError('MFA_CHALLENGE_EXPIRED', 410);
     let verified;
-    try { verified = await mfaService.verify({ adminId: record.adminId, code }); }
+    try { verified = await verifyMfaCode({ adminId: record.adminId, code }); }
     catch (error) {
       if (error && error.status === 401) {
         await challengeStore.recordChallengeFailure({ challengeHash: digest(challenge), adminId: record.adminId });
       }
       throw error;
-    }
-    if (!verified || verified.verified !== true) {
-      await challengeStore.recordChallengeFailure({ challengeHash: digest(challenge), adminId: record.adminId });
-      authError('PLATFORM_MFA_REQUIRED', 401);
     }
     const consumed = await challengeStore.consumeChallenge({ challengeHash: digest(challenge), adminId: record.adminId });
     if (consumed !== true) authError('MFA_CHALLENGE_REPLAYED', 401);
@@ -173,8 +202,7 @@ function createPlatformAdminAuthService({
   }
 
   async function stepUp({ adminId, sessionId, code }) {
-    const verified = await mfaService.verify({ adminId, code });
-    if (!verified || verified.verified !== true) authError('PLATFORM_MFA_REQUIRED', 401);
+    const verified = await verifyMfaCode({ adminId, code });
     const updated = await sessionStore.touchStepUpVerified({ adminId, sessionId, verifiedAt: verified.verifiedAt });
     if (updated !== true) authError('SESSION_REVOKED', 401);
     return Object.freeze({ stepUpVerified: true, verifiedAt: verified.verifiedAt });
