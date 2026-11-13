@@ -67,6 +67,7 @@ async function provisionTenant({
   let databaseAttempted = false;
   let principalAttempted = false;
   let secretAttempted = false;
+  let activationAttempted = false;
 
   try {
     registryAttempted = true;
@@ -87,6 +88,7 @@ async function provisionTenant({
     // Persist the successful verification before the irreversible activation.
     // If audit storage is unavailable, the tenant remains non-active.
     await writeAudit(audit, { tenantId, event: 'provisioning_verified', schemaVersion: verification.schemaVersion || null });
+    activationAttempted = true;
     await registry.activateTenant(tenantId, { schemaVersion: verification.schemaVersion || null });
     return { tenantId, appId, lifecycleState: 'active', schemaVersion: verification.schemaVersion || null };
   } catch (error) {
@@ -94,6 +96,26 @@ async function provisionTenant({
     const cleanup = async (label, operation) => {
       try { await operation(); } catch (_) { cleanupFailures.push(label); }
     };
+
+    // Activation is the final state transition and may commit remotely before
+    // the client times out. Never delete backing resources or mark the tenant
+    // failed after an activation attempt: that could leave an active registry
+    // row pointing at a deleted database. Preserve resources for reconciliation.
+    if (activationAttempted) {
+      error.code = 'TENANT_ACTIVATION_OUTCOME_UNKNOWN';
+      error.reconciliationRequired = true;
+      try {
+        await writeAudit(audit, {
+          tenantId,
+          event: 'provisioning_activation_outcome_unknown',
+          code: error.code,
+          reconciliationRequired: true
+        });
+      } catch (auditError) {
+        error.auditFailure = auditError.code || auditError.message || 'AUDIT_WRITE_FAILED';
+      }
+      throw error;
+    }
 
     // Calls may succeed remotely and then time out locally. Reconcile by the
     // deterministic tenant resource names, not by success flags set after await.
