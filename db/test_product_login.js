@@ -141,6 +141,21 @@ test('login throttling blocks requests before tenant lookup and propagates limit
   assert.equal(unavailable.calls.some(x => x[0] === 'host'), false);
 });
 
+test('rate-limit clear failure does not leave an active login session', async () => {
+  const { service, calls } = setup({
+    loginRateLimiter: {
+      assertAllowed: async () => {},
+      recordFailure: async () => {},
+      clear: async () => { throw new Error('platform DB offline'); }
+    }
+  });
+  await assert.rejects(
+    service.login({ host: 'tenant.example.test', username: 'same-user', password: 'correct' }),
+    error => error.code === 'LOGIN_RATE_LIMITER_UNAVAILABLE' && error.status === 503
+  );
+  assert.equal(calls.some(x => x[0] === 'create'), false);
+});
+
 test('successful login clears only the matching normalized host/user rate-limit identity', async () => {
   const { service, calls } = setup();
   await service.login({ host: 'TENANT.example.test.', username: 'same-user', password: 'correct' });
