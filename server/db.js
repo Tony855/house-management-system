@@ -36,7 +36,8 @@ const pools = {
 const als = new AsyncLocalStorage();
 
 function getPool(mode) {
-  return pools[mode] || pools.rental;
+  if (!Object.prototype.hasOwnProperty.call(pools, mode)) throw new Error('Unsupported database mode: ' + String(mode));
+  return pools[mode];
 }
 
 /* 在指定模式 + 经营主体上下文内执行 fn（业务路由经此包裹后，pool.query 自动使用该主体所在模式库） */

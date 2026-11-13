@@ -1,0 +1,126 @@
+'use strict';
+
+function withTimeout(operation, timeoutMs, code) {
+  let timer;
+  const pending = Promise.resolve().then(operation);
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(Object.assign(new Error(code), { code })), timeoutMs);
+  });
+  return Promise.race([pending, timeout]).finally(() => clearTimeout(timer));
+}
+
+function createPlatformTenantMigrationRunner({
+  store, worker, concurrency = 2, pollIntervalMs = 5000, pollOperationTimeoutMs = 30000,
+  stopGraceMs = 30000, onError = () => {}
+} = {}) {
+  if (!store || typeof store.listRunnableJobs !== 'function') {
+    throw new TypeError('TENANT_MIGRATION_RUNNER_STORE_INVALID');
+  }
+  if (!worker || typeof worker.runJob !== 'function') {
+    throw new TypeError('TENANT_MIGRATION_RUNNER_WORKER_INVALID');
+  }
+  if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 16 ||
+      !Number.isInteger(pollIntervalMs) || pollIntervalMs < 250 || pollIntervalMs > 300000 ||
+      !Number.isInteger(pollOperationTimeoutMs) || pollOperationTimeoutMs < 1 || pollOperationTimeoutMs > 300000 ||
+      !Number.isInteger(stopGraceMs) || stopGraceMs < 100 || stopGraceMs > 300000) {
+    throw new TypeError('TENANT_MIGRATION_RUNNER_CONFIG_INVALID');
+  }
+  if (typeof onError !== 'function') throw new TypeError('TENANT_MIGRATION_RUNNER_ERROR_HANDLER_INVALID');
+
+  const active = new Map();
+  let timer = null;
+  let ticking = false;
+  let tickSettled = Promise.resolve();
+  let resolveTickSettled = null;
+  let stopping = false;
+  let stopPromise = null;
+
+  function report(error) {
+    const code = typeof error?.code === 'string' && /^[A-Z][A-Z0-9_]{1,95}$/.test(error.code)
+      ? error.code : 'TENANT_MIGRATION_RUNNER_FAILED';
+    try { onError(Object.freeze({ code })); } catch (_) {}
+  }
+
+  async function tick() {
+    if (stopping || ticking) return 0;
+    const capacity = concurrency - active.size;
+    if (capacity <= 0) return 0;
+    ticking = true;
+    tickSettled = new Promise(resolve => { resolveTickSettled = resolve; });
+    try {
+      const jobs = await withTimeout(
+        () => store.listRunnableJobs({ limit: Math.min(50, capacity) }),
+        pollOperationTimeoutMs, 'TENANT_MIGRATION_RUNNER_SCAN_TIMEOUT'
+      );
+      if (!Array.isArray(jobs)) throw new TypeError('TENANT_MIGRATION_RUNNER_JOB_LIST_INVALID');
+      let launched = 0;
+      for (const job of jobs) {
+        if (stopping || active.size >= concurrency) break;
+        if (!job || !Number.isSafeInteger(job.id) || job.id < 1 || active.has(job.id)) continue;
+        const promise = Promise.resolve().then(() => worker.runJob(job.id))
+          .catch(error => { report(error); })
+          .finally(() => { active.delete(job.id); });
+        active.set(job.id, promise);
+        launched += 1;
+      }
+      return launched;
+    } catch (error) {
+      report(error);
+      return 0;
+    } finally {
+      ticking = false;
+      if (resolveTickSettled) resolveTickSettled();
+      resolveTickSettled = null;
+    }
+  }
+
+  function start() {
+    if (stopping) throw new Error('TENANT_MIGRATION_RUNNER_STOPPED');
+    if (timer) return false;
+    timer = setInterval(() => { void tick(); }, pollIntervalMs);
+    if (typeof timer.unref === 'function') timer.unref();
+    void tick();
+    return true;
+  }
+
+  async function waitForIdle() {
+    while (ticking || active.size) {
+      // Wait for the in-flight poll to settle instead of spinning microtasks.
+      // A microtask-only loop can starve the I/O needed to finish listRunnableJobs.
+      if (ticking) await tickSettled;
+      const pending = [...active.values()];
+      if (pending.length) await Promise.allSettled(pending);
+    }
+  }
+
+  async function stop() {
+    if (stopPromise) return stopPromise;
+    stopping = true;
+    if (timer) clearInterval(timer);
+    timer = null;
+    stopPromise = (async () => {
+      let timeout;
+      const timedOut = new Promise(resolve => {
+        timeout = setTimeout(() => resolve(false), stopGraceMs);
+      });
+      const drained = await Promise.race([waitForIdle().then(() => true, () => true), timedOut]);
+      clearTimeout(timeout);
+      if (!drained) {
+        report(Object.assign(new Error('TENANT_MIGRATION_RUNNER_DRAIN_TIMEOUT'), {
+          code: 'TENANT_MIGRATION_RUNNER_DRAIN_TIMEOUT'
+        }));
+        return Object.freeze({ drained: false, timedOut: true, active: active.size });
+      }
+      return Object.freeze({ drained: true, active: 0 });
+    })();
+    return stopPromise;
+  }
+
+  return Object.freeze({
+    tick, start, stop, waitForIdle,
+    isRunning: () => Boolean(timer) && !stopping,
+    getActiveCount: () => active.size
+  });
+}
+
+module.exports = { createPlatformTenantMigrationRunner };

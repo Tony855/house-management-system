@@ -12,10 +12,12 @@ const fs = require('fs');
 const pool = require('./db');
 const { shared, getPool, withMode, currentOrgId, currentMode, MODES } = require('./db');
 const {
-  hashPassword, verifyPassword, today, nowStr, addDays, addMonths, daysBetween,
+  hashPasswordAsync, verifyPasswordAsync, today, nowStr, addDays, addMonths, daysBetween,
   daysInMonth, monthStart, monthEnd
 } = require('./util');
 const { V, clean } = require('./validate');
+const { createLegacyPasswordStore } = require('./legacy-password-store');
+const legacyPasswordStore = createLegacyPasswordStore(shared);
 
 const app = express();
 app.use(express.json({ limit: '256kb' }));
@@ -52,7 +54,10 @@ app.use('/uploads', async (req, res, next) => {
 /* ---------- 辅助 ---------- */
 const h = fn => (req, res) => fn(req, res).catch(e => {
   console.error(e);
-  res.status(e.status || 500).json({ error: e.message });
+  const status = Number.isInteger(e?.status) && e.status >= 400 && e.status <= 599 ? e.status : 500;
+  const message = status >= 500 ? '服务错误' :
+    (typeof e?.message === 'string' && e.message.length <= 200 ? e.message : '请求失败');
+  res.status(status).json({ error: message });
 });
 const num = v => (v === null || v === undefined || v === '') ? null : Number(v);
 const round2 = n => Math.round((Number(n) || 0) * 100) / 100;
@@ -61,6 +66,11 @@ const round2 = n => Math.round((Number(n) || 0) * 100) / 100;
 const loginHits = new Map();
 /* 登录失败锁定：同账号 5 次失败锁定 15 分钟（防口令爆破） */
 const loginFails = new Map();
+function setBoundedLoginEntry(map, key, value, maxEntries) {
+  map.delete(key); // refresh insertion order for LRU eviction
+  map.set(key, value);
+  while (map.size > maxEntries) map.delete(map.keys().next().value);
+}
 
 /* ---------- 使用费全局配置（超管级；含会话有效期等安全参数） ---------- */
 let FEE_CFG = { fee_mode: 'free', cycle: 'month', remind_days: 7, session_days: 7,
@@ -492,7 +502,7 @@ router.post('/login', h(async (req, res) => {
   const hit = loginHits.get(ip) || { n: 0, t: nowT };
   if (nowT - hit.t > 60000) { hit.n = 0; hit.t = nowT; }
   hit.n++;
-  loginHits.set(ip, hit);
+  setBoundedLoginEntry(loginHits, ip, hit, 10000);
   if (hit.n > 30) return res.status(429).json({ error: '尝试过于频繁，请 1 分钟后再试' });
   const B = req.body || {};
   const v = V(B);
@@ -519,11 +529,16 @@ router.post('/login', h(async (req, res) => {
        LEFT JOIN orgs o ON o.id = u.org_id
       WHERE u.username = ? ${modeQ}`, params);
   const u = rows[0];
-  if (!u || !verifyPassword(password, u.password)) {
+  let passwordValid = false;
+  if (u) {
+    try { passwordValid = await verifyPasswordAsync(password, u.password); }
+    catch (_) { passwordValid = false; }
+  }
+  if (!passwordValid) {
     const f = loginFails.get(failKey) || { n: 0, until: 0 };
     f.n++;
     if (f.n >= 5) { f.n = 0; f.until = nowT + 15 * 60000; }
-    loginFails.set(failKey, f);
+    setBoundedLoginEntry(loginFails, failKey, f, 50000);
     return res.status(400).json({ error: '用户名或密码错误' });
   }
   loginFails.delete(failKey);
@@ -625,7 +640,7 @@ router.post('/orgs', authMode, superOnly, h(async (req, res) => {
     const orgId = orgR.insertId;
     const [uR] = await conn.query(
       'INSERT INTO users (username, password, real_name, role, mode, org_id) VALUES (?, ?, ?, ?, ?, ?)',
-      [username, hashPassword(password), real_name || name + '管理员', 'admin', mode, orgId]);
+      [username, await hashPasswordAsync(password), real_name || name + '管理员', 'admin', mode, orgId]);
     await conn.query('UPDATE orgs SET admin_user_id = ? WHERE id = ?', [uR.insertId, orgId]);
     await conn.query(
       'INSERT INTO settings (org_id, currency, rate, net_price_per_mb, water_price, elec_price) VALUES (?, ?, ?, ?, ?, ?)',
@@ -659,7 +674,9 @@ router.put('/orgs/:id', authMode, superOnly, h(async (req, res) => {
   }
   if (password !== null && password) {
     if (password.length < 6) return res.status(400).json({ error: '密码至少 6 位' });
-    await shared.query('UPDATE users SET password = ? WHERE id = ?', [hashPassword(password), o.admin_user_id]);
+    await legacyPasswordStore.updatePasswordAndRevokeSessions({
+      userId: o.admin_user_id, passwordHash: await hashPasswordAsync(password)
+    });
   }
   res.json({ ok: true });
 }));
@@ -1508,13 +1525,14 @@ router.post('/tenants/:id/company-admin', authMode, orgAdminOnly, h(async (req, 
   const [exist] = await shared.query(
     'SELECT id FROM users WHERE company_id = ? AND org_id = ?', [id, req.orgId]);
   if (exist.length) {
-    await shared.query('UPDATE users SET password = ?, real_name = ? WHERE id = ?',
-      [hashPassword(password), real_name || '', exist[0].id]);
+    await legacyPasswordStore.updatePasswordAndRevokeSessions({
+      userId: exist[0].id, passwordHash: await hashPasswordAsync(password), realName: real_name || ''
+    });
   } else {
     await shared.query(
       `INSERT INTO users (username, password, real_name, role, mode, org_id, company_id)
        VALUES (?, ?, ?, 'staff', 'property', ?, ?)`,
-      [username, hashPassword(password), real_name || '', req.orgId, id]);
+      [username, await hashPasswordAsync(password), real_name || '', req.orgId, id]);
   }
   res.json({ ok: true, username });
 }));
@@ -3063,7 +3081,7 @@ router.post('/users', authMode, orgAdminOnly, h(async (req, res) => {
   if (Number(dup.c) > 0) return res.status(400).json({ error: '该用户名在本系统已存在' });
   const [ins] = await shared.query(
     'INSERT INTO users (username, password, real_name, role, mode, org_id) VALUES (?, ?, ?, ?, ?, ?)',
-    [username, hashPassword(password), real_name || '', role, req.mode, req.orgId]);
+    [username, await hashPasswordAsync(password), real_name || '', role, req.mode, req.orgId]);
   const [rows] = await shared.query(
     `SELECT u.id, u.username, u.real_name, u.role, u.mode, u.org_id,
             COALESCE(rc.name, rb.name) AS role_name
@@ -3096,7 +3114,9 @@ router.put('/users/:id', authMode, orgAdminOnly, h(async (req, res) => {
   await shared.query('UPDATE users SET real_name = ?, role = ? WHERE id = ?',
     [real_name !== null ? real_name : target.real_name, newRole, req.params.id]);
   if (password) {
-    await shared.query('UPDATE users SET password = ? WHERE id = ?', [hashPassword(password), req.params.id]);
+    await legacyPasswordStore.updatePasswordAndRevokeSessions({
+      userId: req.params.id, passwordHash: await hashPasswordAsync(password)
+    });
   }
   const [rows] = await shared.query('SELECT * FROM users WHERE id = ?', [req.params.id]);
   res.json(rows[0]);

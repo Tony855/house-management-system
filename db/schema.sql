@@ -283,7 +283,7 @@ CREATE TABLE bills (
   items        JSON NULL,
   created_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   INDEX idx_org (org_id), INDEX idx_bills_room (room_id)
-) ENGINE=InnoDB;
+ ) ENGINE=InnoDB;
 
 CREATE TABLE repairs (
   id          INT AUTO_INCREMENT PRIMARY KEY,
@@ -386,7 +386,7 @@ CREATE TABLE bills (
   items        JSON NULL,
   created_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   INDEX idx_org (org_id), INDEX idx_bills_room (room_id)
-) ENGINE=InnoDB;
+ ) ENGINE=InnoDB;
 
 CREATE TABLE repairs (
   id          INT AUTO_INCREMENT PRIMARY KEY,
@@ -520,6 +520,25 @@ CREATE TABLE net_changes (
   INDEX idx_org (org_id), INDEX idx_net_changes_room (room_id)
 ) ENGINE=InnoDB;
 
+CREATE TABLE net_requests (
+  id            INT AUTO_INCREMENT PRIMARY KEY,
+  org_id        INT NOT NULL,
+  company_id    INT NULL,
+  room_id       INT NOT NULL,
+  type          ENUM('install','add','reduce') NOT NULL DEFAULT 'install',
+  bandwidth     INT NULL,
+  delta         INT NULL,
+  line_id       INT NULL,
+  reason        VARCHAR(500) NOT NULL DEFAULT '',
+  status        ENUM('pending','done','rejected') NOT NULL DEFAULT 'pending',
+  created_by    VARCHAR(64) NOT NULL DEFAULT '',
+  created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  handled_by    VARCHAR(64) NOT NULL DEFAULT '',
+  handle_note   VARCHAR(500) NOT NULL DEFAULT '',
+  handled_at    DATETIME NULL,
+  INDEX idx_org (org_id), INDEX idx_net_req_company (company_id), INDEX idx_net_req_room (room_id)
+) ENGINE=InnoDB;
+
 CREATE TABLE bills (
   id           INT AUTO_INCREMENT PRIMARY KEY,
   org_id       INT NOT NULL,
@@ -540,7 +559,7 @@ CREATE TABLE bills (
   items        JSON NULL,
   created_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   INDEX idx_org (org_id), INDEX idx_bills_room (room_id)
-) ENGINE=InnoDB;
+ ) ENGINE=InnoDB;
 
 CREATE TABLE repairs (
   id          INT AUTO_INCREMENT PRIMARY KEY,

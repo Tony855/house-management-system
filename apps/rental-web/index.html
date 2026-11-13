@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN" data-app-id="rental" data-session-cookie="rental_session">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="same-origin">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'self'"><meta name="api-health" content="/health/live">
+<title>租房运营中心 · Rental</title><link rel="stylesheet" href="./portal.css">
+<script type="module" src="/portal.js"></script>
+</head>
+<body>
+<div class="layout">
+<aside class="sidebar"><div class="brand">Rental<small>租房管理 · independent app</small></div>
+<nav class="nav" aria-label="主导航"><a href="#overview">运营总览</a>
+<a href="#module-2">楼栋与房间</a>
+<a href="#module-3">租客档案</a>
+<a href="#module-4">租赁合同</a>
+<a href="#module-5">租金账单</a>
+<a href="#module-6">维修工单</a></nav>
+<div class="side-note">租赁数据只属于当前 Rental 租户数据库。平台管理员不会通过此入口访问租客业务记录。</div></aside>
+<main class="main"><div class="topline"><div><div class="eyebrow">rental workspace</div><h1 class="title">租房运营中心</h1><p class="subtitle">租赁合同、房间、租客与租金运营工作台。</p></div>
+<div class="status" role="status"><span class="dot" id="api-dot"></span><span id="api-status">正在检查 API</span></div></div>
+<section class="grid" id="overview"><article class="panel half"><h2>独立应用入口</h2><p>此页面拥有独立 HTML 入口、导航、资源和应用标识，不加载其他产品的前端状态或认证凭据。</p><div class="notice">租赁数据只属于当前 Rental 租户数据库。平台管理员不会通过此入口访问租客业务记录。</div></article>
+<article class="panel half"><h2>服务连接</h2><p id="service-message">正在检测本产品 API 健康状态。</p><div class="empty" id="service-empty">业务模块将在独立 API 和身份认证接入后启用；当前不展示伪造业务数据。</div></article>
+<article class="panel" id="module-2"><h2>楼栋与房间</h2><p>此模块使用 rental 独立应用边界。业务数据、权限和 API 尚需按产品逐项迁移验收。</p></article>
+<article class="panel" id="module-3"><h2>租客档案</h2><p>此模块使用 rental 独立应用边界。业务数据、权限和 API 尚需按产品逐项迁移验收。</p></article>
+<article class="panel" id="module-4"><h2>租赁合同</h2><p>此模块使用 rental 独立应用边界。业务数据、权限和 API 尚需按产品逐项迁移验收。</p></article>
+<article class="panel" id="module-5"><h2>租金账单</h2><p>此模块使用 rental 独立应用边界。业务数据、权限和 API 尚需按产品逐项迁移验收。</p></article>
+<article class="panel" id="module-6"><h2>维修工单</h2><p>此模块使用 rental 独立应用边界。业务数据、权限和 API 尚需按产品逐项迁移验收。</p></article>
+</section><div class="footer">House Management System · Rental Portal · No cross-product browser storage</div></main></div>
+</body></html>

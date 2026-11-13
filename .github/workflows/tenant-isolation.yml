@@ -1,0 +1,203 @@
+name: Tenant isolation and installer tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: tenant-isolation-${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  node-tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ['24.22.2', '26.13.0']
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+      - run: npm ci
+      - run: npm audit --omit=dev
+      - run: npm test
+
+  platform-mariadb-migrations:
+    runs-on: ubuntu-latest
+    services:
+      mariadb:
+        image: mariadb:11.4
+        env:
+          MARIADB_ROOT_PASSWORD: platform-test-root
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: 24.22.2
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Install MariaDB client
+        run: |
+          for client in mysql mariadb; do
+            sudo tee "/usr/local/bin/${client}" >/dev/null <<'WRAPPER'
+          #!/usr/bin/env bash
+          set -Eeuo pipefail
+          exec docker run --rm --network host -i -e MYSQL_PWD="${MYSQL_PWD:-}" mariadb:11.4 mariadb "$@"
+          WRAPPER
+            sudo chmod 0755 "/usr/local/bin/${client}"
+          done
+          docker image inspect mariadb:11.4 >/dev/null
+      - name: Apply platform registry and billing migrations
+        env:
+          DB_HOST: 127.0.0.1
+          DB_PORT: 3306
+          DB_USER: root
+          DB_PASSWORD: platform-test-root
+        run: bash scripts/test-platform-billing-schema.sh
+      - name: Verify recurring billing dispatch leases and retries against MariaDB
+        env:
+          DB_HOST: 127.0.0.1
+          DB_PORT: 3306
+          DB_USER: root
+          DB_PASSWORD: platform-test-root
+          DB_NAME: platform_control_test
+        run: npm run test:recurring-billing-mariadb
+      - name: Verify registered billing worker credentials and scopes against MariaDB
+        env:
+          DB_HOST: 127.0.0.1
+          DB_PORT: 3306
+          DB_USER: root
+          DB_PASSWORD: platform-test-root
+          DB_NAME: platform_control_test
+        run: npm run test:platform-billing-worker-mariadb
+      - name: Verify login rate limiter against MariaDB
+        env:
+          DB_HOST: 127.0.0.1
+          DB_PORT: 3306
+          DB_USER: root
+          DB_PASSWORD: platform-test-root
+          DB_NAME: platform_control_test
+        run: npm run test:platform-login-limiter-mariadb
+
+  legacy-api-express5-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      mariadb:
+        image: mariadb:11.4
+        env:
+          MARIADB_ROOT_PASSWORD: house-api-test-root
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: 24.22.2
+          cache: npm
+      - name: Install MariaDB client
+        run: |
+          for client in mysql mariadb; do
+            sudo tee "/usr/local/bin/${client}" >/dev/null <<'WRAPPER'
+          #!/usr/bin/env bash
+          set -Eeuo pipefail
+          exec docker run --rm --network host -i -e MYSQL_PWD="${MYSQL_PWD:-}" mariadb:11.4 mariadb "$@"
+          WRAPPER
+            sudo chmod 0755 "/usr/local/bin/${client}"
+          done
+          docker image inspect mariadb:11.4 >/dev/null
+      - name: Install dependencies
+        run: npm ci
+      - name: Initialize disposable legacy test databases
+        env:
+          DB_HOST: 127.0.0.1
+          DB_PORT: 3306
+          DB_USER: root
+          DB_PASSWORD: house-api-test-root
+        run: |
+          mariadb --protocol=tcp --host="$DB_HOST" --port="$DB_PORT" --user="$DB_USER" --password="$DB_PASSWORD" < db/schema.sql
+          node server/seed.js core
+      - name: Verify isolated product read APIs against MariaDB schemas
+        env:
+          DB_HOST: 127.0.0.1
+          DB_PORT: 3306
+          DB_USER: root
+          DB_PASSWORD: house-api-test-root
+        run: npm run test:product-read-mariadb
+      - name: Verify tenant org migration against real MariaDB
+        env:
+          NODE_ENV: test
+          DB_HOST: 127.0.0.1
+          DB_PORT: 3306
+          DB_USER: root
+          DB_PASSWORD: house-api-test-root
+        run: npm run test:tenant-data-migration-mariadb
+      - name: Verify tenant identity migration against real MariaDB
+        env:
+          NODE_ENV: test
+          DB_HOST: 127.0.0.1
+          DB_PORT: 3306
+          DB_USER: root
+          DB_PASSWORD: house-api-test-root
+        run: npm run test:tenant-identity-mariadb
+      - name: Verify tenant-local idempotency, audit and billing job leases against MariaDB
+        env:
+          NODE_ENV: test
+          DB_HOST: 127.0.0.1
+          DB_PORT: 3306
+          DB_USER: root
+          DB_PASSWORD: house-api-test-root
+          DB_NAME: tenant_system_schema_test
+        run: bash scripts/test-tenant-system-schema.sh && npm run test:tenant-billing-leases-mariadb
+      - name: Verify building and room writes plus cross-tenant DB isolation against MariaDB
+        env:
+          NODE_ENV: test
+          DB_HOST: 127.0.0.1
+          DB_PORT: 3306
+          DB_USER: root
+          DB_PASSWORD: house-api-test-root
+        run: npm run test:product-room-write-mariadb
+      - name: Start Express 5 API and run end-to-end regression
+        env:
+          NODE_ENV: test
+          PORT: 16088
+          DB_HOST: 127.0.0.1
+          DB_PORT: 3306
+          DB_USER: root
+          DB_PASSWORD: house-api-test-root
+        run: |
+          node server/app.js > /tmp/house-api.log 2>&1 &
+          SERVER_PID=$!
+          trap 'kill "$SERVER_PID" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 40); do
+            if curl -fsS http://127.0.0.1:16088/api/app-config >/dev/null; then
+              break
+            fi
+            if [ "$attempt" -eq 40 ]; then
+              cat /tmp/house-api.log
+              exit 1
+            fi
+            sleep 1
+          done
+          BASE=http://127.0.0.1:16088/api node db/test_api.js
