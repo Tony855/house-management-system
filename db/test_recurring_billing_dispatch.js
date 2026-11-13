@@ -292,3 +292,34 @@ test('dispatch store returns no claim when lease expires before token readback',
   assert.match(calls[1][0], /lease_owner = \? AND lease_token = \? AND lease_expires_at > UTC_TIMESTAMP\(\)/);
   assert.deepEqual(calls[1][1], [5, 'worker-a', calls[0][1][1]]);
 });
+
+
+test('dispatch store reaps crashed workers after retry budget exhaustion', async () => {
+  const calls = [];
+  const store = createRecurringBillingDispatchStore({
+    query: async (sql, params) => {
+      calls.push([sql, params]);
+      if (sql.startsWith('UPDATE platform_recurring_billing_dispatch')) return [{ affectedRows: 2 }, []];
+      if (sql.startsWith('SELECT id, tenant_uuid')) return [[], []];
+      throw new Error('unexpected query');
+    }
+  });
+  assert.deepEqual(await store.listRunnable({ limit: 12, maxAttempts: 4 }), []);
+  assert.match(calls[0][0], /state = 'failed'.*state = 'dispatching'.*attempt_count >= \?/);
+  assert.deepEqual(calls[0][1], [4]);
+  assert.match(calls[1][0], /attempt_count < \?/);
+  assert.deepEqual(calls[1][1], [4, 12]);
+});
+
+test('dispatch store refuses to claim a job after its retry budget is exhausted', async () => {
+  let claimSql = '', claimParams;
+  const store = createRecurringBillingDispatchStore({
+    query: async (sql, params) => {
+      claimSql = sql; claimParams = params;
+      return [{ affectedRows: 0 }, []];
+    }
+  });
+  assert.equal(await store.claim({ id: 8, workerId: 'worker-a', leaseSeconds: 30, maxAttempts: 4 }), null);
+  assert.match(claimSql, /WHERE id = \? AND attempt_count < \?/);
+  assert.equal(claimParams[4], 4);
+});
