@@ -101,6 +101,7 @@ test('POST /rooms rejects invalid DTO before invoking the write service', async 
 test('rental contract validation rejects invalid dates, amounts and tenant-controlled columns', () => {
   const input = { contract_no: 'R-31', room_id: 3, tenant_id: 8, start_date: '2026-11-01', end_date: '2027-10-31', sign_date: '2026-10-30', rent: 1200, deposit: 1200 };
   assert.equal(validateContract(input).pay_cycle, 1);
+  assert.equal(validateContract({ ...input, rent: 1.15, deposit: 1.15 }).rent, 1.15);
   assert.equal(validateContract({ ...input, pay_cycle: 18 }).pay_cycle, 18);
   assert.equal(validateContract({ ...input, pay_cycle: 36 }).pay_cycle, 36);
   for (const bad of [{ ...input, org_id: 5 }, { ...input, end_date: '2026-10-01' }, { ...input, start_date: '2026-02-30' }, { ...input, rent: -1 }, { ...input, pay_cycle: 37 }, { ...input, pay_cycle: 0.5 }]) {
@@ -164,6 +165,9 @@ test('POST /contracts/:id/generate-bill locks contract and creates next period i
 
 
 test('rental contract renewal accepts only an extension and bounded optional terms', () => {
+  assert.deepEqual(validateContractRenewal({ end_date: '2028-12-31', rent: 1.15, deposit: 1.15, pay_cycle: 3 }), {
+    end_date: '2028-12-31', rent: 1.15, deposit: 1.15, pay_cycle: 3
+  });
   assert.deepEqual(validateContractRenewal({ end_date: '2028-12-31', rent: 1350, deposit: 1400, pay_cycle: 3 }), {
     end_date: '2028-12-31', rent: 1350, deposit: 1400, pay_cycle: 3
   });
