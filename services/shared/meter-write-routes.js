@@ -55,7 +55,11 @@ function createMeterWriteRouter(appId) {
           const elec_price = elecPriceMinor / 100;
           // usageMinor and priceMinor are both scaled by 100; their product
           // is therefore scaled by 10,000, while currency cents are scaled by 100.
-          const feeMinor = (usageMinor, priceMinor) => Number((BigInt(usageMinor) * BigInt(priceMinor) + 50n) / 100n);
+          const feeMinor = (usageMinor, priceMinor) => {
+            const amount = (BigInt(usageMinor) * BigInt(priceMinor) + 50n) / 100n;
+            if (amount > BigInt(Number.MAX_SAFE_INTEGER)) throw meterError('METER_FEE_AMOUNT_INVALID', 409);
+            return Number(amount);
+          };
           const water_fee = feeMinor(waterUsageMinor, waterPriceMinor) / 100;
           const elec_fee = feeMinor(elecUsageMinor, elecPriceMinor) / 100;
           const record = { ...meter, water_usage, water_fee, elec_usage, elec_fee };
