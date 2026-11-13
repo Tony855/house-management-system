@@ -82,15 +82,20 @@ test('executor aborts connection resolution and closes late resources after leas
       });
     }
   });
-  await assert.rejects(execute({
-    job: { id: 2, appId: 'rental', tenantId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', sourceOrgId: 9, mode: 'dry-run' },
-    heartbeat: async () => {
-      heartbeatCount++;
-      if (heartbeatCount > 1) throw Object.assign(new Error('lease lost'), { code: 'TENANT_MIGRATION_JOB_LEASE_LOST' });
-    },
-    saveCheckpoint: async () => {}
-  }), error => error.code === 'TENANT_MIGRATION_JOB_LEASE_LOST');
-  assert.ok(receivedSignal instanceof AbortSignal);
-  assert.equal(receivedSignal.aborted, true);
-  assert.equal(closed, 1);
+  const keepAlive = setInterval(() => {}, 1000);
+  try {
+    await assert.rejects(execute({
+      job: { id: 2, appId: 'rental', tenantId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', sourceOrgId: 9, mode: 'dry-run' },
+      heartbeat: async () => {
+        heartbeatCount++;
+        if (heartbeatCount > 1) throw Object.assign(new Error('lease lost'), { code: 'TENANT_MIGRATION_JOB_LEASE_LOST' });
+      },
+      saveCheckpoint: async () => {}
+    }), error => error.code === 'TENANT_MIGRATION_JOB_LEASE_LOST');
+    assert.ok(receivedSignal instanceof AbortSignal);
+    assert.equal(receivedSignal.aborted, true);
+    assert.equal(closed, 1);
+  } finally {
+    clearInterval(keepAlive);
+  }
 });
