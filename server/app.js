@@ -12,7 +12,7 @@ const fs = require('fs');
 const pool = require('./db');
 const { shared, getPool, withMode, currentOrgId, currentMode, MODES } = require('./db');
 const {
-  hashPassword, verifyPassword, today, nowStr, addDays, addMonths, daysBetween,
+  hashPassword, verifyPasswordAsync, today, nowStr, addDays, addMonths, daysBetween,
   daysInMonth, monthStart, monthEnd
 } = require('./util');
 const { V, clean } = require('./validate');
@@ -519,7 +519,12 @@ router.post('/login', h(async (req, res) => {
        LEFT JOIN orgs o ON o.id = u.org_id
       WHERE u.username = ? ${modeQ}`, params);
   const u = rows[0];
-  if (!u || !verifyPassword(password, u.password)) {
+  let passwordValid = false;
+  if (u) {
+    try { passwordValid = await verifyPasswordAsync(password, u.password); }
+    catch (_) { passwordValid = false; }
+  }
+  if (!passwordValid) {
     const f = loginFails.get(failKey) || { n: 0, until: 0 };
     f.n++;
     if (f.n >= 5) { f.n = 0; f.until = nowT + 15 * 60000; }
