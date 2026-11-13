@@ -49,7 +49,6 @@ async function provisionTenant({
   const dbHost = databaseAdmin.host;
   const dbPort = databaseAdmin.port === undefined ? 3306 : databaseAdmin.port;
   if (typeof dbHost !== 'string' || !dbHost || dbHost.length > 253 || /[\s\x00-\x1f\x7f]/.test(dbHost) ||
-      /[\\s\\u0000-\\u001f\\u007f]/.test(dbHost) ||
       !Number.isInteger(dbPort) || dbPort < 1 || dbPort > 65535) {
     throw new Error('TENANT_DATABASE_ENDPOINT_INVALID');
   }
