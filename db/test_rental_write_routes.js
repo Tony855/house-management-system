@@ -135,6 +135,8 @@ test('rental bill period follows contract cycle, clamps final period and rejects
   assert.equal(first.period_start, '2026-01-31');
   assert.equal(first.period_end, '2026-02-27');
   assert.equal(first.amount, 1200);
+  const exactMoney = buildNextRentalBill({ ...contract, rent: '1.15', pay_cycle: 3 }, null, '2026-02-01');
+  assert.equal(exactMoney.amount, 3.45);
   const next = buildNextRentalBill({ ...contract, pay_cycle: 3 }, '2026-02-27', '2026-05-01');
   assert.equal(next.period_start, '2026-02-28');
   assert.equal(next.period_end, '2026-05-27');
