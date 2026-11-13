@@ -1,5 +1,6 @@
 
 const express = require('express');
+const { parseMinorUnits } = require('../../server/money');
 function hotelError(code, status = 400) { return Object.assign(new Error(code), { code, status }); }
 function hotelDate(value) {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
