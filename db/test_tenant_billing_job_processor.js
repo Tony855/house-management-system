@@ -21,6 +21,7 @@ function setup({ appId = 'rental', appIds = [appId], listActiveTenants = async (
  const pool={
   execute:async(sql,params=[])=>{
    calls.push({sql,params});
+   if(failFailureWrite&&sql.startsWith('UPDATE ')&&sql.includes('SET state=?,attempt_count=?'))throw Object.assign(new Error('failure write unavailable'),{code:'ECONNRESET'});
    if(sql.startsWith('UPDATE ')&&sql.includes('lease_expires_at=DATE_ADD')){leaseToken=params[1];return[{affectedRows:claimAllowed?1:0},[]];}
    if(sql.includes('WHERE lease_token=? AND lease_owner=?'))return[job?[{id:1,period_key:job.periodKey,state:'running',cursor_id:job.cursor||0,attempt_count:(job.attemptCount||0)+1}]:[],[]];
    return[[],[]];
