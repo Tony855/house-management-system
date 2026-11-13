@@ -371,7 +371,7 @@ test('property owner statements paginate details while preserving whole-period t
     assert.deepEqual(calls[0].params,['2030-01-01','2030-01-31','2030-01-01','2030-01-31']);
     assert.deepEqual(calls[1].params,['2030-01-01','2030-01-31','2030-01-01','2030-01-31',25,25]);
     assert.match(calls[0].sql,/COUNT\(DISTINCT b\.tenant_id\)/);
-    assert.match(calls[1].sql,/FROM bill_transactions WHERE transaction_date >= \\? AND transaction_date < DATE_ADD\\(\\?, INTERVAL 1 DAY\\)/);
+    assert.match(calls[1].sql,/FROM bill_transactions WHERE transaction_date >= \? AND transaction_date < DATE_ADD\(\?, INTERVAL 1 DAY\)/);
     const invalid=await fetch('http://127.0.0.1:'+server.address().port+'/api/property-fees/owner-statements?from_date=2030-02-01&to_date=2030-01-01');
     assert.equal(invalid.status,400);assert.deepEqual(await invalid.json(),{error:'PROPERTY_OWNER_STATEMENT_RANGE_INVALID'});
     const invalidPage=await fetch('http://127.0.0.1:'+server.address().port+'/api/property-fees/owner-statements?from_date=2030-01-01&to_date=2030-01-31&page=1&page_size=101');
