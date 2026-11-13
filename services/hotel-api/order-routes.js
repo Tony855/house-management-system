@@ -23,12 +23,13 @@ function validateHotelDepositTransaction(input) {
   const allowed = new Set(['amount', 'pay_method', 'transaction_date', 'external_reference', 'note']);
   if (!input || typeof input !== 'object' || Array.isArray(input) ||
       Object.keys(input).some(key => !allowed.has(key))) throw hotelError('HOTEL_DEPOSIT_INPUT_INVALID');
-  const amount = Number(input.amount);
+  const amountMinor = parseMinorUnits(input.amount);
+  const amount = amountMinor === null ? NaN : amountMinor / 100;
   const pay_method = input.pay_method === undefined ? '' : input.pay_method;
   const transaction_date = input.transaction_date === undefined ? new Date().toISOString().slice(0, 10) : input.transaction_date;
   const external_reference = input.external_reference === undefined ? '' : input.external_reference;
   const note = input.note === undefined ? '' : input.note;
-  if (!Number.isFinite(amount) || amount <= 0 || amount > 10000000 || Math.round(amount * 100) !== amount * 100 ||
+  if (!Number.isFinite(amount) ||
       typeof pay_method !== 'string' || pay_method.length > 30 || !hotelDate(transaction_date) ||
       typeof external_reference !== 'string' || external_reference.length > 100 ||
       typeof note !== 'string' || note.length > 500) throw hotelError('HOTEL_DEPOSIT_INPUT_INVALID');
