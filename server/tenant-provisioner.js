@@ -63,14 +63,14 @@ async function provisionTenant({
     db_port: dbPort, db_name: dbName,
     db_secret_ref: secretRef, schema_version: null
   };
-  let registryCreated = false;
+  let registryAttempted = false;
   let databaseAttempted = false;
   let principalAttempted = false;
   let secretAttempted = false;
 
   try {
+    registryAttempted = true;
     await registry.createProvisioningTenant(record);
-    registryCreated = true;
     await writeAudit(audit, { tenantId, event: 'provisioning_started' });
 
     databaseAttempted = true;
@@ -110,7 +110,7 @@ async function provisionTenant({
       else cleanupFailures.push('database_cleanup_unavailable');
     }
 
-    if (registryCreated) {
+    if (registryAttempted) {
       try {
         await registry.markProvisioningFailed(tenantId, error.code || 'PROVISIONING_FAILED');
       } catch (_) {
