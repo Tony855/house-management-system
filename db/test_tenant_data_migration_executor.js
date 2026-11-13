@@ -117,3 +117,23 @@ test('executor preserves the primary migration error when connection cleanup als
     return true;
   });
 });
+
+
+test('executor normalizes primitive migration errors before attaching cleanup failures', async () => {
+  const execute = createTenantDataMigrationExecutor({
+    resolveConnections: async () => ({
+      sourcePool: {}, targetPool: {}, audit: async () => {},
+      close: async () => { throw new Error('cleanup failed'); }
+    })
+  });
+  await assert.rejects(execute({
+    job: { id: 4, appId: 'rental', tenantId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', sourceOrgId: 9, mode: 'copy' },
+    heartbeat: async () => {},
+    saveCheckpoint: async phase => { if (phase.phase === 'copy_started') throw 'copy adapter failed'; }
+  }), error => {
+    assert.equal(error.message, 'TENANT_MIGRATION_EXECUTION_FAILED');
+    assert.equal(error.cause, 'copy adapter failed');
+    assert.equal(error.cleanupError, 'TENANT_MIGRATION_CONNECTION_CLEANUP_FAILED');
+    return true;
+  });
+});
