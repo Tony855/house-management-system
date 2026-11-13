@@ -27,7 +27,8 @@ function createRecurringBillingDispatcher({
   if (typeof enqueueTenantJob !== 'function') throw new TypeError('RECURRING_BILLING_TENANT_ENQUEUER_REQUIRED');
   if (!Number.isInteger(leaseSeconds) || leaseSeconds < 30 || leaseSeconds > 1800) throw new TypeError('RECURRING_BILLING_LEASE_INVALID');
   if (typeof store.renewLease !== 'function') throw new TypeError('RECURRING_BILLING_LEASE_RENEWAL_REQUIRED');
-  if (!Number.isInteger(heartbeatIntervalMs) || heartbeatIntervalMs < 1 || heartbeatIntervalMs >= leaseSeconds * 1000) {
+  if (!Number.isInteger(heartbeatIntervalMs) || heartbeatIntervalMs < 1 ||
+      heartbeatIntervalMs > Math.floor(leaseSeconds * 1000 / 3)) {
     throw new TypeError('RECURRING_BILLING_HEARTBEAT_INVALID');
   }
   if (!Number.isInteger(leaseOperationTimeoutMs) || leaseOperationTimeoutMs < 1 ||
