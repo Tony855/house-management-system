@@ -55,8 +55,8 @@ function createTenantBillingJobProcessor({registry,secretProvider,tenantPoolMana
   if(typeof leaseToken!=='string'||!/^[0-9a-f-]{36}$/i.test(leaseToken))throw fail('BILLING_PROCESSOR_LEASE_TOKEN_INVALID',500);
   await pool.execute("UPDATE "+table+" SET state='dead_letter',last_error='BILLING_RETRY_LIMIT_EXCEEDED',lease_owner=NULL,lease_token=NULL,lease_expires_at=NULL,next_attempt_at=NULL,updated_at=UTC_TIMESTAMP() WHERE attempt_count>=? AND ((state='queued') OR (state='running' AND (lease_expires_at IS NULL OR lease_expires_at<=UTC_TIMESTAMP())))",[MAX_ATTEMPTS]);
   const [claim]=await pool.execute(
-   "UPDATE "+table+" SET state='running',lease_owner=?,lease_token=?,lease_expires_at=DATE_ADD(UTC_TIMESTAMP(),INTERVAL "+leaseSeconds+" SECOND) WHERE id=(SELECT id FROM (SELECT id FROM "+table+" WHERE attempt_count<? AND ((state='queued' AND (next_attempt_at IS NULL OR next_attempt_at<=UTC_TIMESTAMP())) OR (state='running' AND (lease_expires_at IS NULL OR lease_expires_at<=UTC_TIMESTAMP()))) ORDER BY id LIMIT 1) AS eligible)",
-   [workerId,leaseToken,MAX_ATTEMPTS]
+   "UPDATE "+table+" SET state='running',lease_owner=?,lease_token=?,lease_expires_at=DATE_ADD(UTC_TIMESTAMP(),INTERVAL "+leaseSeconds+" SECOND) WHERE id=(SELECT id FROM (SELECT id FROM "+table+" WHERE attempt_count<? AND ((state='queued' AND (next_attempt_at IS NULL OR next_attempt_at<=UTC_TIMESTAMP())) OR (state='running' AND (lease_expires_at IS NULL OR lease_expires_at<=UTC_TIMESTAMP()))) ORDER BY id LIMIT 1) AS eligible) AND attempt_count<? AND ((state='queued' AND (next_attempt_at IS NULL OR next_attempt_at<=UTC_TIMESTAMP())) OR (state='running' AND (lease_expires_at IS NULL OR lease_expires_at<=UTC_TIMESTAMP())))",
+   [workerId,leaseToken,MAX_ATTEMPTS,MAX_ATTEMPTS]
   );
   if(Number(claim.affectedRows)!==1)return Object.freeze({worked:false,appId,state:'idle'});
   const [found]=await pool.execute('SELECT id,'+dateCol+' AS period_key,state,'+cursorCol+' AS cursor_id,attempt_count FROM '+table+' WHERE lease_token=? AND lease_owner=? AND lease_expires_at>UTC_TIMESTAMP() LIMIT 1',[leaseToken,workerId]);
