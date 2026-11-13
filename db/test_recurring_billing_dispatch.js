@@ -137,3 +137,56 @@ test('dispatcher never marks a job dispatched after heartbeat reports lease loss
   assert.equal(result.results[0].state, 'lease_lost');
   assert.equal(calls.includes('dispatched'), false);
 });
+
+
+test('dispatcher abandons enqueue when a lease renewal operation hangs', async () => {
+  const calls = [];
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const dispatcher = createRecurringBillingDispatcher({
+    store: {
+      async listRunnable() { return [row]; },
+      async claim() { return row; },
+      renewLease() { return new Promise(() => {}); },
+      async markDispatched() { calls.push('dispatched'); return true; },
+      async markFailed() { calls.push('failed'); return false; }
+    },
+    workerId: 'worker-a', leaseSeconds: 30, heartbeatIntervalMs: 5,
+    leaseOperationTimeoutMs: 10, enqueueTimeoutMs: 1000,
+    enqueueTenantJob: async () => { await gate; }
+  });
+  const pending = dispatcher.dispatchOne(row);
+  await new Promise(resolve => setTimeout(resolve, 30));
+  release();
+  const result = await pending;
+  assert.equal(result.state, 'lease_lost');
+  assert.equal(calls.includes('dispatched'), false);
+});
+
+test('dispatcher bounds a tenant enqueue that never resolves and schedules retry', async () => {
+  const failures = [];
+  const dispatcher = createRecurringBillingDispatcher({
+    store: {
+      async listRunnable() { return [row]; },
+      async claim() { return row; },
+      async renewLease() { return true; },
+      async markDispatched() { throw new Error('must not complete'); },
+      async markFailed(input) { failures.push(input); return true; }
+    },
+    workerId: 'worker-a', leaseSeconds: 30, heartbeatIntervalMs: 1000,
+    leaseOperationTimeoutMs: 10, enqueueTimeoutMs: 10,
+    enqueueTenantJob: () => new Promise(() => {})
+  });
+  const result = await dispatcher.dispatchOne(row);
+  assert.equal(result.state, 'retry_scheduled');
+  assert.equal(result.errorCode, 'BILLING_TENANT_ENQUEUE_TIMEOUT');
+  assert.equal(failures[0].errorCode, 'BILLING_TENANT_ENQUEUE_TIMEOUT');
+});
+
+test('dispatcher rejects lease operation timeouts that reach or exceed the lease', () => {
+  assert.throws(() => createRecurringBillingDispatcher({
+    store: { listRunnable() {}, claim() {}, markDispatched() {}, markFailed() {}, renewLease() {} },
+    workerId: 'worker-a', enqueueTenantJob: async () => {},
+    leaseSeconds: 30, leaseOperationTimeoutMs: 30000
+  }), /RECURRING_BILLING_LEASE_OPERATION_TIMEOUT_INVALID/);
+});
