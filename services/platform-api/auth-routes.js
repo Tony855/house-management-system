@@ -27,6 +27,7 @@ function createPlatformAuthRouter({ authService, mfaService, auditStore, adminSt
     try {
       const result = await authService.login({ username: req.body?.username, password: req.body?.password });
       await audit(req, 'admin.login', 'success');
+      res.set('Cache-Control', 'no-store'); res.set('Pragma', 'no-cache');
       res.status(200).json(result);
     } catch (error) { try { await audit(req, 'admin.login', 'failure', error.code || 'AUTHENTICATION_FAILED'); } catch (_) {} next(error); }
   });
@@ -34,6 +35,7 @@ function createPlatformAuthRouter({ authService, mfaService, auditStore, adminSt
     try {
       const result = await authService.verifyChallenge({ challenge: req.body?.challenge, code: req.body?.code });
       await audit(req, 'admin.mfa.verify', 'success');
+      res.set('Cache-Control', 'no-store'); res.set('Pragma', 'no-cache');
       res.status(200).json(result);
     } catch (error) { try { await audit(req, 'admin.mfa.verify', 'failure', error.code || 'MFA_FAILED'); } catch (_) {} next(error); }
   });
