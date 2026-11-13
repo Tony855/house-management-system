@@ -8,7 +8,7 @@ const tenantId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const row = {
   id: 7, idempotency_key: 'migration-request-0001', tenant_uuid: tenantId,
   app_id: 'rental', source_org_id: 12, mode: 'copy', state: 'queued',
-  attempt_count: 0, lease_owner: null, lease_expires_at: null,
+  attempt_count: 0, lease_owner: null, lease_token: null, lease_expires_at: null,
   checkpoint_json: '{"table":"rooms","lastId":42}', error_code: null,
   created_at: '2026-11-12 00:00:00', updated_at: '2026-11-12 00:00:00'
 };
@@ -33,11 +33,13 @@ test('only one worker can claim a queued or expired job and attempts increment a
   const store = createPlatformTenantMigrationJobStore({ query: async (sql, params) => {
     calls.push([sql, params]);
     if (sql.startsWith('UPDATE')) return [{ affectedRows: 1 }, []];
-    return [[{ ...row, state: 'running', lease_owner: 'worker-a', attempt_count: 1 }], []];
+    return [[{ ...row, state: 'running', lease_owner: 'worker-a', lease_token: 'lease-1', attempt_count: 1 }], []];
   }});
   const job = await store.claimJob({ id: 7, workerId: 'worker-a', leaseSeconds: 60 });
   assert.equal(job.state, 'running');
   assert.equal(job.workerId, 'worker-a');
+  assert.equal(job.leaseToken, 'lease-1');
+  assert.match(calls[0][0], /lease_token = \?/);
   assert.equal(job.attemptCount, 1);
   assert.match(calls[0][0], /state = 'queued'.*lease_expires_at <= UTC_TIMESTAMP\(\)/);
   assert.match(calls[0][0], /attempt_count = attempt_count \+ 1/);
@@ -49,8 +51,8 @@ test('active leases reject a second claimant and stale owners cannot checkpoint 
     throw new Error('unexpected query');
   }});
   assert.equal(await store.claimJob({ id: 7, workerId: 'worker-b' }), null);
-  assert.equal(await store.saveCheckpoint({ id: 7, workerId: 'worker-b', checkpoint: { table: 'rooms' } }), false);
-  assert.equal(await store.completeJob({ id: 7, workerId: 'worker-b' }), false);
+  assert.equal(await store.saveCheckpoint({ id: 7, workerId: 'worker-b', leaseToken: 'stale-token', checkpoint: { table: 'rooms' } }), false);
+  assert.equal(await store.completeJob({ id: 7, workerId: 'worker-b', leaseToken: 'stale-token' }), false);
 });
 
 test('checkpoint writes are bounded and lease-owner scoped', async () => {
@@ -58,7 +60,7 @@ test('checkpoint writes are bounded and lease-owner scoped', async () => {
   const store = createPlatformTenantMigrationJobStore({ query: async (sql, params) => {
     captured = [sql, params]; return [{ affectedRows: 1 }, []];
   }});
-  assert.equal(await store.saveCheckpoint({ id: 7, workerId: 'worker-a', checkpoint: { table: 'rooms', lastId: 99 } }), true);
+  assert.equal(await store.saveCheckpoint({ id: 7, workerId: 'worker-a', leaseToken: 'lease-a', checkpoint: { table: 'rooms', lastId: 99 } }), true);
   assert.deepEqual(JSON.parse(captured[1][0]), { table: 'rooms', lastId: 99 });
   assert.match(captured[0], /lease_owner = \?/);
   await assert.rejects(store.saveCheckpoint({ id: 7, workerId: 'worker-a', checkpoint: 'x'.repeat(70000) }), /TENANT_MIGRATION_JOB_CHECKPOINT_INVALID/);
@@ -69,9 +71,9 @@ test('lease renewal, completion and failure are conditional on the current unexp
   const store = createPlatformTenantMigrationJobStore({ query: async (sql, params) => {
     calls.push([sql, params]); return [{ affectedRows: 1 }, []];
   }});
-  assert.equal(await store.renewLease({ id: 7, workerId: 'worker-a', leaseSeconds: 120 }), true);
-  assert.equal(await store.completeJob({ id: 7, workerId: 'worker-a' }), true);
-  assert.equal(await store.failJob({ id: 7, workerId: 'worker-a', errorCode: 'SOURCE_UNAVAILABLE' }), true);
+  assert.equal(await store.renewLease({ id: 7, workerId: 'worker-a', leaseToken: 'lease-a', leaseSeconds: 120 }), true);
+  assert.equal(await store.completeJob({ id: 7, workerId: 'worker-a', leaseToken: 'lease-a' }), true);
+  assert.equal(await store.failJob({ id: 7, workerId: 'worker-a', leaseToken: 'lease-a', errorCode: 'SOURCE_UNAVAILABLE' }), true);
   assert.match(calls[0][0], /lease_expires_at > UTC_TIMESTAMP\(\)/);
   assert.equal(calls[2][1][0], 'SOURCE_UNAVAILABLE');
 });
