@@ -99,3 +99,21 @@ test('executor aborts connection resolution and closes late resources after leas
     clearInterval(keepAlive);
   }
 });
+
+
+test('executor preserves the primary migration error when connection cleanup also fails', async () => {
+  const execute = createTenantDataMigrationExecutor({
+    resolveConnections: async () => ({
+      sourcePool: {}, targetPool: {}, audit: async () => {},
+      close: async () => { throw Object.assign(new Error('cleanup details'), { code: 'POOL_CLOSE_FAILED' }); }
+    })
+  });
+  await assert.rejects(execute({
+    job: { id: 3, appId: 'rental', tenantId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', sourceOrgId: 9, mode: 'copy' },
+    heartbeat: async () => {}, saveCheckpoint: async () => {}
+  }), error => {
+    assert.equal(error.code, 'TENANT_MIGRATION_SOURCE_POOL_REQUIRED');
+    assert.equal(error.cleanupError, 'POOL_CLOSE_FAILED');
+    return true;
+  });
+});
