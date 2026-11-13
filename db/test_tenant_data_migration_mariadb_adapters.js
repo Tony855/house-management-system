@@ -231,3 +231,18 @@ test('source snapshot export aborts between table reads when the migration lease
     error => error.code === 'TENANT_MIGRATION_JOB_LEASE_LOST');
   assert.ok(pools.sourceCalls.some(call => call.sql === 'ROLLBACK'));
 });
+
+
+test('MariaDB target adapter rolls back its transaction when the migration lease is already lost', async () => {
+  const pools = createPools('hotel', 22);
+  const adapters = createMariaDbTenantMigrationAdapters({ appId: 'hotel', sourcePool: pools.sourcePool, targetPool: pools.targetPool });
+  const controller = new AbortController();
+  controller.abort();
+  const tables = Object.fromEntries([...TABLES.hotel].map(table => [table, []]));
+  await assert.rejects(adapters.targetWriter.importTenantSnapshot({ appId: 'hotel', tenantId, tables, signal: controller.signal }),
+    error => error.code === 'TENANT_MIGRATION_JOB_LEASE_LOST');
+  assert.equal(pools.committed, false);
+  assert.equal(pools.rolledBack, true);
+  assert.ok(pools.targetCalls.includes('ROLLBACK'));
+  assert.ok(!pools.targetCalls.includes('COMMIT'));
+});
