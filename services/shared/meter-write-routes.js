@@ -38,12 +38,23 @@ function createMeterWriteRouter(appId) {
           if (previous.length && (Number(previous[0].water_curr) !== meter.water_prev || Number(previous[0].elec_curr) !== meter.elec_prev)) {
             throw meterError('METER_PREVIOUS_READING_MISMATCH', 409);
           }
-          const water_usage = meter.water_curr - meter.water_prev;
-          const elec_usage = meter.elec_curr - meter.elec_prev;
-          const water_price = Number(room.water_price), elec_price = Number(room.elec_price);
-          if (!Number.isFinite(water_price) || water_price < 0 || !Number.isFinite(elec_price) || elec_price < 0) throw meterError('METER_RATE_INVALID', 409);
-          const water_fee = Math.round(water_usage * water_price * 100) / 100;
-          const elec_fee = Math.round(elec_usage * elec_price * 100) / 100;
+          const waterPrevMinor = parseMinorUnits(meter.water_prev, { allowZero: true, maxMinor: 10000000000 });
+          const waterCurrMinor = parseMinorUnits(meter.water_curr, { allowZero: true, maxMinor: 10000000000 });
+          const elecPrevMinor = parseMinorUnits(meter.elec_prev, { allowZero: true, maxMinor: 10000000000 });
+          const elecCurrMinor = parseMinorUnits(meter.elec_curr, { allowZero: true, maxMinor: 10000000000 });
+          const waterPriceMinor = parseMinorUnits(room.water_price, { allowZero: true, maxMinor: 10000000000 });
+          const elecPriceMinor = parseMinorUnits(room.elec_price, { allowZero: true, maxMinor: 10000000000 });
+          if ([waterPrevMinor, waterCurrMinor, elecPrevMinor, elecCurrMinor, waterPriceMinor, elecPriceMinor].some(value => value === null)) {
+            throw meterError('METER_RATE_INVALID', 409);
+          }
+          const waterUsageMinor = waterCurrMinor - waterPrevMinor;
+          const elecUsageMinor = elecCurrMinor - elecPrevMinor;
+          const water_usage = waterUsageMinor / 100;
+          const elec_usage = elecUsageMinor / 100;
+          const water_price = waterPriceMinor / 100;
+          const elec_price = elecPriceMinor / 100;
+          const water_fee = Math.round(waterUsageMinor * waterPriceMinor / 10000) / 100;
+          const elec_fee = Math.round(elecUsageMinor * elecPriceMinor / 10000) / 100;
           const record = { ...meter, water_usage, water_fee, elec_usage, elec_fee };
           const inserted = await tx.insert('meters', record);
           return { id: Number(inserted.insertId), ...record };
