@@ -281,8 +281,8 @@ test('rental deposit receipts, refunds and deductions enforce contract state and
   app.use((req,_res,next)=>{req.tenantWrite=async input=>input.mutate({execute:async(sql,params)=>{
     if(sql.includes('FROM contracts')) return [[{id:9,deposit:'1.15',status:contractStatus}]];
     if(sql.includes('SUM(CASE WHEN transaction_type')) {
-      const sum=type=>ledger.filter(x=>x.type===type).reduce((n,x)=>n+x.amount,0);
-      return [[{received_amount:sum('receipt'),refunded_amount:sum('refund'),deducted_amount:sum('deduction')}]];
+      const sumMinor=type=>ledger.filter(x=>x.type===type).reduce((n,x)=>n+Math.round(x.amount*100),0);
+      return [[{received_amount:sumMinor('receipt')/100,refunded_amount:sumMinor('refund')/100,deducted_amount:sumMinor('deduction')/100}]];
     }
     if(sql.includes('INSERT INTO rental_contract_deposit_transactions')) {ledger.push({type:params[1],amount:params[2]});return [{affectedRows:1}];}
     return [[]];
