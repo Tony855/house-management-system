@@ -79,7 +79,10 @@ function createRecurringBillingDispatchStore(pool) {
         [workerId, leaseToken, leaseSeconds, id]
       );
       if (Number(result.affectedRows) !== 1) return null;
-      const [rows] = await pool.query('SELECT ' + columns + ' FROM platform_recurring_billing_dispatch WHERE id = ? AND lease_token = ? LIMIT 1', [id, leaseToken]);
+      const [rows] = await pool.query(
+        'SELECT ' + columns + ' FROM platform_recurring_billing_dispatch WHERE id = ? AND lease_owner = ? AND lease_token = ? AND lease_expires_at > UTC_TIMESTAMP() LIMIT 1',
+        [id, workerId, leaseToken]
+      );
       return rows[0] ? decode(rows[0]) : null;
     },
     async renewLease({ id, workerId, leaseToken, leaseSeconds = 180 }) {
