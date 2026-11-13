@@ -123,6 +123,60 @@ test('MFA challenge failures are counted and challenge cannot be replayed', asyn
     error => error.code === 'MFA_CHALLENGE_EXPIRED');
 });
 
+test('MFA failures share an account-level rate limit across fresh challenges', async () => {
+  const calls = [];
+  let failures = 0;
+  const { service } = fixture({
+    loginRateLimiter: {
+      assertAllowed: async identity => {
+        calls.push(['allowed', identity.username]);
+        if (identity.username === 'admin:7' && failures >= 2) {
+          throw Object.assign(new Error('LOGIN_RATE_LIMITED'), { code: 'LOGIN_RATE_LIMITED', status: 429 });
+        }
+      },
+      recordFailure: async identity => {
+        calls.push(['failure', identity.username]);
+        if (identity.username === 'admin:7') failures += 1;
+      },
+      clear: async identity => calls.push(['clear', identity.username])
+    }
+  });
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const pending = await service.login({ username: 'root', password: 'correct' });
+    await assert.rejects(service.verifyChallenge({ challenge: pending.challenge, code: '000000' }),
+      error => error.code === 'PLATFORM_MFA_CODE_INVALID');
+  }
+
+  const freshChallenge = await service.login({ username: 'root', password: 'correct' });
+  await assert.rejects(service.verifyChallenge({ challenge: freshChallenge.challenge, code: '123456' }),
+    error => error.code === 'LOGIN_RATE_LIMITED' && error.status === 429);
+  assert.equal(calls.filter(call => call[0] === 'failure' && call[1] === 'admin:7').length, 2);
+  assert.equal(calls.some(call => call[0] === 'allowed' && call[1] === 'admin:7'), true);
+});
+
+test('step-up MFA failures use the same account-level rate limit', async () => {
+  let failures = 0;
+  const { service } = fixture({
+    loginRateLimiter: {
+      assertAllowed: async identity => {
+        if (identity.username === 'admin:7' && failures >= 1) {
+          throw Object.assign(new Error('LOGIN_RATE_LIMITED'), { code: 'LOGIN_RATE_LIMITED', status: 429 });
+        }
+      },
+      recordFailure: async identity => { if (identity.username === 'admin:7') failures += 1; },
+      clear: async () => true
+    }
+  });
+  const pending = await service.login({ username: 'root', password: 'correct' });
+  const issued = await service.verifyChallenge({ challenge: pending.challenge, code: '123456' });
+  const payload = JSON.parse(Buffer.from(issued.accessToken.split('.')[1], 'base64url').toString());
+  await assert.rejects(service.stepUp({ adminId: 7, sessionId: payload.jti, code: '000000' }),
+    error => error.code === 'PLATFORM_MFA_CODE_INVALID');
+  await assert.rejects(service.stepUp({ adminId: 7, sessionId: payload.jti, code: '123456' }),
+    error => error.code === 'LOGIN_RATE_LIMITED' && error.status === 429);
+});
+
 test('platform authenticator validates signed token and loads current session permissions', async () => {
   const { service } = fixture();
   const pending = await service.login({ username: 'root', password: 'correct' });
