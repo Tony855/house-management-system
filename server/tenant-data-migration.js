@@ -40,6 +40,10 @@ function digestRows(rows) {
   return crypto.createHash('sha256').update(JSON.stringify(canonicalize(rows))).digest('hex');
 }
 
+function assertNotAborted(signal) {
+  if (signal?.aborted) throw Object.assign(new Error('TENANT_MIGRATION_JOB_LEASE_LOST'), { code: 'TENANT_MIGRATION_JOB_LEASE_LOST' });
+}
+
 function validateIdentity({ appId, tenantId, sourceOrgId }) {
   if (!APP_IDS.has(appId) || !UUID_RE.test(tenantId) ||
       !Number.isSafeInteger(sourceOrgId) || sourceOrgId < 1) {
@@ -108,7 +112,7 @@ function compareManifests(expected, actual) {
  */
 async function copyTenantOrgData({
   appId, tenantId, sourceOrgId, sourceReader, targetWriter, targetReader, audit,
-  mode = 'dry-run'
+  mode = 'dry-run', signal
 }) {
   validateIdentity({ appId, tenantId, sourceOrgId });
   if (!['dry-run', 'copy'].includes(mode)) throw new TypeError('TENANT_DATA_MIGRATION_MODE_INVALID');
@@ -121,8 +125,11 @@ async function copyTenantOrgData({
     throw new TypeError('TENANT_DATA_MIGRATION_TARGET_REQUIRED');
   }
 
+  assertNotAborted(signal);
   await audit({ event: 'tenant_data_migration_started', appId, tenantId, sourceOrgId, mode });
-  const source = await sourceReader.exportOrgSnapshot({ appId, sourceOrgId });
+  assertNotAborted(signal);
+  const source = await sourceReader.exportOrgSnapshot({ appId, sourceOrgId, signal });
+  assertNotAborted(signal);
   const normalized = normalizeSourceSnapshot(appId, sourceOrgId, source);
   if (mode === 'dry-run') {
     await audit({ event: 'tenant_data_migration_dry_run_verified', appId, tenantId, sourceOrgId, manifest: normalized.manifest });
@@ -133,7 +140,9 @@ async function copyTenantOrgData({
     // A previous attempt may have committed the tenant transaction but lost its
     // final audit acknowledgement. Reconcile an existing target before writing
     // so the operator can safely retry without duplicating or overwriting rows.
-    let target = await targetReader.readTenantSnapshot({ appId, tenantId });
+    assertNotAborted(signal);
+    let target = await targetReader.readTenantSnapshot({ appId, tenantId, signal });
+    assertNotAborted(signal);
     let targetNormalized = normalizeTargetSnapshot(appId, target);
     let alreadyImported = compareManifests(normalized.manifest, targetNormalized.manifest);
 
@@ -146,13 +155,16 @@ async function copyTenantOrgData({
       }
 
       try {
-        await targetWriter.importTenantSnapshot({ appId, tenantId, tables: normalized.tables });
+        assertNotAborted(signal);
+        await targetWriter.importTenantSnapshot({ appId, tenantId, tables: normalized.tables, signal });
+        assertNotAborted(signal);
       } catch (writeError) {
         // Another worker may have won the advisory lock and committed the same
         // snapshot. Accept only an exact manifest match; all other failures stay
         // fail-closed and are surfaced to the operator.
         if (writeError.message !== 'TENANT_DATA_MIGRATION_TARGET_NOT_EMPTY') throw writeError;
-        target = await targetReader.readTenantSnapshot({ appId, tenantId });
+        target = await targetReader.readTenantSnapshot({ appId, tenantId, signal });
+        assertNotAborted(signal);
         targetNormalized = normalizeTargetSnapshot(appId, target);
         if (!compareManifests(normalized.manifest, targetNormalized.manifest)) throw writeError;
         alreadyImported = true;
