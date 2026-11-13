@@ -146,3 +146,17 @@ test('sensitive platform writes reject login-only MFA without a fresh step-up', 
     assert.deepEqual(await response.json(), { error: 'PLATFORM_STEP_UP_REQUIRED' });
   });
 });
+
+
+test('platform list endpoints cap offset scans to a bounded safe integer', async () => {
+  let captured;
+  const app = fixture({ auth: admin, repository: {
+    listPlans: async options => { captured = options; return []; }
+  } });
+  await withServer(app, async base => {
+    const response = await fetch(base + '/api/platform/plans?offset=2000000&limit=500');
+    assert.equal(response.status, 200);
+    assert.equal(captured.offset, 1000000);
+    assert.equal(captured.limit, 500);
+  });
+});
