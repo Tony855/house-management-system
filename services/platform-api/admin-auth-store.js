@@ -111,8 +111,8 @@ function createPlatformAdminAuthStore(pool) {
       if (!Number.isSafeInteger(adminId) || adminId < 1 || typeof sessionId !== 'string' ||
           !Number.isSafeInteger(verifiedAt)) return false;
       const [result] = await pool.query(
-        'UPDATE platform_admin_sessions SET last_step_up_at = ? WHERE session_id = ? AND admin_id = ? AND revoked_at IS NULL AND expires_at > UTC_TIMESTAMP()',
-        [new Date(verifiedAt * 1000), sessionId, adminId]
+        'UPDATE platform_admin_sessions SET last_mfa_verified_at = ?, last_step_up_at = ? WHERE session_id = ? AND admin_id = ? AND revoked_at IS NULL AND expires_at > UTC_TIMESTAMP()',
+        [new Date(verifiedAt * 1000), new Date(verifiedAt * 1000), sessionId, adminId]
       );
       return Number(result.affectedRows) === 1;
     },
