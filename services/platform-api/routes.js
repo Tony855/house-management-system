@@ -16,7 +16,9 @@ function createPlatformBillingRouter({ repository, authenticate }) {
     } catch (error) { res.status(error.status || 403).json({ error: error.code || 'PLATFORM_ACCESS_DENIED' }); }
   };
   const bounded = value => Math.min(500, Math.max(1, Number.isInteger(Number(value)) ? Number(value) : 100));
-  const offset = value => Math.max(0, Number.isInteger(Number(value)) ? Number(value) : 0);
+  // Bound offset scans; huge integer query values can otherwise force costly
+  // deep scans or exceed driver integer ranges.
+  const offset = value => Math.min(1000000, Math.max(0, Number.isSafeInteger(Number(value)) ? Number(value) : 0));
 
   router.get('/overview', authorize('platform:read'), async (req, res, next) => {
     try { res.json(await repository.overview()); } catch (e) { next(e); }
