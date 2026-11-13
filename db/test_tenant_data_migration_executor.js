@@ -122,7 +122,9 @@ test('executor preserves the primary migration error when connection cleanup als
 test('executor normalizes primitive migration errors before attaching cleanup failures', async () => {
   const execute = createTenantDataMigrationExecutor({
     resolveConnections: async () => ({
-      sourcePool: {}, targetPool: {}, audit: async () => {},
+      sourcePool: { execute: async () => [[]], getConnection: async () => ({ execute: async () => [[]], release() {} }) },
+      targetPool: { execute: async () => [[]], getConnection: async () => ({ execute: async () => [[]], release() {} }) },
+      audit: async () => {},
       close: async () => { throw new Error('cleanup failed'); }
     })
   });
