@@ -116,6 +116,14 @@ function createPlatformMfaService({
     if (!Number.isSafeInteger(adminId) || adminId < 1 ||
         typeof account !== 'string' || !account || account.length > 160 ||
         typeof issuer !== 'string' || !issuer || issuer.length > 80) fail('PLATFORM_MFA_ENROLLMENT_INPUT_INVALID');
+    // Enrollment is only for admins without an active factor. Replacing an
+    // existing factor must go through the separately protected recovery path;
+    // otherwise a stolen recently-authenticated session could enroll an
+    // attacker-controlled factor and satisfy subsequent step-up checks.
+    const existingFactor = await store.getFactor(adminId);
+    if (existingFactor && existingFactor.enabled === true) {
+      fail('PLATFORM_MFA_ALREADY_ENROLLED', 409);
+    }
     const secret = randomBytes(20);
     if (!Buffer.isBuffer(secret) || secret.length !== 20) fail('PLATFORM_MFA_RANDOM_SOURCE_INVALID', 503);
     try {
