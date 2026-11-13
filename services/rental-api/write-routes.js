@@ -68,7 +68,11 @@ function validateContract(input) {
       typeof input.contract_no !== 'string' || !input.contract_no.trim() || input.contract_no.trim().length > 50 ||
       !validDate(input.start_date) || !validDate(input.end_date) || input.end_date < input.start_date || !validDate(input.sign_date) ||
       typeof (input.remark || '') !== 'string' || (input.remark || '').length > 200) throw contractError('CONTRACT_INPUT_INVALID');
-  const money = value => { const n = Number(value === undefined ? 0 : value); if (!Number.isFinite(n) || n < 0 || n > 100000000 || Math.round(n * 100) !== n * 100) throw contractError('CONTRACT_INPUT_INVALID'); return n; };
+  const money = value => {
+    const minor = parseMinorUnits(value === undefined ? 0 : value, { allowZero: true, maxMinor: 10000000000 });
+    if (minor === null) throw contractError('CONTRACT_INPUT_INVALID');
+    return minor / 100;
+  };
   return Object.freeze({ contract_no: input.contract_no.trim(), room_id, tenant_id, start_date: input.start_date, end_date: input.end_date,
     rent: money(input.rent), deposit: money(input.deposit), pay_cycle, sign_date: input.sign_date, remark: input.remark || '' });
 }
@@ -82,10 +86,9 @@ function validateContractRenewal(input) {
   const result = { end_date: input.end_date };
   for (const field of ['rent', 'deposit']) {
     if (input[field] !== undefined) {
-      const value = Number(input[field]);
-      if (!Number.isFinite(value) || value < 0 || value > 100000000 ||
-          Math.round(value * 100) !== value * 100) throw contractError('CONTRACT_RENEWAL_INPUT_INVALID');
-      result[field] = value;
+      const minor = parseMinorUnits(input[field], { allowZero: true, maxMinor: 10000000000 });
+      if (minor === null) throw contractError('CONTRACT_RENEWAL_INPUT_INVALID');
+      result[field] = minor / 100;
     }
   }
   if (input.pay_cycle !== undefined) {
