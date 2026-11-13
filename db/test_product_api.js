@@ -225,6 +225,8 @@ test('product API exposes tenant-local login before bearer authentication and pr
       body: JSON.stringify({ username: 'same-user', password: 'correct', tenantId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' })
     });
     assert.equal(login.status, 200);
+    assert.equal(login.headers.get('cache-control'), 'no-store');
+    assert.equal(login.headers.get('pragma'), 'no-cache');
     assert.deepEqual(await login.json(), { accessToken: 'signed-token', tokenType: 'Bearer' });
     assert.deepEqual(calls[0], ['login', { host: '127.0.0.1', username: 'same-user', password: 'correct' }]);
     const logout = await fetch(base + '/api/auth/logout', { method: 'POST' });
