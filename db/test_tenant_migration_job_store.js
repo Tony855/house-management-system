@@ -133,7 +133,7 @@ test('migration store reaps crashed workers after the retry budget is exhausted'
     return [[], []];
   }});
   assert.deepEqual(await store.listRunnableJobs({ limit: 12, maxAttempts: 4 }), []);
-  assert.match(calls[0][0], /state = 'failed'.*state = 'running'.*attempt_count >= \?/);
+  assert.match(calls[0][0], /state = 'failed'.*state = 'running'.*lease_expires_at IS NULL OR lease_expires_at <= UTC_TIMESTAMP\(\).*attempt_count >= \?/);
   assert.deepEqual(calls[0][1], [4]);
   assert.match(calls[1][0], /attempt_count < \?/);
   assert.deepEqual(calls[1][1], [4, 12]);
