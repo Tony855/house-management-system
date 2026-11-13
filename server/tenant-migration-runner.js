@@ -1,7 +1,17 @@
 'use strict';
 
+function withTimeout(operation, timeoutMs, code) {
+  let timer;
+  const pending = Promise.resolve().then(operation);
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(Object.assign(new Error(code), { code })), timeoutMs);
+  });
+  return Promise.race([pending, timeout]).finally(() => clearTimeout(timer));
+}
+
 function createPlatformTenantMigrationRunner({
-  store, worker, concurrency = 2, pollIntervalMs = 5000, stopGraceMs = 30000, onError = () => {}
+  store, worker, concurrency = 2, pollIntervalMs = 5000, pollOperationTimeoutMs = 30000,
+  stopGraceMs = 30000, onError = () => {}
 } = {}) {
   if (!store || typeof store.listRunnableJobs !== 'function') {
     throw new TypeError('TENANT_MIGRATION_RUNNER_STORE_INVALID');
@@ -11,6 +21,7 @@ function createPlatformTenantMigrationRunner({
   }
   if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 16 ||
       !Number.isInteger(pollIntervalMs) || pollIntervalMs < 250 || pollIntervalMs > 300000 ||
+      !Number.isInteger(pollOperationTimeoutMs) || pollOperationTimeoutMs < 1 || pollOperationTimeoutMs > 300000 ||
       !Number.isInteger(stopGraceMs) || stopGraceMs < 100 || stopGraceMs > 300000) {
     throw new TypeError('TENANT_MIGRATION_RUNNER_CONFIG_INVALID');
   }
@@ -37,7 +48,10 @@ function createPlatformTenantMigrationRunner({
     ticking = true;
     tickSettled = new Promise(resolve => { resolveTickSettled = resolve; });
     try {
-      const jobs = await store.listRunnableJobs({ limit: Math.min(50, capacity) });
+      const jobs = await withTimeout(
+        () => store.listRunnableJobs({ limit: Math.min(50, capacity) }),
+        pollOperationTimeoutMs, 'TENANT_MIGRATION_RUNNER_SCAN_TIMEOUT'
+      );
       if (!Array.isArray(jobs)) throw new TypeError('TENANT_MIGRATION_RUNNER_JOB_LIST_INVALID');
       let launched = 0;
       for (const job of jobs) {
