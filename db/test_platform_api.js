@@ -43,6 +43,10 @@ test('platform DB configuration is mandatory and never falls back to legacy DB s
   const pool = createPlatformPool({ env: { PLATFORM_DB_HOST: 'platform-db', PLATFORM_DB_NAME: 'platform_control', PLATFORM_DB_USER: 'platform', PLATFORM_DB_PASSWORD: 'secret' }, createPool: config => (captured = config) });
   assert.equal(pool.database, 'platform_control');
   assert.equal(captured.database, 'platform_control');
+  assert.equal(captured.queueLimit, 100);
+  assert.equal(captured.connectTimeout, 10000);
+  assert.throws(() => createPlatformPool({ env: { PLATFORM_DB_HOST: 'platform-db', PLATFORM_DB_NAME: 'platform_control', PLATFORM_DB_USER: 'u', PLATFORM_DB_PASSWORD: 'p', PLATFORM_DB_QUEUE_LIMIT: '0' } }), /PLATFORM_DATABASE_QUEUE_LIMIT_INVALID/);
+  assert.throws(() => createPlatformPool({ env: { PLATFORM_DB_HOST: 'platform-db', PLATFORM_DB_NAME: 'platform_control', PLATFORM_DB_USER: 'u', PLATFORM_DB_PASSWORD: 'p', PLATFORM_DB_CONNECT_TIMEOUT_MS: '100' } }), /PLATFORM_DATABASE_CONNECT_TIMEOUT_INVALID/);
 });
 
 test('platform endpoints require platform audience, active admin, MFA and scoped permission', async () => {
