@@ -96,7 +96,7 @@ function createPlatformAuthRouter({ authService, mfaService, auditStore, adminSt
         return next(Object.assign(new Error('PLATFORM_ADMIN_ID_INVALID'), { code: 'PLATFORM_ADMIN_ID_INVALID', status: 400 }));
       }
       const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
-      if (reason.length < 8 || reason.length > 500 || /[\\u0000-\\u001f\\u007f]/.test(reason)) {
+      if (reason.length < 8 || reason.length > 500 || /[\x00-\x1F\x7F]/.test(reason)) {
         return next(Object.assign(new Error('PLATFORM_ACTION_REASON_REQUIRED'), {
           code: 'PLATFORM_ACTION_REASON_REQUIRED', status: 400
         }));
