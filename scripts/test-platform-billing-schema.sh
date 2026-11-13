@@ -28,6 +28,7 @@ export MYSQL_PWD="$DB_PASSWORD"
 "${mysql_cmd[@]}" "$DB_NAME" < "$ROOT_DIR/db/migrations/platform/014_recurring_billing_dispatch.sql"
 "${mysql_cmd[@]}" "$DB_NAME" < "$ROOT_DIR/db/migrations/platform/015_recurring_billing_dispatch_lease_token.sql"
 "${mysql_cmd[@]}" "$DB_NAME" < "$ROOT_DIR/db/migrations/platform/016_platform_billing_worker_registry.sql"
+"${mysql_cmd[@]}" "$DB_NAME" < "$ROOT_DIR/db/migrations/platform/017_platform_admin_audit_reason.sql"
 
 expected_tables=11
 actual_tables="$("${mysql_cmd[@]}" -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '$DB_NAME' AND table_type = 'BASE TABLE' AND table_name IN ('platform_billing_accounts','platform_products','platform_plans','platform_subscriptions','platform_invoices','platform_invoice_lines','platform_payment_transactions','platform_payment_webhook_events','platform_refunds','platform_ledger_entries','platform_billing_audit')")"
@@ -152,3 +153,7 @@ if [[ "$worker_registry_tables" != "2" ]]; then echo "Expected 2 platform billin
 worker_scope_check="$("${mysql_cmd[@]}" -e "SELECT COUNT(*) FROM information_schema.table_constraints WHERE constraint_schema = '$DB_NAME' AND table_name = 'platform_billing_worker_scopes' AND constraint_type = 'CHECK'")"
 if [[ "$worker_scope_check" != "1" ]]; then echo "Billing worker app/job scope constraint was not installed" >&2; exit 1; fi
 echo "Platform billing worker identity and least-privilege scope schema verified."
+
+admin_audit_reason_column="$("${mysql_cmd[@]}" -e "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = '$DB_NAME' AND table_name = 'platform_admin_audit_events' AND column_name = 'reason' AND character_maximum_length = 500")"
+if [[ "$admin_audit_reason_column" != "1" ]]; then echo "Platform administrator audit reason column was not installed" >&2; exit 1; fi
+echo "Platform administrator action-reason audit schema verified."
