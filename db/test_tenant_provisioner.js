@@ -208,6 +208,42 @@ test('registry creation timeout is reconciled to provisioning_failed', async () 
   assert.equal(databaseCreated, false);
 });
 
+test('activation timeout preserves resources for reconciliation and never marks tenant failed', async () => {
+  const calls = [];
+  await assert.rejects(provisionTenant({
+    appId: 'property', displayLabel: 'Activation timeout', tenantId: '16161616-1616-4161-8161-161616161616',
+    registry: {
+      createProvisioningTenant: async () => calls.push('registry:create'),
+      activateTenant: async () => { calls.push('registry:activate'); throw new Error('ACTIVATED_REMOTELY_BUT_CLIENT_TIMED_OUT'); },
+      markProvisioningFailed: async () => calls.push('registry:failed')
+    },
+    databaseAdmin: {
+      host: 'db.internal',
+      createDatabase: async () => calls.push('db:create'),
+      createPrincipal: async () => calls.push('user:create'),
+      grantDatabaseOnly: async () => calls.push('grant'),
+      dropPrincipal: async () => calls.push('user:drop'),
+      dropDatabase: async () => calls.push('db:drop')
+    },
+    secretStore: {
+      put: async () => calls.push('secret:put'),
+      delete: async () => calls.push('secret:delete')
+    },
+    migrationRunner: { apply: async () => calls.push('migrate') },
+    isolationVerifier: { verify: async () => ({ passed: true, schemaVersion: 'v1' }) },
+    audit: async event => calls.push('audit:' + event.event)
+  }), error => {
+    assert.equal(error.code, 'TENANT_ACTIVATION_OUTCOME_UNKNOWN');
+    assert.equal(error.reconciliationRequired, true);
+    return true;
+  });
+  assert.ok(calls.includes('audit:provisioning_activation_outcome_unknown'));
+  assert.equal(calls.includes('registry:failed'), false);
+  assert.equal(calls.includes('user:drop'), false);
+  assert.equal(calls.includes('db:drop'), false);
+  assert.equal(calls.includes('secret:delete'), false);
+});
+
 test('audit adapter is mandatory before any provisioning side effect', async () => {
   let created = false;
   await assert.rejects(provisionTenant({
