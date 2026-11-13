@@ -8,6 +8,16 @@ function hashPassword(pw) {
   return `${salt}:${hash}`;
 }
 
+function hashPasswordAsync(pw) {
+  const salt = crypto.randomBytes(8).toString('hex');
+  return new Promise((resolve, reject) => {
+    crypto.scrypt(String(pw), salt, 32, (error, derived) => {
+      if (error) return reject(error);
+      return resolve(salt + ':' + derived.toString('hex'));
+    });
+  });
+}
+
 function verifyPassword(pw, stored) {
   if (typeof stored !== 'string') return false;
   const parts = stored.split(':');
@@ -73,4 +83,4 @@ function monthStart(dateStr) { return dateStr.slice(0, 7) + '-01'; }
 
 function monthEnd(month) { return `${month}-${String(daysInMonth(month)).padStart(2, '0')}`; }
 
-module.exports = { hashPassword, verifyPassword, verifyPasswordAsync, today, nowStr, addDays, addMonths, daysBetween, daysInMonth, monthStart, monthEnd };
+module.exports = { hashPassword, hashPasswordAsync, verifyPassword, verifyPasswordAsync, today, nowStr, addDays, addMonths, daysBetween, daysInMonth, monthStart, monthEnd };
