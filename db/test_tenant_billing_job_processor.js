@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const { createTenantBillingJobProcessor, LEASE_SECONDS, MAX_ATTEMPTS, MAX_CHUNK_SIZE } = require('../server/tenant-billing-job-processor');
 const tenantId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
-function setup({ appId = 'rental', appIds = [appId], listActiveTenants = async () => ({ tenantIds: [], nextCursor: null }), job = null, authorizeSystem = async () => true, claimAllowed = Boolean(job), failChunk = false, chunkSize = 50, propertyRows = [] } = {}) {
+function setup({ appId = 'rental', appIds = [appId], listActiveTenants = async () => ({ tenantIds: [], nextCursor: null }), scanTimeoutMs = 30000, job = null, authorizeSystem = async () => true, claimAllowed = Boolean(job), failChunk = false, chunkSize = 50, propertyRows = [] } = {}) {
  const calls=[];let fingerprint=null,idempotencyState='processing',leaseToken=null;
  const connection={
   beginTransaction:async()=>calls.push('BEGIN'),commit:async()=>calls.push('COMMIT'),rollback:async()=>calls.push('ROLLBACK'),release:()=>calls.push('RELEASE'),
@@ -28,7 +28,7 @@ function setup({ appId = 'rental', appIds = [appId], listActiveTenants = async (
   getConnection:async()=>connection,end:async()=>{}
  };
  const registry={findTenantById:async id=>({tenant_uuid:id,app_id:appId,lifecycle_state:'active',db_host:'db.internal',db_port:3306,db_name:'tenant_db',db_secret_ref:'secret'}),listActiveTenants};
- const processor=createTenantBillingJobProcessor({registry,secretProvider:{getDatabaseCredentials:async()=>({user:'tenant',password:'secret',version:'v1'})},tenantPoolManager:{getPool:async()=>pool},authorizeSystem,appIds,chunkSize,createToken:()=> 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'});
+ const processor=createTenantBillingJobProcessor({registry,secretProvider:{getDatabaseCredentials:async()=>({user:'tenant',password:'secret',version:'v1'})},tenantPoolManager:{getPool:async()=>pool},authorizeSystem,appIds,chunkSize,scanTimeoutMs,createToken:()=> 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'});
  return{processor,calls,getLeaseToken:()=>leaseToken};
 }
 test('processor leaves an empty tenant job queue untouched',async()=>{const f=setup();assert.deepEqual(await f.processor.processTenant({tenantId,appId:'rental',workerId:'billing-worker-01'}),{worked:false,appId:'rental',state:'idle'});});
@@ -72,4 +72,16 @@ test('billing processor scans one bounded tenant page per tick and rotates the s
  }
  assert.deepEqual(scanCalls.map(call=>call.afterTenantId),['',secondTenant,'']);
  assert.deepEqual(scanCalls.map(call=>call.limit),[2,2,2]);
+});
+
+
+test('billing processor bounds a platform tenant scan that never resolves', async () => {
+ const f=setup({
+  appId:'rental',appIds:['rental'],scanTimeoutMs:10,
+  listActiveTenants:()=>new Promise(()=>{})
+ });
+ await assert.rejects(
+  f.processor.processNextBatch({workerId:'billing-worker-timeout'}),
+  error=>error.code==='BILLING_TENANT_SCAN_TIMEOUT'&&error.status===503
+ );
 });
