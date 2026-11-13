@@ -44,6 +44,7 @@ test('executor resolves credentials outside job payload, uses adapters and check
   });
   assert.equal(result.copied, false);
   assert.equal(result.cutover, false);
+  assert.ok(calls.find(value => value && typeof value === 'object' && value.appId === appId).signal instanceof AbortSignal);
   assert.deepEqual(calls.filter(x => typeof x === 'string'), [
     'heartbeat', 'resolving_connections', 'copy_started',
     'tenant_data_migration_started', 'tenant_data_migration_dry_run_verified', 'heartbeat', 'verified'
@@ -61,5 +62,35 @@ test('executor rejects missing scoped connection resolver and closes resolved re
     job: { id: 1, appId: 'rental', tenantId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', sourceOrgId: 7, mode: 'copy' },
     heartbeat: async () => {}, saveCheckpoint: async () => {}
   }), /TENANT_MIGRATION_SOURCE_POOL_REQUIRED/);
+  assert.equal(closed, 1);
+});
+
+
+test('executor aborts connection resolution and closes late resources after lease renewal fails', async () => {
+  let heartbeatCount = 0;
+  let receivedSignal;
+  let closed = 0;
+  const execute = createTenantDataMigrationExecutor({
+    heartbeatIntervalMs: 5000,
+    resolveConnections: async ({ signal }) => {
+      receivedSignal = signal;
+      return new Promise(resolve => {
+        signal.addEventListener('abort', () => resolve({
+          sourcePool: {}, targetPool: {}, audit: async () => {},
+          close: async () => { closed++; }
+        }), { once: true });
+      });
+    }
+  });
+  await assert.rejects(execute({
+    job: { id: 2, appId: 'rental', tenantId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', sourceOrgId: 9, mode: 'dry-run' },
+    heartbeat: async () => {
+      heartbeatCount++;
+      if (heartbeatCount > 1) throw Object.assign(new Error('lease lost'), { code: 'TENANT_MIGRATION_JOB_LEASE_LOST' });
+    },
+    saveCheckpoint: async () => {}
+  }), error => error.code === 'TENANT_MIGRATION_JOB_LEASE_LOST');
+  assert.ok(receivedSignal instanceof AbortSignal);
+  assert.equal(receivedSignal.aborted, true);
   assert.equal(closed, 1);
 });
