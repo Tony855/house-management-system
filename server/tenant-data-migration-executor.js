@@ -3,6 +3,12 @@
 const { copyTenantOrgData } = require('./tenant-data-migration');
 const { createMariaDbTenantMigrationAdapters } = require('./tenant-data-migration-mariadb');
 
+function assertNotAborted(signal) {
+  if (signal?.aborted) throw Object.assign(new Error('TENANT_MIGRATION_JOB_LEASE_LOST'), {
+    code: 'TENANT_MIGRATION_JOB_LEASE_LOST'
+  });
+}
+
 /**
  * Builds the production migration executor around an explicit credential/
  * connection resolver. The resolver must return a read-only legacy source pool,
@@ -40,10 +46,14 @@ function createTenantDataMigrationExecutor({ resolveConnections, heartbeatInterv
     let connections;
     try {
       await heartbeat();
+      assertNotAborted(abortController.signal);
       await saveCheckpoint({ phase: 'resolving_connections', updatedAt: new Date().toISOString() });
+      assertNotAborted(abortController.signal);
       connections = await resolveConnections(Object.freeze({
-        appId: job.appId, tenantId: job.tenantId, sourceOrgId: job.sourceOrgId
+        appId: job.appId, tenantId: job.tenantId, sourceOrgId: job.sourceOrgId,
+        signal: abortController.signal
       }));
+      assertNotAborted(abortController.signal);
       if (!connections || !connections.sourcePool || !connections.targetPool ||
           typeof connections.audit !== 'function') throw new TypeError('TENANT_MIGRATION_CONNECTIONS_INVALID');
 
@@ -51,6 +61,7 @@ function createTenantDataMigrationExecutor({ resolveConnections, heartbeatInterv
         appId: job.appId, sourcePool: connections.sourcePool, targetPool: connections.targetPool
       });
       await saveCheckpoint({ phase: 'copy_started', updatedAt: new Date().toISOString() });
+      assertNotAborted(abortController.signal);
       const result = await copyTenantOrgData({
         appId: job.appId, tenantId: job.tenantId, sourceOrgId: job.sourceOrgId,
         mode: job.mode, ...adapters, audit: connections.audit, signal: abortController.signal
