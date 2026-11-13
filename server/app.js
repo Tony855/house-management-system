@@ -1514,12 +1514,12 @@ router.post('/tenants/:id/company-admin', authMode, orgAdminOnly, h(async (req, 
     'SELECT id FROM users WHERE company_id = ? AND org_id = ?', [id, req.orgId]);
   if (exist.length) {
     await shared.query('UPDATE users SET password = ?, real_name = ? WHERE id = ?',
-      [hashPassword(password), real_name || '', exist[0].id]);
+      [await hashPasswordAsync(password), real_name || '', exist[0].id]);
   } else {
     await shared.query(
       `INSERT INTO users (username, password, real_name, role, mode, org_id, company_id)
        VALUES (?, ?, ?, 'staff', 'property', ?, ?)`,
-      [username, hashPassword(password), real_name || '', req.orgId, id]);
+      [username, await hashPasswordAsync(password), real_name || '', req.orgId, id]);
   }
   res.json({ ok: true, username });
 }));
@@ -3068,7 +3068,7 @@ router.post('/users', authMode, orgAdminOnly, h(async (req, res) => {
   if (Number(dup.c) > 0) return res.status(400).json({ error: '该用户名在本系统已存在' });
   const [ins] = await shared.query(
     'INSERT INTO users (username, password, real_name, role, mode, org_id) VALUES (?, ?, ?, ?, ?, ?)',
-    [username, hashPassword(password), real_name || '', role, req.mode, req.orgId]);
+    [username, await hashPasswordAsync(password), real_name || '', role, req.mode, req.orgId]);
   const [rows] = await shared.query(
     `SELECT u.id, u.username, u.real_name, u.role, u.mode, u.org_id,
             COALESCE(rc.name, rb.name) AS role_name
@@ -3101,7 +3101,7 @@ router.put('/users/:id', authMode, orgAdminOnly, h(async (req, res) => {
   await shared.query('UPDATE users SET real_name = ?, role = ? WHERE id = ?',
     [real_name !== null ? real_name : target.real_name, newRole, req.params.id]);
   if (password) {
-    await shared.query('UPDATE users SET password = ? WHERE id = ?', [hashPassword(password), req.params.id]);
+    await shared.query('UPDATE users SET password = ? WHERE id = ?', [await hashPasswordAsync(password), req.params.id]);
   }
   const [rows] = await shared.query('SELECT * FROM users WHERE id = ?', [req.params.id]);
   res.json(rows[0]);
