@@ -21,7 +21,7 @@ Options:
 - `--skip-firewall`: do not add a UFW rule.
 - `--dry-run`: validate the host and print the plan without changing the system.
 
-The script supports Ubuntu and Debian with apt, installs Node.js 20+ and MariaDB, uses `npm ci`, and registers a systemd service under the dedicated unprivileged `house-sys` account.
+The script supports Ubuntu and Debian with apt, installs Node.js 24.x when the existing runtime is outside the supported `>=24 <27` range, installs MariaDB, uses `npm ci --omit=dev`, and registers a systemd service under the dedicated unprivileged `house-sys` account. This installer still deploys only the legacy shared-database monolith; it does not deploy the independent Rental, Hotel, Property, or Super Admin services.
 
 ## Data safety
 
