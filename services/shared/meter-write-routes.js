@@ -53,8 +53,9 @@ function createMeterWriteRouter(appId) {
           const elec_usage = elecUsageMinor / 100;
           const water_price = waterPriceMinor / 100;
           const elec_price = elecPriceMinor / 100;
-          const water_fee = Math.round(waterUsageMinor * waterPriceMinor / 10000) / 100;
-          const elec_fee = Math.round(elecUsageMinor * elecPriceMinor / 10000) / 100;
+          const feeMinor = (usageMinor, priceMinor) => Number((BigInt(usageMinor) * BigInt(priceMinor) + 5000n) / 10000n);
+          const water_fee = feeMinor(waterUsageMinor, waterPriceMinor) / 100;
+          const elec_fee = feeMinor(elecUsageMinor, elecPriceMinor) / 100;
           const record = { ...meter, water_usage, water_fee, elec_usage, elec_fee };
           const inserted = await tx.insert('meters', record);
           return { id: Number(inserted.insertId), ...record };
