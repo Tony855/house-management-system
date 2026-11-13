@@ -35,6 +35,7 @@ test('validates a strict rental room DTO and rejects client-controlled columns',
   assert.equal(room.building_id, 7);
   assert.equal(room.room_no, 'A-101');
   assert.equal(room.rent, 1200);
+  assert.equal(validateRoom({ ...valid, rent: 1.15, deposit: 1.15 }).rent, 1.15);
   assert.equal(room.status, 'vacant');
   for (const body of [
     { ...valid, org_id: 99 },
