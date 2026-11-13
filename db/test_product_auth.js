@@ -67,6 +67,13 @@ test('rejects malformed, expired, overlong and cross-product tokens', async () =
   }
 });
 
+test('rejects oversized bearer tokens before key or session lookups', async () => {
+  const { authenticate, calls } = setup();
+  const result = await invoke(authenticate, 'Bearer ' + 'a'.repeat(8192));
+  assert.equal(result.error.code, 'AUTH_REQUIRED');
+  assert.equal(calls.length, 0);
+});
+
 test('rejects modified signatures and revoked sessions', async () => {
   const { authenticate } = setup();
   const signed = token();
