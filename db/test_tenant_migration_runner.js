@@ -56,3 +56,19 @@ test('runner validates configuration and stops polling before draining active jo
   await stopping;
   assert.equal(runner.isRunning(), false);
 });
+
+test('runner stop waits for an in-flight poll without starving its I/O completion', async () => {
+  let releaseList;
+  const listGate = new Promise(resolve => { releaseList = resolve; });
+  const runner = createPlatformTenantMigrationRunner({
+    store: { async listRunnableJobs() { await listGate; return []; } },
+    worker: { async runJob() { throw new Error('no jobs should be dispatched'); } },
+    concurrency: 1
+  });
+  const polling = runner.tick();
+  const stopping = runner.stop();
+  releaseList();
+  await Promise.all([polling, stopping]);
+  assert.equal(runner.getActiveCount(), 0);
+  assert.equal(runner.isRunning(), false);
+});
