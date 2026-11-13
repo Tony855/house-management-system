@@ -257,3 +257,12 @@ test('recurring billing runner stop shares one shutdown promise', async () => {
   assert.deepEqual(results[0], { drained: true });
   assert.deepEqual(results[1], { drained: true });
 });
+
+
+test('dispatcher rejects heartbeat cadence that leaves less than two thirds of lease for recovery', () => {
+  assert.throws(() => createRecurringBillingDispatcher({
+    store: { listRunnable() {}, claim() {}, markDispatched() {}, markFailed() {}, renewLease() {} },
+    workerId: 'worker-a', enqueueTenantJob: async () => {},
+    leaseSeconds: 30, heartbeatIntervalMs: 10001
+  }), /RECURRING_BILLING_HEARTBEAT_INVALID/);
+});
