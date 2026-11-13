@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const { createRecurringBillingDispatchStore, assertPeriod } = require('../server/recurring-billing-dispatch-store');
 const { createRecurringBillingDispatcher } = require('../server/recurring-billing-dispatcher');
+const { createRecurringBillingRunner } = require('../server/recurring-billing-runner');
 
 const tenant = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const row = { id: 5, tenantId: tenant, appId: 'property', jobType: 'property_fee', periodKey: '2030-02', requestId: 'auto-property_fee-' + tenant + '-2030-02', state: 'dispatching', attemptCount: 1, workerId: 'worker-a', leaseToken: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', leaseExpiresAt: '2030-02-01 00:03:00', errorCode: null };
@@ -189,4 +190,32 @@ test('dispatcher rejects lease operation timeouts that reach or exceed the lease
     workerId: 'worker-a', enqueueTenantJob: async () => {},
     leaseSeconds: 30, leaseOperationTimeoutMs: 30000
   }), /RECURRING_BILLING_LEASE_OPERATION_TIMEOUT_INVALID/);
+});
+
+
+test('recurring billing runner bounds a tenant scan that never resolves', async () => {
+  const errors = [];
+  let dispatched = false;
+  const runner = createRecurringBillingRunner({
+    store: { enqueueActiveTenants: () => new Promise(() => {}) },
+    dispatcher: { tick: async () => { dispatched = true; return {}; } },
+    workerId: 'worker-a', scanOperationTimeoutMs: 10,
+    now: () => new Date('2030-02-01T12:00:00Z'),
+    onError: error => errors.push(error)
+  });
+  const result = await runner.tick();
+  assert.equal(result.errorCode, 'BILLING_RUNNER_SCAN_TIMEOUT');
+  assert.equal(errors[0].code, 'BILLING_RUNNER_SCAN_TIMEOUT');
+  assert.equal(dispatched, false);
+  await runner.stop();
+});
+
+test('recurring billing runner rejects malformed scan counters and cursors', async () => {
+  const runner = createRecurringBillingRunner({
+    store: { enqueueActiveTenants: async () => ({ scanned: -1, enqueued: 0, nextCursor: null }) },
+    dispatcher: { tick: async () => ({}) }, workerId: 'worker-a',
+    now: () => new Date('2030-02-01T12:00:00Z')
+  });
+  const result = await runner.tick();
+  assert.equal(result.errorCode, 'BILLING_RUNNER_SCAN_RESULT_INVALID');
 });
