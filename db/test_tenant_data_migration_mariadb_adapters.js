@@ -220,3 +220,14 @@ test('MariaDB target adapter rolls back earlier table inserts after a later tabl
   assert.equal(f.committed, false);
   assert.equal(Object.values(f.targetTables).every(rows => rows.length === 0), true);
 });
+
+
+test('source snapshot export aborts between table reads when the migration lease is lost', async () => {
+  const pools = createPools('rental', 12);
+  const adapters = createMariaDbTenantMigrationAdapters({ appId: 'rental', sourcePool: pools.sourcePool, targetPool: pools.targetPool });
+  const controller = new AbortController();
+  controller.abort();
+  await assert.rejects(adapters.sourceReader.exportOrgSnapshot({ appId: 'rental', sourceOrgId: 12, signal: controller.signal }),
+    error => error.code === 'TENANT_MIGRATION_JOB_LEASE_LOST');
+  assert.ok(pools.sourceCalls.some(call => call.sql === 'ROLLBACK'));
+});
