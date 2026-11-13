@@ -54,3 +54,8 @@ For each tenant:
 ## Current acceptance boundary
 
 Unit tests and CI MariaDB jobs validate pool lifecycle, schema adapters, migration transactions and platform schema contracts. This is not proof that a production tenant has been migrated or that the legacy business runtime has been cut over. The legacy server/app.js remains the existing business entrypoint until the independent product APIs and their repositories are fully wired and deployment-tested.
+
+
+### Activation timeout reconciliation
+
+If the platform DB activation call times out after isolation verification, do not delete the tenant database, principal, or secret and do not mark the tenant failed. The provisioning adapter now exposes `reconcileActivation`: it locks the tenant registry row with `SELECT ... FOR UPDATE`, treats an already-active row with the same schema version as a committed success, and conditionally activates a still-provisioning row while writing a durable `tenant_activation_reconciled` event in the same transaction. A different lifecycle state or schema version remains a hard conflict and must be investigated; never infer success from a network timeout alone. The provisioner invokes this reconciliation before returning `TENANT_ACTIVATION_OUTCOME_UNKNOWN`.
