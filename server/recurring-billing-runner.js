@@ -93,11 +93,14 @@ function createRecurringBillingRunner({
       const timedOut = new Promise(resolve => {
         timeout = setTimeout(() => resolve(false), stopGraceMs);
       });
-      const drained = await Promise.race([
-        (async () => { while (ticking) await new Promise(resolve => setTimeout(resolve, 10)); return true; })(),
-        timedOut
-      ]);
+      let cancelDrainWait = false;
+      const waitForDrain = async () => {
+        while (ticking && !cancelDrainWait) await new Promise(resolve => setTimeout(resolve, 10));
+        return !ticking;
+      };
+      const drained = await Promise.race([waitForDrain(), timedOut]);
       clearTimeout(timeout);
+      if (!drained) cancelDrainWait = true;
       if (!drained) {
         report(Object.assign(new Error('BILLING_RUNNER_DRAIN_TIMEOUT'), { code: 'BILLING_RUNNER_DRAIN_TIMEOUT' }));
         return Object.freeze({ drained: false, timedOut: true });
