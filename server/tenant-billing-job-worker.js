@@ -70,7 +70,6 @@ function createTenantBillingJobWorker({
       let timeout;
       const timedOut = new Promise(resolve => {
         timeout = setTimeout(() => resolve(false), stopGraceMs);
-        if (typeof timeout.unref === 'function') timeout.unref();
       });
       const drained = await Promise.race([activeTick.then(() => true, () => true), timedOut]);
       clearTimeout(timeout);
