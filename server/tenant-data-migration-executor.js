@@ -28,24 +28,25 @@ function createTenantDataMigrationExecutor({ resolveConnections, heartbeatInterv
       throw new TypeError('TENANT_MIGRATION_WORKER_CONTEXT_INVALID');
     }
 
-    let heartbeatRunning = false;
+    let heartbeatPromise = null;
     let heartbeatFailure = null;
     const abortController = new AbortController();
-    const beat = async () => {
-      if (heartbeatRunning || heartbeatFailure) return;
-      heartbeatRunning = true;
-      try { await heartbeat(); } catch (error) {
+    const beat = () => {
+      if (heartbeatFailure) return Promise.resolve();
+      if (heartbeatPromise) return heartbeatPromise;
+      heartbeatPromise = Promise.resolve().then(() => heartbeat()).catch(error => {
         heartbeatFailure = error;
         abortController.abort(error);
-      }
-      finally { heartbeatRunning = false; }
+      }).finally(() => { heartbeatPromise = null; });
+      return heartbeatPromise;
     };
     const timer = setInterval(() => { void beat(); }, heartbeatIntervalMs);
     if (typeof timer.unref === 'function') timer.unref();
 
     let connections;
     try {
-      await heartbeat();
+      await beat();
+      if (heartbeatFailure) throw heartbeatFailure;
       assertNotAborted(abortController.signal);
       await saveCheckpoint({ phase: 'resolving_connections', updatedAt: new Date().toISOString() });
       assertNotAborted(abortController.signal);
@@ -66,13 +67,15 @@ function createTenantDataMigrationExecutor({ resolveConnections, heartbeatInterv
         appId: job.appId, tenantId: job.tenantId, sourceOrgId: job.sourceOrgId,
         mode: job.mode, ...adapters, audit: connections.audit, signal: abortController.signal
       });
+      await beat();
       if (heartbeatFailure) throw heartbeatFailure;
-      await heartbeat();
+      assertNotAborted(abortController.signal);
       await saveCheckpoint({
         phase: 'verified', manifest: result.manifest,
         copied: result.copied, alreadyImported: result.alreadyImported === true,
         cutover: false, updatedAt: new Date().toISOString()
       });
+      assertNotAborted(abortController.signal);
       return Object.freeze({
         mode: result.mode, appId: result.appId, tenantId: result.tenantId,
         sourceOrgId: result.sourceOrgId, manifest: result.manifest,
