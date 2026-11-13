@@ -515,7 +515,7 @@ function createRentalWriteRouter() {
             const receivedMinor = parseMinorUnits(balance.received_amount, { allowZero: true, maxMinor: 10000000000 });
             const heldMinor = parseMinorUnits(balance.held_amount, { allowZero: true, maxMinor: 10000000000 });
             const transactionMinor = parseMinorUnits(transaction.amount);
-            if (receivedMinor === null || heldMinor === null || transactionMinor === null) {
+            if (receivedMinor === null || heldMinor === null || transactionMinor === null || receivedMinor > expectedMinor) {
               throw contractError('RENTAL_DEPOSIT_BALANCE_INVALID', 409);
             }
             if (action.type === 'receipt' && transactionMinor > expectedMinor - receivedMinor) {
@@ -565,6 +565,7 @@ function createRentalWriteRouter() {
       if (expectedMinor === null) throw contractError('RENTAL_DEPOSIT_BALANCE_INVALID', 409);
       const expected_amount = expectedMinor / 100;
       const receivedMinor = parseMinorUnits(balance.received_amount, { allowZero: true, maxMinor: 10000000000 });
+      if (receivedMinor === null || receivedMinor > expectedMinor) throw contractError('RENTAL_DEPOSIT_BALANCE_INVALID', 409);
       return res.json({ contract_id: id, contract_status: rows[0].status, expected_amount, ...balance,
         remaining_to_receive: (expectedMinor - receivedMinor) / 100,
         settlement_status: balance.held_amount <= 0 && balance.received_amount > 0 ? 'settled' :
