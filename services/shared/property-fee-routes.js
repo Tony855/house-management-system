@@ -32,13 +32,16 @@ function buildPropertyFeeBill(room, month) {
     throw propertyFeeError('PROPERTY_FEE_INPUT_INVALID');
   }
   const dates = monthDates(month);
-  const propertyFee = Number(room.property_fee);
-  const waterFee = Number(room.water_fee);
-  const elecFee = Number(room.elec_fee);
-  if (![propertyFee, waterFee, elecFee].every(value => Number.isFinite(value) && value >= 0)) {
+  const propertyFeeMinor = parseMinorUnits(room.property_fee, { allowZero: true, maxMinor: 10000000000 });
+  const waterFeeMinor = parseMinorUnits(room.water_fee, { allowZero: true, maxMinor: 10000000000 });
+  const elecFeeMinor = parseMinorUnits(room.elec_fee, { allowZero: true, maxMinor: 10000000000 });
+  if ([propertyFeeMinor, waterFeeMinor, elecFeeMinor].some(value => value === null)) {
     throw propertyFeeError('PROPERTY_FEE_AMOUNT_INVALID', 409);
   }
-  const amount = Math.round((propertyFee + waterFee + elecFee) * 100) / 100;
+  const propertyFee = propertyFeeMinor / 100;
+  const waterFee = waterFeeMinor / 100;
+  const elecFee = elecFeeMinor / 100;
+  const amount = (propertyFeeMinor + waterFeeMinor + elecFeeMinor) / 100;
   if (amount <= 0) return null;
   if (!Number.isSafeInteger(Number(room.room_id)) || Number(room.room_id) < 1 ||
       !Number.isSafeInteger(Number(room.owner_id)) || Number(room.owner_id) < 1) {
@@ -172,9 +175,12 @@ function createPropertyFeeRouter() {
         const chunk=rooms.slice(0,PROPERTY_FEE_JOB_CHUNK_SIZE);
         let generated=0; let skipped=0;
         for(const room of chunk) {
-          const pf=Number(room.property_fee); const wf=Number(room.water_fee); const ef=Number(room.elec_fee);
-          if(![pf,wf,ef].every(value=>Number.isFinite(value)&&value>=0)) throw propertyFeeError('PROPERTY_FEE_AMOUNT_INVALID',409);
-          const amount=Math.round((pf+wf+ef)*100)/100;
+          const pfMinor=parseMinorUnits(room.property_fee,{allowZero:true,maxMinor:10000000000});
+          const wfMinor=parseMinorUnits(room.water_fee,{allowZero:true,maxMinor:10000000000});
+          const efMinor=parseMinorUnits(room.elec_fee,{allowZero:true,maxMinor:10000000000});
+          if([pfMinor,wfMinor,efMinor].some(value=>value===null)) throw propertyFeeError('PROPERTY_FEE_AMOUNT_INVALID',409);
+          const pf=pfMinor/100; const wf=wfMinor/100; const ef=efMinor/100;
+          const amount=(pfMinor+wfMinor+efMinor)/100;
           if(amount<=0) { skipped++; continue; }
           const [existing]=await tx.execute("SELECT id FROM bills WHERE source='property' AND room_id=? AND period_start=? LIMIT 1 FOR UPDATE",[room.room_id,dates.start]);
           if(existing.length) { skipped++; continue; }
