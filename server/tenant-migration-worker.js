@@ -50,12 +50,12 @@ function createPlatformTenantMigrationWorker({ store, workerId, executeJob, leas
 
   return Object.freeze({
     async runJob(jobId) {
-      const before = await store.getJob(jobId);
+      const before = await withLeaseTimeout(() => store.getJob(jobId));
       if (!before) return Object.freeze({ claimed: false, state: 'not_found' });
       if (!['queued', 'running'].includes(before.state)) {
         return Object.freeze({ claimed: false, state: before.state });
       }
-      const job = await store.claimJob({ id: jobId, workerId, leaseSeconds });
+      const job = await withLeaseTimeout(() => store.claimJob({ id: jobId, workerId, leaseSeconds }));
       if (!job) return Object.freeze({ claimed: false, state: 'not_claimed' });
       if (typeof job.leaseToken !== 'string' || !job.leaseToken) throw new Error('TENANT_MIGRATION_JOB_LEASE_TOKEN_MISSING');
 
