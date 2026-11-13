@@ -68,6 +68,7 @@ async function provisionTenant({
   let principalAttempted = false;
   let secretAttempted = false;
   let activationAttempted = false;
+  let verifiedSchemaVersion = null;
 
   try {
     registryAttempted = true;
@@ -85,6 +86,7 @@ async function provisionTenant({
     const verification = await isolationVerifier.verify({ appId, tenantId, dbName, dbUser });
     if (!verification || verification.passed !== true) throw new Error('TENANT_ISOLATION_VERIFICATION_FAILED');
 
+    verifiedSchemaVersion = verification.schemaVersion || null;
     // Persist the successful verification before the irreversible activation.
     // If audit storage is unavailable, the tenant remains non-active.
     await writeAudit(audit, { tenantId, event: 'provisioning_verified', schemaVersion: verification.schemaVersion || null });
@@ -102,6 +104,34 @@ async function provisionTenant({
     // failed after an activation attempt: that could leave an active registry
     // row pointing at a deleted database. Preserve resources for reconciliation.
     if (activationAttempted) {
+      // Resolve the remote transaction outcome under a row lock. If the first
+      // activation committed, this is an idempotent read; if it rolled back,
+      // the registry adapter safely completes the same verified transition.
+      if (typeof registry.reconcileActivation === 'function' && verifiedSchemaVersion) {
+        try {
+          const reconciled = await registry.reconcileActivation(tenantId, { schemaVersion: verifiedSchemaVersion });
+          if (reconciled?.lifecycleState === 'active' && reconciled.schemaVersion === verifiedSchemaVersion) {
+            let auditWarning = null;
+            try {
+              await writeAudit(audit, {
+                tenantId, event: 'provisioning_activation_reconciled',
+                alreadyActive: reconciled.reconciled === false
+              });
+            } catch (auditError) {
+              auditWarning = auditError.code || auditError.message || 'AUDIT_WRITE_FAILED';
+            }
+            return {
+              tenantId, appId, lifecycleState: 'active',
+              schemaVersion: verifiedSchemaVersion,
+              reconciled: reconciled.reconciled === true,
+              ...(auditWarning ? { auditWarning } : {})
+            };
+          }
+          error.reconciliationFailure = 'TENANT_REGISTRY_RECONCILIATION_RESULT_INVALID';
+        } catch (reconciliationError) {
+          error.reconciliationFailure = reconciliationError.code || reconciliationError.message || 'RECONCILIATION_FAILED';
+        }
+      }
       error.code = 'TENANT_ACTIVATION_OUTCOME_UNKNOWN';
       error.reconciliationRequired = true;
       try {
@@ -109,7 +139,8 @@ async function provisionTenant({
           tenantId,
           event: 'provisioning_activation_outcome_unknown',
           code: error.code,
-          reconciliationRequired: true
+          reconciliationRequired: true,
+          reconciliationFailure: error.reconciliationFailure || null
         });
       } catch (auditError) {
         error.auditFailure = auditError.code || auditError.message || 'AUDIT_WRITE_FAILED';
