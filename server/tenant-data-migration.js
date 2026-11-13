@@ -140,7 +140,7 @@ async function copyTenantOrgData({
   } catch (error) {
     try {
       await audit({
-        event: 'tenant_data_migration_copy_failed',
+        event: 'tenant_data_migration_failed',
         appId, tenantId, sourceOrgId,
         code: /^[A-Z][A-Z0-9_]{1,63}$/.test(error.code || '') ? error.code : 'TENANT_DATA_MIGRATION_FAILED'
       });
@@ -201,7 +201,7 @@ async function copyTenantOrgData({
   } catch (error) {
     try {
       await audit({
-        event: 'tenant_data_migration_copy_failed',
+        event: 'tenant_data_migration_failed',
         appId,
         tenantId,
         sourceOrgId,
