@@ -20,13 +20,13 @@ The runtime fails startup if security dependencies are absent. It has no develop
 3. Platform JWTs are platform-audience-only, short-lived, session-bound and checked against current admin state.
 4. Sensitive mutations require fresh step-up MFA.
 5. Logout revokes the exact server-side session.
-6. Admin disable requires `platform:admins:write` plus fresh step-up MFA, refuses self-disable/last-active-admin disable, and revokes every session for the target in one transaction.
+6. Admin disable requires `platform:admins:write`, fresh step-up MFA and an 8–500 character operator reason; it refuses self-disable/last-active-admin disable, revokes every target session, and persists the reason with the audit event in one transaction.
 7. Admin MFA reset requires `platform:admins:write`, fresh step-up MFA and an 8–500 character operator reason. It disables the target factor, deletes pending enrollment and recovery-code hashes, revokes all target sessions, and writes the audit event in one transaction. **The reset endpoint is not production-ready as a standalone recovery flow:** the target cannot complete normal MFA login after the factor is disabled. A separate trusted-channel, one-time enrollment grant and delivery/identity-proofing process must be implemented before enabling this operation in production.
 8. Enrollment and recovery-code rotation require a recent MFA-verified session; plaintext recovery codes are returned once and never stored.
 
 ## Persistent security audit
 
-Migration `011_platform_admin_audit.sql` creates the platform-only security event ledger. The API records login, MFA challenge verification, enrollment, recovery-code rotation, administrator MFA reset, step-up and logout outcomes. The event schema intentionally excludes usernames, IP addresses, passwords, MFA codes, raw recovery codes, bearer tokens and encrypted secret envelopes. Event action/outcome/code fields are allowlisted and all values are SQL-bound parameters.
+Migrations `011_platform_admin_audit.sql` and `017_platform_admin_audit_reason.sql` create the platform-only security event ledger and add the bounded operator-reason field. The API records login, MFA challenge verification, enrollment, recovery-code rotation, administrator MFA reset, step-up and logout outcomes. The event schema intentionally excludes usernames, IP addresses, passwords, MFA codes, raw recovery codes, bearer tokens and encrypted secret envelopes. Event action/outcome/code fields are allowlisted and all values are SQL-bound parameters. Administrator disable reasons are trimmed, bounded to 500 characters, reject control characters, and are stored separately from the machine-readable detail code.
 
 Audit writes on successful security lifecycle operations happen before returning success. If persistence is unavailable, the operation fails closed rather than silently reporting an unaudited success. Failure events are best-effort so an audit outage does not replace the original authentication error.
 
