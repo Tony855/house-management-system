@@ -6,10 +6,15 @@ function parseMinorUnits(value, { allowZero = false, allowNegative = false, maxM
   if (typeof value !== 'number' && typeof value !== 'string') return null;
   if (typeof value === 'number' && !Number.isFinite(value)) return null;
   const text = String(value);
-  if (!/^\d+(?:\.\d{1,2})?$/.test(text)) return null;
-  const [whole, fraction = ''] = text.split('.');
-  const minor = Number(whole) * 100 + Number((fraction + '00').slice(0, 2));
-  if (!Number.isSafeInteger(minor) || minor > maxMinor || (!allowZero && minor <= 0)) return null;
+  const pattern = allowNegative ? /^-?\d+(?:\.\d{1,2})?$/ : /^\d+(?:\.\d{1,2})?$/;
+  if (!pattern.test(text)) return null;
+  const negative = text.startsWith('-');
+  const unsigned = negative ? text.slice(1) : text;
+  const [whole, fraction = ''] = unsigned.split('.');
+  const magnitude = Number(whole) * 100 + Number((fraction + '00').slice(0, 2));
+  const minor = negative ? -magnitude : magnitude;
+  if (!Number.isSafeInteger(minor) || Math.abs(minor) > maxMinor ||
+      (!allowZero && minor <= 0) || (!allowNegative && minor < 0)) return null;
   return minor;
 }
 
