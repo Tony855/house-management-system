@@ -4,3 +4,36 @@ test('worker executes bounded parallel lanes and reports aggregate outcomes',asy
 test('worker tick does not overlap and stop drains active batches',async()=>{let release;let entered=0;const gate=new Promise(r=>release=r);const w=createTenantBillingJobWorker({workerId:'billing-worker-stop',concurrency:1,processNextBatch:async()=>{entered++;await gate;return{worked:false};}});const t=w.tick();await new Promise(r=>setImmediate(r));assert.deepEqual(await w.tick(),{skipped:true});let stopped=false;const s=w.stop().then(()=>stopped=true);await new Promise(r=>setImmediate(r));assert.equal(stopped,false);release();await Promise.all([t,s]);assert.equal(stopped,true);assert.equal(entered,1);});
 test('worker redacts processor errors to stable codes',async()=>{const errors=[];const w=createTenantBillingJobWorker({workerId:'billing-worker-errors',concurrency:1,processNextBatch:async()=>{throw Object.assign(new Error('secret db password'),{code:'TENANT_DB_UNAVAILABLE'});},onError:e=>errors.push(e)});const r=await w.tick();assert.equal(r.failed,1);assert.deepEqual(errors,[{code:'TENANT_DB_UNAVAILABLE',workerId:'billing-worker-errors'}]);await w.stop();});
 test('worker validates processor and concurrency bounds',()=>{assert.throws(()=>createTenantBillingJobWorker({workerId:'worker'}),/TENANT_BILLING_PROCESSOR_REQUIRED/);assert.throws(()=>createTenantBillingJobWorker({workerId:'worker',processNextBatch:async()=>({}),concurrency:33}),/TENANT_BILLING_WORKER_CONFIG_INVALID/);});
+
+test('worker shutdown is bounded when an in-flight processor never resolves', async () => {
+  const errors = [];
+  const w = createTenantBillingJobWorker({
+    workerId: 'billing-worker-timeout', concurrency: 1, stopGraceMs: 100,
+    processNextBatch: () => new Promise(() => {}),
+    onError: error => errors.push(error)
+  });
+  const tick = w.tick();
+  await new Promise(resolve => setImmediate(resolve));
+  const result = await w.stop();
+  assert.deepEqual(result, { drained: false, timedOut: true });
+  assert.deepEqual(errors, [{ code: 'TENANT_BILLING_WORKER_DRAIN_TIMEOUT', workerId: 'billing-worker-timeout' }]);
+  assert.deepEqual(await w.tick(), { skipped: true });
+  void tick;
+});
+
+test('worker stop shares one drain operation across concurrent callers', async () => {
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const w = createTenantBillingJobWorker({
+    workerId: 'billing-worker-stop-shared', concurrency: 1,
+    processNextBatch: async () => { await gate; return { worked: false }; }
+  });
+  const tick = w.tick();
+  await new Promise(resolve => setImmediate(resolve));
+  const a = w.stop();
+  const b = w.stop();
+  release();
+  const results = await Promise.all([a, b, tick]);
+  assert.deepEqual(results[0], { drained: true });
+  assert.deepEqual(results[1], { drained: true });
+});
