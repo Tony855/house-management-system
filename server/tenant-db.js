@@ -19,6 +19,7 @@ class TenantPoolManager {
     this.pending = new Map();
     this.tenantEpoch = new Map();
     this.creationQueue = Promise.resolve();
+    this.closed = false;
   }
 
   _key(context) {
@@ -60,6 +61,7 @@ class TenantPoolManager {
   }
 
   async getPool(context) {
+    if (this.closed) throw new Error('TENANT_POOL_MANAGER_CLOSED');
     const key = this._key(context);
     const cached = this.entries.get(key);
     if (cached && cached.lastUsedAt > this.now() - this.idleTtlMs) {
@@ -143,6 +145,7 @@ class TenantPoolManager {
   }
 
   async closeAll() {
+    this.closed = true;
     const pending = Array.from(this.pending.values());
     const tenantIds = new Set([...this.entries.values()].map(entry => entry.tenantId));
     for (const item of pending) tenantIds.add(item.tenantId);
