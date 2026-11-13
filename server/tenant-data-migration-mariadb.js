@@ -17,6 +17,10 @@ async function assertDatabase(queryable, expected, code) {
   if (rows[0]?.databaseName !== expected) throw new Error(code);
 }
 
+function assertNotAborted(signal) {
+  if (signal?.aborted) throw Object.assign(new Error('TENANT_MIGRATION_JOB_LEASE_LOST'), { code: 'TENANT_MIGRATION_JOB_LEASE_LOST' });
+}
+
 function assertPool(pool, method, code) {
   if (!pool || typeof pool[method] !== 'function') throw new TypeError(code);
 }
@@ -35,7 +39,7 @@ function createMariaDbTenantMigrationAdapters({ appId, sourcePool, targetPool })
   const tables = [...TABLES[appId]].sort();
 
   const sourceReader = Object.freeze({
-    async exportOrgSnapshot({ appId: requestedAppId, sourceOrgId }) {
+    async exportOrgSnapshot({ appId: requestedAppId, sourceOrgId, signal }) {
       if (requestedAppId !== appId || !Number.isSafeInteger(sourceOrgId) || sourceOrgId < 1) {
         throw new TypeError('TENANT_DATA_MIGRATION_SOURCE_SCOPE_INVALID');
       }
@@ -50,11 +54,13 @@ function createMariaDbTenantMigrationAdapters({ appId, sourcePool, targetPool })
         transactionStarted = true;
         const result = {};
         for (const table of tables) {
+          assertNotAborted(signal);
           const [rows] = await connection.execute(
             'SELECT * FROM ' + quoteIdentifier(table) + ' WHERE `org_id` = ? ORDER BY `id` ASC',
             [sourceOrgId]
           );
           result[table] = rows;
+          assertNotAborted(signal);
         }
         await connection.commit();
         transactionStarted = false;
@@ -71,7 +77,7 @@ function createMariaDbTenantMigrationAdapters({ appId, sourcePool, targetPool })
   });
 
   const targetWriter = Object.freeze({
-    async importTenantSnapshot({ appId: requestedAppId, tenantId, tables: snapshotTables }) {
+    async importTenantSnapshot({ appId: requestedAppId, tenantId, tables: snapshotTables, signal }) {
       if (requestedAppId !== appId || typeof tenantId !== 'string' ||
           !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(tenantId)) {
         throw new TypeError('TENANT_DATA_MIGRATION_TARGET_SCOPE_INVALID');
@@ -90,6 +96,7 @@ function createMariaDbTenantMigrationAdapters({ appId, sourcePool, targetPool })
         await connection.beginTransaction();
         // Never overwrite or append into a partially migrated tenant database.
         for (const table of tables) {
+          assertNotAborted(signal);
           const [rows] = await connection.execute('SELECT COUNT(*) AS total FROM ' + quoteIdentifier(table));
           if (Number(rows[0]?.total || 0) !== 0) throw new Error('TENANT_DATA_MIGRATION_TARGET_NOT_EMPTY');
         }
@@ -109,6 +116,7 @@ function createMariaDbTenantMigrationAdapters({ appId, sourcePool, targetPool })
           }
           const names = columns.map(quoteIdentifier).join(', ');
           for (let start = 0; start < rows.length; start += BATCH_SIZE) {
+            assertNotAborted(signal);
             const batch = rows.slice(start, start + BATCH_SIZE);
             const tuple = '(' + columns.map(() => '?').join(', ') + ')';
             const valuesSql = batch.map(() => tuple).join(', ');
@@ -117,6 +125,7 @@ function createMariaDbTenantMigrationAdapters({ appId, sourcePool, targetPool })
               'INSERT INTO ' + quoteIdentifier(table) + ' (' + names + ') VALUES ' + valuesSql,
               values
             );
+            assertNotAborted(signal);
           }
         }
         await connection.commit();
@@ -142,15 +151,17 @@ function createMariaDbTenantMigrationAdapters({ appId, sourcePool, targetPool })
   });
 
   const targetReader = Object.freeze({
-    async readTenantSnapshot({ appId: requestedAppId, tenantId }) {
+    async readTenantSnapshot({ appId: requestedAppId, tenantId, signal }) {
       if (requestedAppId !== appId || typeof tenantId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(tenantId)) {
         throw new TypeError('TENANT_DATA_MIGRATION_TARGET_SCOPE_INVALID');
       }
       await assertDatabase(targetPool, tenantDatabaseName(appId, tenantId), 'TENANT_DATA_MIGRATION_TARGET_DATABASE_MISMATCH');
       const result = {};
       for (const table of tables) {
+        assertNotAborted(signal);
         const [rows] = await targetPool.execute('SELECT * FROM ' + quoteIdentifier(table) + ' ORDER BY `id` ASC');
         result[table] = rows;
+        assertNotAborted(signal);
       }
       return { tables: result };
     }
