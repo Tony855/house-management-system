@@ -305,7 +305,7 @@ test('dispatch store reaps crashed workers after retry budget exhaustion', async
     }
   });
   assert.deepEqual(await store.listRunnable({ limit: 12, maxAttempts: 4 }), []);
-  assert.match(calls[0][0], /state = 'failed'.*state = 'dispatching'.*attempt_count >= \?/);
+  assert.match(calls[0][0], /state = 'failed'.*state = 'dispatching'.*lease_expires_at IS NULL OR lease_expires_at <= UTC_TIMESTAMP\(\).*attempt_count >= \?/);
   assert.deepEqual(calls[0][1], [4]);
   assert.match(calls[1][0], /attempt_count < \?/);
   assert.deepEqual(calls[1][1], [4, 12]);
