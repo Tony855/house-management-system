@@ -18,6 +18,8 @@ function createPlatformTenantMigrationRunner({
   const active = new Map();
   let timer = null;
   let ticking = false;
+  let tickSettled = Promise.resolve();
+  let resolveTickSettled = null;
   let stopping = false;
 
   function report(error) {
@@ -31,6 +33,7 @@ function createPlatformTenantMigrationRunner({
     const capacity = concurrency - active.size;
     if (capacity <= 0) return 0;
     ticking = true;
+    tickSettled = new Promise(resolve => { resolveTickSettled = resolve; });
     try {
       const jobs = await store.listRunnableJobs({ limit: Math.min(50, capacity) });
       if (!Array.isArray(jobs)) throw new TypeError('TENANT_MIGRATION_RUNNER_JOB_LIST_INVALID');
@@ -50,6 +53,8 @@ function createPlatformTenantMigrationRunner({
       return 0;
     } finally {
       ticking = false;
+      if (resolveTickSettled) resolveTickSettled();
+      resolveTickSettled = null;
     }
   }
 
@@ -64,9 +69,11 @@ function createPlatformTenantMigrationRunner({
 
   async function waitForIdle() {
     while (ticking || active.size) {
+      // Wait for the in-flight poll to settle instead of spinning microtasks.
+      // A microtask-only loop can starve the I/O needed to finish listRunnableJobs.
+      if (ticking) await tickSettled;
       const pending = [...active.values()];
       if (pending.length) await Promise.allSettled(pending);
-      else await Promise.resolve();
     }
   }
 
