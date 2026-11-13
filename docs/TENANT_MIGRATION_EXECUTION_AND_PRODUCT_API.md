@@ -50,3 +50,6 @@ All product write routes add a server-defined `__resource` discriminator to the 
 Tenant migration leases now carry a unique per-claim UUID fencing token in addition to the human-readable worker ID. Every heartbeat, checkpoint, completion and failure write must match both the worker ID and the current lease token; reusing a worker ID after restart cannot let a stale process renew or complete a lease reclaimed by another attempt. Migration 018 backfills tokens for jobs that were already running when the column is introduced.
 
 For deployment, stop and drain all migration workers before applying migration 018 and deploying the token-aware worker code. Do not run old and new worker binaries concurrently across this schema transition. Re-enable workers only after the migration and application rollout are complete. MariaDB CI now verifies that an old token is rejected after a same-worker-ID lease reclaim.
+
+
+Lease renewal and checkpoint writes are also bounded by an operation timeout shorter than the active lease. A stalled control-plane DB call is treated as lease loss and aborts the migration rather than allowing copy work to continue indefinitely without proof of ownership. The executor adapts its heartbeat cadence to the configured lease duration (at most one third of the lease); do not configure a heartbeat timeout equal to or longer than the lease.
