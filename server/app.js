@@ -52,7 +52,11 @@ app.use('/uploads', async (req, res, next) => {
 /* ---------- 辅助 ---------- */
 const h = fn => (req, res) => fn(req, res).catch(e => {
   console.error(e);
-  res.status(e.status || 500).json({ error: e.message });
+  const status = Number.isInteger(e?.status) && e.status >= 400 && e.status <= 599 ? e.status : 500;
+  const message = status >= 500 ? '服务错误' :
+    (typeof e?.message === 'string' && e.message.length <= 200 && !/[\\x00-\\x08\\x0b\\x0c\\x0e-\\x1f\\x7f]/.test(e.message)
+      ? e.message : '请求失败');
+  res.status(status).json({ error: message });
 });
 const num = v => (v === null || v === undefined || v === '') ? null : Number(v);
 const round2 = n => Math.round((Number(n) || 0) * 100) / 100;
@@ -61,6 +65,11 @@ const round2 = n => Math.round((Number(n) || 0) * 100) / 100;
 const loginHits = new Map();
 /* 登录失败锁定：同账号 5 次失败锁定 15 分钟（防口令爆破） */
 const loginFails = new Map();
+function setBoundedLoginEntry(map, key, value, maxEntries) {
+  map.delete(key); // refresh insertion order for LRU eviction
+  map.set(key, value);
+  while (map.size > maxEntries) map.delete(map.keys().next().value);
+}
 
 /* ---------- 使用费全局配置（超管级；含会话有效期等安全参数） ---------- */
 let FEE_CFG = { fee_mode: 'free', cycle: 'month', remind_days: 7, session_days: 7,
@@ -492,7 +501,7 @@ router.post('/login', h(async (req, res) => {
   const hit = loginHits.get(ip) || { n: 0, t: nowT };
   if (nowT - hit.t > 60000) { hit.n = 0; hit.t = nowT; }
   hit.n++;
-  loginHits.set(ip, hit);
+  setBoundedLoginEntry(loginHits, ip, hit, 10000);
   if (hit.n > 30) return res.status(429).json({ error: '尝试过于频繁，请 1 分钟后再试' });
   const B = req.body || {};
   const v = V(B);
@@ -528,7 +537,7 @@ router.post('/login', h(async (req, res) => {
     const f = loginFails.get(failKey) || { n: 0, until: 0 };
     f.n++;
     if (f.n >= 5) { f.n = 0; f.until = nowT + 15 * 60000; }
-    loginFails.set(failKey, f);
+    setBoundedLoginEntry(loginFails, failKey, f, 50000);
     return res.status(400).json({ error: '用户名或密码错误' });
   }
   loginFails.delete(failKey);
