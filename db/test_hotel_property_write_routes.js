@@ -478,3 +478,33 @@ test('bill payment settles exact decimal minor units without floating-point drif
     await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
   }
 });
+
+
+test('meter charge rejects products that exceed safe integer-cent precision', async () => {
+  const app = express(); app.use(express.json());
+  app.use((req, _res, next) => {
+    req.tenantWrite = input => input.mutate({
+      execute: async sql => sql.includes('FROM rooms')
+        ? [[{ id: 4, water_price: '100000000.00', elec_price: '0.00' }]]
+        : [[]],
+      insert: async () => { throw new Error('must not persist an unsafe fee'); }
+    });
+    next();
+  });
+  app.use('/api', createMeterWriteRouter('rental'));
+  app.use((error, _req, res, _next) => res.status(error.status || 500).json({ error: error.code || 'ERROR' }));
+  const server = http.createServer(app);
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const response = await fetch('http://127.0.0.1:' + server.address().port + '/api/meters', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-operation-reason': 'Record meter reading',
+        'x-step-up-token': 'step-up-token-123456789', 'idempotency-key': 'meter-unsafe-fee-0001' },
+      body: JSON.stringify({ room_id: 4, month: '2030-01', water_prev: 0, water_curr: 100000000, elec_prev: 0, elec_curr: 0 })
+    });
+    assert.equal(response.status, 409);
+    assert.deepEqual(await response.json(), { error: 'METER_FEE_AMOUNT_INVALID' });
+  } finally {
+    await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+  }
+});
