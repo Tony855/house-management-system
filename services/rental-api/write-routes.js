@@ -1,6 +1,7 @@
 'use strict';
 
 const express = require('express');
+const { parseMinorUnits } = require('../../server/money');
 
 const ALLOWED_FIELDS = new Set([
   'building_id', 'room_no', 'floor', 'area', 'rent', 'deposit', 'status',
