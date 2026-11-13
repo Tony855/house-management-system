@@ -1,6 +1,7 @@
 'use strict';
 
 const express = require('express');
+const { parseMinorUnits } = require('../../server/money');
 
 const CONFIG = Object.freeze({
   hotel: Object.freeze({
@@ -16,9 +17,9 @@ const CONFIG = Object.freeze({
 function fail(code, status) { return Object.assign(new Error(code), { code, status }); }
 function money(value, max = 100000000) {
   if (value === undefined || value === null || value === '') return 0;
-  const n = Number(value);
-  if (!Number.isFinite(n) || n < 0 || n > max || Math.round(n * 100) !== n * 100) throw fail('ROOM_INPUT_INVALID', 400);
-  return n;
+  const minor = parseMinorUnits(value, { allowZero: true, maxMinor: Math.ceil(max * 100) });
+  if (minor === null) throw fail('ROOM_INPUT_INVALID', 400);
+  return minor / 100;
 }
 function validateProductRoom(appId, body) {
   const config = CONFIG[appId];
