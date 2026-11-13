@@ -148,3 +148,18 @@ test('MFA service requires encrypted storage, durable store and a strong recover
   assert.throws(() => createPlatformMfaService({ store, encryption: {}, recoveryCodePepper: pepper }), /PLATFORM_MFA_ENCRYPTION_REQUIRED/);
   assert.throws(() => createPlatformMfaService({ store, encryption: { encrypt() {}, decrypt() {} }, recoveryCodePepper: 'short' }), /PLATFORM_MFA_RECOVERY_PEPPER_REQUIRED/);
 });
+
+
+test('MFA enrollment cannot silently replace an already active authenticator', async () => {
+  const { service, state } = fixture();
+  const enrollment = await service.beginEnrollment({ adminId: 9, account: 'admin@example.test' });
+  const secret = decodeBase32(enrollment.secret);
+  const counter = Math.floor(1800000000 / 30);
+  await service.confirmEnrollment({ adminId: 9, code: hotp(secret, counter) });
+  await assert.rejects(
+    service.beginEnrollment({ adminId: 9, account: 'admin@example.test' }),
+    error => error.code === 'PLATFORM_MFA_ALREADY_ENROLLED' && error.status === 409
+  );
+  assert.equal(state.factor.enabled, true);
+  assert.equal(state.pending, null);
+});
