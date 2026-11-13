@@ -44,9 +44,17 @@ function createPlatformProductSessionStore(pool) {
           !Number.isSafeInteger(issuedAt) || !Number.isSafeInteger(expiresAt) || expiresAt <= issuedAt) {
         throw new TypeError('PRODUCT_SESSION_INPUT_INVALID');
       }
+      const issuedAtDate = new Date(issuedAt * 1000);
+      const expiresAtDate = new Date(expiresAt * 1000);
+      if (Number.isNaN(issuedAtDate.getTime()) || Number.isNaN(expiresAtDate.getTime())) {
+        throw new TypeError('PRODUCT_SESSION_TIMESTAMP_INVALID');
+      }
+      // DATETIME values are compared with UTC_TIMESTAMP(); send explicit UTC
+      // strings so the host process timezone cannot shift session validity.
+      const toUtcDateTime = date => date.toISOString().slice(0, 19).replace('T', ' ');
       await pool.query(
         'INSERT INTO platform_product_sessions (session_id, app_id, tenant_uuid, subject_id, issued_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)',
-        [sessionId, appId, tenantId, userId, new Date(issuedAt * 1000), new Date(expiresAt * 1000)]
+        [sessionId, appId, tenantId, userId, toUtcDateTime(issuedAtDate), toUtcDateTime(expiresAtDate)]
       );
     },
     async isSessionActive({ sessionId, userId, tenantId, appId }) {
